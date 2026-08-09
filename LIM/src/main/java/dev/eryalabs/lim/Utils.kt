@@ -187,13 +187,42 @@ object Utils {
      * Decode the JSON produced by [encodeFields] back into a typed-field map.
      *
      * Returns an empty map on any parse error so callers do not need to handle nulls.
+     *
+     * This JSON crosses an IPC boundary from another app, so it is untrusted: it may omit
+     * `value` or `type`, or contain a null entry, none of which [encodeFields] would ever
+     * produce. Such fields are repaired here rather than handed on — see [repaired].
      */
     fun decodeFields(json: String?): Map<String, TypedField> {
         if (json.isNullOrBlank()) return emptyMap()
         return try {
-            Gson().fromJson<Map<String, TypedField>>(json, FIELDS_TYPE) ?: emptyMap()
+            val parsed: Map<String, TypedField?> =
+                Gson().fromJson(json, FIELDS_TYPE) ?: return emptyMap()
+            parsed.entries
+                .mapNotNull { (key, field) -> field?.let { key to it.repaired() } }
+                .toMap(LinkedHashMap())
         } catch (_: Exception) {
             emptyMap()
         }
+    }
+
+    /**
+     * Restore the invariants Gson cannot.
+     *
+     * Gson instantiates [TypedField] through `Unsafe` without running the Kotlin
+     * constructor, so a declared-non-null property whose key is absent from the JSON is
+     * left as a genuine `null` at runtime — `type` never receives its
+     * [FieldType.STRING] default. Kotlin emits no null check when reading its own
+     * non-null property, so the null propagates silently until some caller dereferences
+     * it and gets an NPE the type system said was impossible.
+     *
+     * The elvis operators below look useless to the compiler for exactly that reason.
+     * They are not.
+     */
+    @Suppress("SENSELESS_COMPARISON", "USELESS_ELVIS")
+    private fun TypedField.repaired(): TypedField {
+        val safeValue: String = value ?: ""
+        val safeType: String = type ?: FieldType.STRING
+        return if (safeValue === value && safeType === type) this
+        else TypedField(value = safeValue, type = safeType)
     }
 }
