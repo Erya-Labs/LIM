@@ -32,3 +32,9 @@ google-services.json
 
 # Android Profiling
 *.hprof
+loop/.halt
+loop/.stop
+loop/.strikes
+loop/.lock
+loop/loop.log
+probe*
