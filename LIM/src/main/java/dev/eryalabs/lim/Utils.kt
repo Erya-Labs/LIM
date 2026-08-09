@@ -53,6 +53,10 @@ object Utils {
      * Launch with `startActivityForResult` / `ActivityResultContracts.StartActivityForResult`
      * when you need a result (e.g. the vault's confirmation). For fire-and-forget use
      * [Entry] instead.
+     *
+     * No validation happens here: an [Entry] with a blank `id` or `publicKey` is encoded
+     * verbatim, and [decodeEntry] on the far side will reject it. Populate both before
+     * sending.
      */
     fun createShareIntent(
         context: Context,
@@ -203,6 +207,62 @@ object Utils {
         } catch (_: Exception) {
             emptyMap()
         }
+    }
+
+    // ── Entry (de)serialization ───────────────────────────────────────────
+
+    /**
+     * Decode the JSON carried in [EXTRA_ENTRY_JSON] back into an [Entry].
+     *
+     * This payload crosses an IPC boundary from another app, so it is untrusted. Gson
+     * instantiates [Entry] through `Unsafe` without running the Kotlin constructor, so
+     * `id`, `publicKey` and `fields` are all genuinely `null` at runtime when their key is
+     * absent from the JSON — `{}` decodes to an [Entry] that NPEs on first use. See
+     * [repaired] for why the compiler cannot see this.
+     *
+     * Returns `null` — never a half-built [Entry] — when the payload is missing, is not a
+     * JSON object, carries no `id` or no `publicKey` (or only blank ones), or carries a
+     * `fields` member of the wrong shape. The first two are the entry's identity: an entry
+     * keyed to an empty public key is not a safe default, it is a profile nobody can ever
+     * authenticate against, so it is rejected outright rather than handed on.
+     *
+     * Note that this is deliberately stricter than its sibling [decodeFields], which
+     * repairs a malformed field map to an empty one: a field map is a bag of independent
+     * values, whereas a malformed `fields` member means this payload was not written by
+     * [createShareIntent] and the whole entry is suspect. It is also stricter than
+     * [createShareIntent] is on the way out — that will happily encode an [Entry] whose
+     * `id` or `publicKey` is blank, and this will refuse to decode it again.
+     *
+     * A returned [Entry] is fully populated and safe to dereference: its `fields` map
+     * contains no null entries and every [TypedField] in it has a non-null `value` and
+     * `type`.
+     */
+    fun decodeEntry(json: String?): Entry? {
+        if (json.isNullOrBlank()) return null
+        val parsed = try {
+            Gson().fromJson(json, Entry::class.java) ?: return null
+        } catch (_: Exception) {
+            return null
+        }
+        return parsed.repaired()
+    }
+
+    /**
+     * Restore the invariants Gson cannot — see [TypedField.repaired].
+     *
+     * Returns `null` when the payload carries no usable identity, so that a caller cannot
+     * mistake a hollow [Entry] for a real profile.
+     */
+    @Suppress("SENSELESS_COMPARISON", "USELESS_ELVIS")
+    private fun Entry.repaired(): Entry? {
+        val safeId: String = id ?: return null
+        val safePublicKey: String = publicKey ?: return null
+        if (safeId.isBlank() || safePublicKey.isBlank()) return null
+        val rawFields: Map<String, TypedField?> = fields ?: emptyMap()
+        val safeFields = rawFields.entries
+            .mapNotNull { (key, field) -> field?.let { key to it.repaired() } }
+            .toMap(LinkedHashMap())
+        return Entry(id = safeId, fields = safeFields, publicKey = safePublicKey)
     }
 
     /**
