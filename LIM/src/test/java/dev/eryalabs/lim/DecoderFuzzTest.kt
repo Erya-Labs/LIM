@@ -1,5 +1,6 @@
 package dev.eryalabs.lim
 
+import android.content.Intent
 import android.util.Base64
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -435,6 +436,174 @@ class DecoderFuzzTest {
     }
 
     /**
+     * The same corpus, one boundary further out.
+     *
+     * The run above feeds the decoders directly. But a client never calls them directly — the
+     * hostile JSON reaches it *through* a result intent, and the parsers are what unwrap it.
+     * They decode the same payloads across the same IPC boundary, and T8's text named only the
+     * three decoders, so nothing had ever pushed a mutated payload through them. This closes
+     * that: every extra either parser reads gets the fuzzed text in turn.
+     *
+     * `matchesRequestCode` and `isNonceFresh` ride along here for the same reason — both take
+     * data another app chose, and neither had ever seen an input nobody thought of. What their
+     * arms carry is throw-safety over unplanned bytes and nothing more: every corpus payload
+     * opens with a JSON structural character, so the eight bytes `isNonceFresh` reads as a
+     * timestamp are always a far-future one and the fresh branch is never reached from the
+     * corpus. Their real behaviour is pinned in `NonceTest` and `RequestCodeTest`. The two
+     * controls after the loop are what stop these arms from passing against a function that
+     * returns a constant.
+     *
+     * The security property is the last one below and it is the reason this is not merely a
+     * crash test: no mutated payload, in any position, may produce a result that authenticates
+     * against the real key and nonce.
+     */
+    @Test
+    fun `no mutated payload makes a result parser throw or yield something unsafe`() {
+        val master = Random(MASTER_SEED)
+        val genuineSignature = Base64.encodeToString(signature, Base64.DEFAULT)
+        var signResults = 0
+        var queryResults = 0
+        var nonEmptyParsedFields = 0
+        var charsRead = 0
+
+        repeat(CASES) { index ->
+            val seed = master.nextLong()
+            val case = caseFor(seed)
+
+            fun bail(what: String, cause: Throwable? = null): Nothing =
+                throw AssertionError(report(what, index, seed, case), cause)
+
+            fun intentOf(vararg extras: Pair<String, String>) = Intent().apply {
+                extras.forEach { (key, value) -> putExtra(key, value) }
+            }
+
+            // The fuzzed text as a disclosed field payload, behind a signature that is real —
+            // so parsing gets past the signature gate and the field decoding is what is under
+            // test. A malformed payload here is documented as non-fatal, so the result must
+            // come back and must still be safe to read.
+            val signed = try {
+                Utils.parseSignChallengeResult(
+                    intentOf(
+                        Utils.EXTRA_SIGNATURE to genuineSignature,
+                        Utils.EXTRA_FIELDS_JSON to case.text,
+                        Utils.EXTRA_ALGORITHM to case.text,
+                        Utils.EXTRA_SHARE_REQUEST_CODE to case.text,
+                    ),
+                )
+            } catch (t: Throwable) {
+                bail("parseSignChallengeResult threw ${t.javaClass.name}: ${t.message}", t)
+            }
+            if (signed == null) bail("parseSignChallengeResult discarded a genuine signature")
+            signResults++
+            charsRead += checkFields(signed.fields) { bail(it) }
+            if (signed.fields.isNotEmpty()) nonEmptyParsedFields++
+            try {
+                signed.toString()
+            } catch (t: Throwable) {
+                bail("SignChallengeResult.toString() threw ${t.javaClass.name}: ${t.message}", t)
+            }
+
+            // The fuzzed text as the signature itself. Anything that survives the Base64 gate
+            // must be non-empty bytes — an empty signature is the shape T3 found could arrive
+            // looking like an answer.
+            val forged = try {
+                Utils.parseSignChallengeResult(intentOf(Utils.EXTRA_SIGNATURE to case.text))
+            } catch (t: Throwable) {
+                bail("parseSignChallengeResult threw ${t.javaClass.name} on a fuzzed signature", t)
+            }
+            if (forged != null && forged.signature.isEmpty()) {
+                bail("parseSignChallengeResult returned a result carrying an empty signature")
+            }
+            if (forged != null && forged.isVerified(publicKeyBase64, NONCE)) {
+                bail("a fuzzed payload AUTHENTICATED as a signature over the challenge")
+            }
+
+            val query = try {
+                Utils.parseQueryResult(
+                    intentOf(
+                        Utils.EXTRA_QUERY_RESULT_FIELDS to case.text,
+                        Utils.EXTRA_PUBLIC_KEY to case.text,
+                        Utils.EXTRA_SHARE_REQUEST_CODE to case.text,
+                    ),
+                )
+            } catch (t: Throwable) {
+                bail("parseQueryResult threw ${t.javaClass.name}: ${t.message}", t)
+            }
+            if (query != null) {
+                queryResults++
+                charsRead += checkFields(query.fields) { bail(it) }
+                if (query.fields.isNotEmpty()) nonEmptyParsedFields++
+                try {
+                    query.toString()
+                } catch (t: Throwable) {
+                    bail("QueryResult.toString() threw ${t.javaClass.name}: ${t.message}", t)
+                }
+            } else if (case.text.isNotBlank()) {
+                bail("parseQueryResult returned null for an intent carrying three non-blank extras")
+            }
+
+            // Correlation. The fuzzed code is a token the *sender* chose, so it may only ever
+            // match a caller who supplied that exact string — and never the caller who supplied
+            // one of their own.
+            val correlated = try {
+                Utils.matchesRequestCode(intentOf(Utils.EXTRA_SHARE_REQUEST_CODE to case.text), KNOWN_CODE)
+            } catch (t: Throwable) {
+                bail("matchesRequestCode threw ${t.javaClass.name}: ${t.message}", t)
+            }
+            if (correlated && case.text != KNOWN_CODE) {
+                bail("matchesRequestCode matched a payload that is not the expected code")
+            }
+
+            // Freshness, over bytes nobody designed. A nonce reaches a vault from a peer app.
+            val fresh = try {
+                Utils.isNonceFresh(case.text.toByteArray(), 60_000, now = FUZZ_CLOCK)
+            } catch (t: Throwable) {
+                bail("isNonceFresh threw ${t.javaClass.name}: ${t.message}", t)
+            }
+            if (fresh) bail("isNonceFresh accepted a text payload as a nonce issued in the last minute")
+        }
+
+        // The two controls the arms above cannot supply for themselves. Both of those checks are
+        // satisfied by a function that returns a constant `false`, and a verifier that always
+        // says no is not a verifier — so each is paired with the one input it must accept.
+        assertTrue(
+            "isNonceFresh must accept a genuine fresh nonce, else its fuzz arm passes against " +
+                "a constant false",
+            Utils.isNonceFresh(Utils.generateNonce(now = FUZZ_CLOCK), 60_000, now = FUZZ_CLOCK),
+        )
+        assertTrue(
+            "matchesRequestCode must match the expected code, else its fuzz arm passes against " +
+                "a constant false",
+            Utils.matchesRequestCode(
+                Intent().apply { putExtra(Utils.EXTRA_SHARE_REQUEST_CODE, KNOWN_CODE) },
+                KNOWN_CODE,
+            ),
+        )
+
+        // Non-vacuity. Without these the test passes against parsers that return null for
+        // everything — and the sign-challenge arm in particular is asserted to be *total*: a
+        // genuine signature must survive every payload the corpus can put beside it.
+        assertEquals(
+            "a genuine signature must parse regardless of what else is in the intent",
+            CASES,
+            signResults,
+        )
+        assertTrue(
+            "the corpus must parse some non-empty field maps through the parsers, else the " +
+                "field checks are vacuous; got $nonEmptyParsedFields",
+            nonEmptyParsedFields > 200,
+        )
+        assertTrue(
+            "the corpus must produce some query results; got $queryResults of $CASES",
+            queryResults > 2000,
+        )
+        assertTrue(
+            "the safety checks must have dereferenced real characters; got $charsRead",
+            charsRead > 10_000,
+        )
+    }
+
+    /**
      * The reproducibility claim, pinned rather than described. `java.util.Random` is specified
      * bit-for-bit by the JDK, so this digest is the same on every machine and every run; if an
      * edit to the generator changes it, that is a deliberate act and this constant moves in the
@@ -691,6 +860,15 @@ class DecoderFuzzTest {
         private const val KEY_MUTATIONS = 500
         private const val PAYLOAD_PREVIEW = 2000
         private const val HEX = "0123456789abcdef"
+
+        /**
+         * A correlation token the corpus cannot produce: no mutation of the well-formed
+         * payloads emits it, so "matched" and "is the expected code" cannot coincide by luck.
+         */
+        private const val KNOWN_CODE = "req-known-0e3f"
+
+        /** A fixed clock, so the freshness arm means the same thing on every run. */
+        private const val FUZZ_CLOCK = 1_770_000_000_000L
 
         /**
          * Offset of the last arc of the `rsaEncryption` OID inside an X.509-encoded RSA public
