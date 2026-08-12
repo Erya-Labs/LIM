@@ -376,6 +376,47 @@ object Utils {
         )
     }
 
+    /**
+     * Report whether [intent] carries the correlation token [expected] under
+     * [EXTRA_SHARE_REQUEST_CODE].
+     *
+     * A client that has several requests in flight gets several result intents back and has to
+     * decide which one answers which. Doing that by hand is where the accidents happen, and the
+     * accident is not a crash — it is acting on a disclosure meant for a different request.
+     *
+     * Fails closed on every shape that is not an unambiguous match: a null [intent], an intent
+     * with no request-code extra, an extra that is blank or of the wrong type, and an extras
+     * bundle that cannot be unparcelled at all. **A blank or empty [expected] never matches
+     * anything**, including an intent that carries no request code — "nothing equals nothing"
+     * is precisely the mistake a hand-rolled comparison makes, and it is the one that pairs a
+     * client's untagged request with the first result that happens to arrive.
+     *
+     * The comparison is exact. Whitespace is not trimmed from either side, so `"req-1"` and
+     * `" req-1"` are different tokens: a request code is an opaque handle the client minted,
+     * and quietly normalising it would make two requests it deliberately kept apart collide.
+     *
+     * This is correlation, not authentication. The token travels in an extra any app can write,
+     * so a match says "this is the result I was waiting for", never "this result is genuine" —
+     * only [SignChallengeResult.isVerified] says the latter.
+     *
+     * @param intent   The result intent to test; a null one never matches, so an unchecked
+     *                 `onActivityResult` payload can be passed straight in.
+     * @param expected Your own request code. Unlike [intent], this is not untrusted input and is
+     *                 declared non-null: a Java caller passing `null` gets a
+     *                 [NullPointerException] from Kotlin's parameter check rather than `false`.
+     *                 If you have no code to compare, you have nothing to correlate — do not
+     *                 reach for `""`, which is the case this function refuses by design.
+     */
+    fun matchesRequestCode(intent: Intent?, expected: String): Boolean {
+        // Two independent reasons a blank can never match, and that is deliberate: the guard
+        // here refuses a blank the *caller* supplied, while `presentStringExtra` refuses a
+        // blank the *sender* supplied. Either alone closes the trap today, which makes this
+        // line redundant on paper — but only as long as the helper keeps mapping blank to
+        // absent, and the property is too easy to lose to leave resting on that.
+        if (intent == null || expected.isBlank()) return false
+        return intent.presentStringExtra(EXTRA_SHARE_REQUEST_CODE) == expected
+    }
+
     // ── Typed-field (de)serialization ─────────────────────────────────────
 
     /**
