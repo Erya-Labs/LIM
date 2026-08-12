@@ -111,6 +111,10 @@ object Utils {
     /**
      * Create an intent that asks the vault to look up a stored profile by [publicKey].
      * Tag with [requestCode] so you can correlate responses when handling multiple queries.
+     *
+     * Decode the result intent with [parseQueryResult]. A query is a disclosure, not a login:
+     * nothing in the answer is signed, so use [createSignChallengeIntent] when you need proof
+     * that the holder of [publicKey] is present.
      */
     fun createQueryIntent(
         context: Context,
@@ -207,8 +211,9 @@ object Utils {
      * paired to [publicKey].
      *
      * Launch with `ActivityResultContracts.StartActivityForResult`. On `Activity.RESULT_OK`
-     * read [EXTRA_SIGNATURE] (Base64 bytes), [EXTRA_ALGORITHM], and [EXTRA_FIELDS_JSON]
-     * (the profile's typed field values), then call [verifySignature] to authenticate.
+     * pass the result intent to [parseSignChallengeResult], then authenticate it with
+     * [SignChallengeResult.isVerified], handing it this same [publicKey] and [nonce]. Parsing
+     * alone proves nothing — it only reports what the vault said.
      *
      * @param publicKey   Base64-encoded RSA public key identifying the profile to authenticate.
      * @param nonce       Challenge bytes you generated. Use [generateNonce], which embeds the
@@ -254,6 +259,89 @@ object Utils {
         }
     } catch (_: Exception) {
         false
+    }
+
+    // ── Result parsing ────────────────────────────────────────────────────
+
+    /**
+     * Read a string extra that another app wrote.
+     *
+     * Two hostile shapes are handled here rather than at each call site: an extra stored
+     * under this key with a non-String type simply reads back as `null`, and unparcelling
+     * an extras bundle referencing a class this process does not have throws — a result
+     * intent is attacker-influenced input, so neither may take the client app down. Blank
+     * is treated as absent so that a caller comparing an echoed token cannot be fooled by
+     * `""` matching `""`.
+     */
+    private fun Intent.presentStringExtra(key: String): String? = try {
+        getStringExtra(key)?.takeIf { it.isNotBlank() }
+    } catch (_: Exception) {
+        null
+    }
+
+    /** Base64-decode a signature, yielding `null` for anything that cannot be one. */
+    private fun decodeSignature(encoded: String?): ByteArray? {
+        if (encoded == null) return null
+        return try {
+            // DEFAULT, not NO_WRAP: the vault encodes with DEFAULT, which wraps at 76
+            // characters, and a strict decoder would reject every real signature.
+            // Android's Base64 skips characters outside the alphabet rather than rejecting
+            // them, so junk can decode to zero bytes without throwing: reject that too.
+            Base64.decode(encoded, Base64.DEFAULT).takeIf { it.isNotEmpty() }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Decode the result intent delivered by the sign-challenge flow.
+     *
+     * Returns `null` when [intent] is missing or carries no usable signature — including when
+     * [EXTRA_SIGNATURE] is absent, blank, not valid Base64 or decodes to no bytes. Without a
+     * signature there is nothing that could ever be authenticated, so there is no result worth
+     * handing back. A malformed [EXTRA_FIELDS_JSON] payload is *not* fatal by contrast: the
+     * signature still stands on its own, so the result comes back with an empty field map.
+     *
+     * **This function does not authenticate anything, and a non-null return is not a success
+     * signal.** It reports what the intent said; [SignChallengeResult.isVerified] is the only
+     * thing that reports whether the sender holds the private key.
+     */
+    fun parseSignChallengeResult(intent: Intent?): SignChallengeResult? {
+        if (intent == null) return null
+        val signature = decodeSignature(intent.presentStringExtra(EXTRA_SIGNATURE)) ?: return null
+        return SignChallengeResult(
+            signature = signature,
+            algorithm = intent.presentStringExtra(EXTRA_ALGORITHM),
+            fields = decodeFields(intent.presentStringExtra(EXTRA_FIELDS_JSON)),
+            requestCode = intent.presentStringExtra(EXTRA_SHARE_REQUEST_CODE),
+        )
+    }
+
+    /**
+     * Decode the result intent delivered in response to [createQueryIntent].
+     *
+     * Returns `null` when [intent] is missing or carries none of the three extras this flow
+     * defines ([EXTRA_QUERY_RESULT_FIELDS], [EXTRA_PUBLIC_KEY], [EXTRA_SHARE_REQUEST_CODE]) —
+     * an intent with nothing in it is an empty envelope, not an answer. When any of them is
+     * present the result comes back populated with what could be read: a malformed or absent
+     * fields payload yields an empty map rather than a `null` result, so that a vault which
+     * answers "no fields disclosed" is distinguishable from a vault which did not answer.
+     *
+     * Note the field payload arrives under [EXTRA_QUERY_RESULT_FIELDS] here, not the
+     * [EXTRA_FIELDS_JSON] key the sign-challenge flow uses. The two keys are separate points
+     * in the protocol and are deliberately not interchangeable.
+     */
+    fun parseQueryResult(intent: Intent?): QueryResult? {
+        if (intent == null) return null
+        val fieldsJson = intent.presentStringExtra(EXTRA_QUERY_RESULT_FIELDS)
+        val publicKey = intent.presentStringExtra(EXTRA_PUBLIC_KEY)
+        val requestCode = intent.presentStringExtra(EXTRA_SHARE_REQUEST_CODE)
+        if (fieldsJson == null && publicKey == null && requestCode == null) return null
+        return QueryResult(
+            fields = decodeFields(fieldsJson),
+            publicKey = publicKey,
+            requestCode = requestCode,
+        )
     }
 
     // ── Typed-field (de)serialization ─────────────────────────────────────
