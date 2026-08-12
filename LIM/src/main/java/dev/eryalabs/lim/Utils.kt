@@ -417,6 +417,132 @@ object Utils {
         return intent.presentStringExtra(EXTRA_SHARE_REQUEST_CODE) == expected
     }
 
+    // ── Advisory entry validation ─────────────────────────────────────────
+
+    /**
+     * Standard Base64 with padding only ever as a suffix. Deliberately not the URL-safe
+     * alphabet: the vault encodes keys with [Base64.DEFAULT], and `-`/`_` would decode to
+     * different bytes than the sender meant.
+     */
+    private val BASE64_PATTERN = Regex("[A-Za-z0-9+/]*={0,2}")
+
+    /**
+     * Report every reason [entry] looks wrong, one human-readable problem per issue, so a
+     * client can tell the user what to fix *before* sending it to a vault that will simply
+     * refuse. An empty list means nothing here looks wrong.
+     *
+     * Checked: a missing or blank `id`; a missing or blank `publicKey`; a `publicKey` that
+     * is not valid Base64; a `publicKey` whose bytes do not parse as an RSA public key; an
+     * empty `fields` map; and any field key that is blank.
+     *
+     * **This is advisory and changes nothing.** It is not a gate: [createShareIntent] still
+     * encodes an [Entry] this reports problems for, and [decodeEntry] still accepts payloads
+     * this would flag (an empty `fields` map and a `publicKey` that is not a real key are both
+     * decoded happily). Narrowing what the protocol accepts would need the vault to agree, so
+     * it is a decision for a human and not something this function makes on the quiet. Treat a
+     * non-empty result as advice to show the developer, never as authority to drop the entry.
+     *
+     * Nor is an empty result a promise that the vault will accept the entry — this checks the
+     * shape of what you hold, not what the far side does with it.
+     *
+     * Like the decoders, this never throws. It defends against the same `Unsafe` hazard
+     * [decodeEntry] exists for: an [Entry] built by Gson can have genuinely `null` properties
+     * despite their declared types, and one of the places such an object plausibly ends up is
+     * a validity check.
+     *
+     * @param entry The entry you are about to send. Not modified.
+     * @return Problems in a stable order — identity first, then the field map — or an empty
+     *         list. The strings are for a developer to read; do not match on them.
+     */
+    @Suppress("SENSELESS_COMPARISON")
+    fun validateEntry(entry: Entry): List<String> {
+        val problems = mutableListOf<String>()
+
+        val id: String? = entry.id
+        if (id == null || id.isBlank()) problems += "id is missing or blank"
+
+        val publicKey: String? = entry.publicKey
+        if (publicKey == null || publicKey.isBlank()) {
+            // No cascade: an absent key is one problem, not three. Reporting that it is also
+            // not valid Base64 and also not an RSA key would bury the one thing to fix.
+            problems += "publicKey is missing or blank"
+        } else {
+            val keyBytes = base64Bytes(publicKey)
+            when {
+                keyBytes == null -> problems += "publicKey is not valid Base64"
+                !parsesAsRsaPublicKey(keyBytes) -> problems += "publicKey is not an RSA public key"
+            }
+        }
+
+        val fields: Map<String, TypedField>? = entry.fields
+        if (fields == null || fields.isEmpty()) {
+            problems += "fields is empty"
+        } else {
+            fields.keys.forEachIndexed { index, key ->
+                if (key == null || key.isBlank()) {
+                    problems += "fields entry $index has a missing or blank key"
+                }
+            }
+        }
+
+        return problems
+    }
+
+    /**
+     * Decode [encoded] as standard Base64, or `null` if it is not standard Base64 at all.
+     *
+     * `Base64.decode` cannot answer this on its own: Android's decoder *skips* characters
+     * outside the alphabet instead of rejecting them, so junk comes back as an empty array
+     * and half-junk comes back as bytes the sender never encoded. The alphabet is therefore
+     * checked here first. Whitespace is stripped before that check rather than counted
+     * against it, because [Base64.DEFAULT] — what the vault encodes keys with — wraps at 76
+     * characters, so every real key arrives with newlines in it.
+     *
+     * What is deliberately *not* checked is padding. Encodings without trailing `=` are
+     * still Base64 and Android decodes them, so rejecting one here would report a key
+     * [verifySignature] can use as invalid — the opposite of advice. Only a length that
+     * leaves one character over is impossible, because Base64 has no one-character group.
+     *
+     * The alphabet check is the other way round on purpose, and this is where the two
+     * functions deliberately disagree: a key with a stray character in it — an invisible one
+     * pasted in from somewhere else, say — still verifies, because the decoder skips what it
+     * does not recognise and recovers the real characters around it. It is still worth
+     * reporting, because the protocol identifies a profile by the public-key *string* and the
+     * vault looks it up by equality: a key that works only because a decoder was forgiving is
+     * one that will match nothing. So "valid here" implies "usable there" for padding and
+     * wrapping, and is deliberately stricter about the alphabet.
+     */
+    private fun base64Bytes(encoded: String): ByteArray? {
+        val compact = encoded.filterNot { it.isWhitespace() }
+        // The length rule is redundant today — Android's decoder throws on a leftover
+        // character and the catch below turns that into the same answer — but it is stated
+        // here rather than left resting on the behaviour of a component this library does
+        // not own, and the outcome is asserted either way.
+        if (compact.isEmpty() || compact.length % 4 == 1) return null
+        if (!BASE64_PATTERN.matches(compact)) return null
+        return try {
+            // No empty-result guard, unlike `decodeSignature`: there it is load-bearing
+            // because junk reaches the decoder, whereas the alphabet check above means every
+            // character here carries bits, so a non-empty input yields at least one byte.
+            Base64.decode(compact, Base64.DEFAULT)
+        } catch (_: Exception) {
+            // Reachable despite the checks above: the decoder rejects padding that does not
+            // land on a group boundary, `"A==="` among others.
+            null
+        }
+    }
+
+    /**
+     * Report whether [keyBytes] is an X.509-encoded RSA public key — the same parse
+     * [verifySignature] performs, so that "valid here" means "usable there". Anything the
+     * JCE refuses, including a well-formed key of another algorithm, is a `false`.
+     */
+    private fun parsesAsRsaPublicKey(keyBytes: ByteArray): Boolean = try {
+        KeyFactory.getInstance("RSA").generatePublic(X509EncodedKeySpec(keyBytes)) != null
+    } catch (_: Exception) {
+        false
+    }
+
     // ── Typed-field (de)serialization ─────────────────────────────────────
 
     /**
