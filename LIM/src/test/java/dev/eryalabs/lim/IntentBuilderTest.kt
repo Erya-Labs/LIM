@@ -152,6 +152,24 @@ class IntentBuilderTest {
         assertTrue(nonce.contentEquals(Base64.decode(encoded, Base64.DEFAULT)))
     }
 
+    /**
+     * The nonce is generated on this side, Base64'd onto the wire, and its freshness is read
+     * back out of the same bytes. A wrapping or padding slip anywhere along that path would
+     * corrupt the timestamp and expire every challenge instantly, so the whole path is
+     * walked once here rather than trusting the two halves in isolation.
+     */
+    @Test
+    fun `a generated nonce survives the intent and is still fresh`() {
+        val clock = 1_770_000_000_000L
+        val nonce = Utils.generateNonce(now = clock)
+        val intent = Utils.createSignChallengeIntent(context, "PUBLIC-KEY-BASE64", nonce, "req-11")
+
+        val roundTripped = Base64.decode(intent.getStringExtra("extra_nonce"), Base64.DEFAULT)
+        assertTrue(nonce.contentEquals(roundTripped))
+        assertTrue(Utils.isNonceFresh(roundTripped, 60_000, now = clock + 30_000))
+        assertFalse(Utils.isNonceFresh(roundTripped, 60_000, now = clock + 60_001))
+    }
+
     @Test
     fun `intents can be aimed at a vault other than Endeavor`() {
         val other = "dev.eryalabs.othervault"
