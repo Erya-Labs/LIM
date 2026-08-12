@@ -18,4 +18,18 @@ import kotlinx.parcelize.Parcelize
 data class TypedField(
     val value: String,
     val type: String = FieldType.STRING,
-) : Parcelable
+) : Parcelable {
+
+    /**
+     * A redacted rendering: the declared [type] and the *length* of [value], never the value.
+     *
+     * [value] is the user's personal data — their name, their email, their date of birth —
+     * and the generated `toString()` a data class would otherwise supply prints it verbatim
+     * into every log line, bug report and crash dump that touches it. See [redactedValue].
+     *
+     * Only this rendering is redacted. Nothing else changes: `equals`, `hashCode`, `copy`,
+     * the [Parcelable] encoding and Gson serialisation all still carry the real value, which
+     * is what the wire format depends on.
+     */
+    override fun toString(): String = "TypedField(type=$type, value=${redactedValue(value)})"
+}
