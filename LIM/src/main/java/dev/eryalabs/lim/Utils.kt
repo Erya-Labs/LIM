@@ -1,5 +1,6 @@
 package dev.eryalabs.lim
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.util.Base64
@@ -53,7 +54,7 @@ object Utils {
      *
      * Launch with `startActivityForResult` / `ActivityResultContracts.StartActivityForResult`
      * when you need a result (e.g. the vault's confirmation). For fire-and-forget use
-     * [Entry] instead.
+     * [shareEntry] instead.
      *
      * No validation happens here: an [Entry] with a blank `id` or `publicKey` is encoded
      * verbatim, and [decodeEntry] on the far side will reject it. Populate both before
@@ -92,17 +93,48 @@ object Utils {
      * Fire-and-forget share: send [entry] to the vault app without waiting for a result.
      *
      * Use [createShareIntent] + `startActivityForResult` instead when you need confirmation.
+     *
+     * **Package visibility is your responsibility, not this library's.** On Android 11+ a
+     * caller that cannot see [targetPackage] gets no match even when the vault is installed,
+     * and `setPackage` does not exempt it. Declare the vault in a `<queries>` element in your
+     * own manifest, or `false` will mean "I am not allowed to look" rather than "not there".
+     * This library ships no `<queries>` of its own — that is a manifest change, and manifest
+     * changes here are a human decision.
+     *
+     * @return `true` when the intent was dispatched; `false` when no vault was reachable —
+     *         none installed, none visible to you (see above), or one that disappeared between
+     *         the lookup and the launch. A `false` return is the only signal a client gets that
+     *         the share went nowhere; the alternative is a button that does nothing with
+     *         nothing to show for it, so it must be handled rather than discarded. Prompt the
+     *         user to install a vault only once you have confirmed your `<queries>`, since
+     *         until then `false` cannot distinguish "absent" from "invisible". `true` means the
+     *         intent was handed to the system, not that the user consented to the disclosure;
+     *         nothing here waits for that answer.
+     * @throws SecurityException if a vault matches but refuses the launch — an activity that
+     *         is not exported, or one behind a permission you do not hold. That is a
+     *         misconfiguration on one side or the other, not a device without a vault, and
+     *         reporting it as `false` would send the client to tell the user to install an app
+     *         they already have. It is deliberately not caught.
      */
     fun shareEntry(
         context: Context,
         entry: Entry,
         targetPackage: String = DEFAULT_ENDEAVOR_PACKAGE,
-    ) {
+    ): Boolean {
         val intent = createShareIntent(context, entry, targetPackage).apply {
+            // Unlike createShareIntent's own flags, NEW_TASK belongs here: there is no result
+            // to deliver back, and without it a non-Activity context cannot start anything.
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
-        if (intent.resolveActivity(context.packageManager) != null) {
+        if (intent.resolveActivity(context.packageManager) == null) return false
+        return try {
             context.startActivity(intent)
+            true
+        } catch (_: ActivityNotFoundException) {
+            // Resolving and starting are two separate lookups: the vault can be uninstalled or
+            // disabled in between. "The intent was not dispatched" is precisely what this
+            // function returns false for, so this is the contract, not a swallowed failure.
+            false
         }
     }
 
