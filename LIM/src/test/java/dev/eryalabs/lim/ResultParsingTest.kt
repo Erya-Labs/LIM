@@ -75,8 +75,14 @@ class ResultParsingTest {
      * in the bundle — so the parsers must survive it.
      */
     private class UnreadableIntent : Intent() {
-        override fun getStringExtra(name: String?): String? =
+        /** Counted so the test can prove the throw was reached, not merely that null came back. */
+        var reads = 0
+            private set
+
+        override fun getStringExtra(name: String?): String? {
+            reads++
             throw BadParcelableException("extras reference an unknown class")
+        }
     }
 
     // ── Sign challenge: the happy path ───────────────────────────────────
@@ -244,10 +250,34 @@ class ResultParsingTest {
         assertEquals("", result.fields["c"]?.value)
     }
 
+    /**
+     * Self-anchoring, for the same reason the correlation helper's copy of this fixture is:
+     * `null` is also what a parser that never touched the intent would return, so without the
+     * counter this passes green against a `presentStringExtra` that throws
+     * `BadParcelableException` straight into the client's `onActivityResult`. It is the only
+     * assertion in the file that tells a *safe* read from *no* read.
+     *
+     * The query parser's count is the interesting one: it reads three extras and must survive
+     * all three, so a guard that bailed after the first would still return null and would still
+     * be wrong about the two it skipped.
+     */
     @Test
     fun `an intent whose extras cannot be read yields null rather than throwing`() {
-        assertNull(Utils.parseSignChallengeResult(UnreadableIntent()))
-        assertNull(Utils.parseQueryResult(UnreadableIntent()))
+        val signIntent = UnreadableIntent()
+        assertNull(Utils.parseSignChallengeResult(signIntent))
+        assertEquals(
+            "the throwing read must actually have been attempted",
+            1,
+            signIntent.reads,
+        )
+
+        val queryIntent = UnreadableIntent()
+        assertNull(Utils.parseQueryResult(queryIntent))
+        assertEquals(
+            "every query extra must be attempted and survive, not just the first",
+            3,
+            queryIntent.reads,
+        )
     }
 
     /**

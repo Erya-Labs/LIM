@@ -134,6 +134,45 @@ class EntryParcelTest {
     }
 
     /**
+     * [TypedField] is `Parcelable` in its own right, and nothing above exercises that: [Entry]'s
+     * hand-written `Parceler` writes each field as two loose strings and never asks the field to
+     * parcel itself. So the generated path had no test at all — and it is reachable, because a
+     * `TypedField` is a public type a client can put in an intent or a saved-instance-state
+     * bundle directly, without an [Entry] around it.
+     */
+    @Test
+    fun `a typed field is parcelable in its own right`() {
+        fun roundTripField(field: TypedField): TypedField {
+            val parcel = Parcel.obtain()
+            return try {
+                parcel.writeParcelable(field, 0)
+                parcel.setDataPosition(0)
+                parcel.readParcelable(TypedField::class.java.classLoader)!!
+            } finally {
+                parcel.recycle()
+            }
+        }
+
+        val original = TypedField("ada@example.com", FieldType.EMAIL)
+        val restored = roundTripField(original)
+
+        assertTrue("the parcel must yield a new instance", original !== restored)
+        assertEquals("ada@example.com", restored.value)
+        assertEquals(FieldType.EMAIL, restored.type)
+
+        // The transposition guard again, one level down: value and type are both strings, so
+        // swapping them in the generated encoding would round-trip cleanly and mean the wrong
+        // thing. Distinct values make that visible.
+        val defaulted = roundTripField(TypedField("Integer"))
+        assertEquals("the value must not be read back as the type", "Integer", defaulted.value)
+        assertEquals(FieldType.STRING, defaulted.type)
+
+        val empty = roundTripField(TypedField("", "Iban"))
+        assertEquals("", empty.value)
+        assertEquals("Iban", empty.type)
+    }
+
+    /**
      * Negative control: proves the round trip is really serialising, not handing back the
      * same object reference (in which case every assertion above would pass vacuously).
      */

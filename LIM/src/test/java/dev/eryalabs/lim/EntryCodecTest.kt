@@ -98,12 +98,71 @@ class EntryCodecTest {
         assertNull(Utils.decodeEntry("""{"publicKey":"k"}"""))
     }
 
+    /**
+     * The strictest and most surprising thing this library does, so it is pinned as a table
+     * rather than as a handful of examples.
+     *
+     * Surprising because it is asymmetric: [Utils.createShareIntent] will happily *encode* an
+     * entry with a blank identity, and this refuses to decode the same bytes back. That
+     * asymmetry is deliberate and is logged for a human under "Blocked on human" — which means
+     * it is exactly the behaviour somebody will one day be tempted to "fix" by loosening a
+     * condition here. Every combination is asserted so that loosening either half goes red on
+     * its own: dropping the `id` check alone, dropping the `publicKey` check alone, and
+     * dropping `isBlank` in favour of a null check alone are three different edits and each
+     * one has rows here that no other row covers.
+     *
+     * The whitespace rows are the ones that separate `isBlank()` from `isEmpty()`. The
+     * non-breaking space is there because Kotlin's `isBlank` is *broader* than Java's: it asks
+     * `Character.isWhitespace(c) || Character.isSpaceChar(c)`, and U+00A0 fails the first test
+     * and passes the second. So a payload whose whole identity is a non-breaking space is
+     * refused, which is not what reading `Character.isWhitespace` alone would predict — the note
+     * T6 left in the progress log predicted the opposite. Pinned here because it is the kind of
+     * thing that gets "corrected" by someone reasoning from the Java method.
+     *
+     * The positive controls at the end pin that this rejects blanks rather than rejecting
+     * everything.
+     */
     @Test
     fun `a blank id or public key decodes to null`() {
-        assertNull(Utils.decodeEntry("""{"id":"","publicKey":"k"}"""))
-        assertNull(Utils.decodeEntry("""{"id":"   ","publicKey":"k"}"""))
-        assertNull(Utils.decodeEntry("""{"id":"x","publicKey":""}"""))
-        assertNull(Utils.decodeEntry("""{"id":"x","publicKey":"  "}"""))
+        val blanks = listOf("\"\"", "\"   \"", "\"\\t\"", "\"\\n\"", "\"\\r\\n\"", "\" \\t \"")
+
+        blanks.forEach { blank ->
+            assertNull("blank id, real key: $blank", Utils.decodeEntry("""{"id":$blank,"publicKey":"k"}"""))
+            assertNull("real id, blank key: $blank", Utils.decodeEntry("""{"id":"x","publicKey":$blank}"""))
+            assertNull("both blank: $blank", Utils.decodeEntry("""{"id":$blank,"publicKey":$blank}"""))
+            assertNull("blank id, absent key: $blank", Utils.decodeEntry("""{"id":$blank}"""))
+            assertNull("absent id, blank key: $blank", Utils.decodeEntry("""{"publicKey":$blank}"""))
+        }
+
+        // Absent is a different code path from blank — a null property out of Gson rather than
+        // an empty string — and each half must reject on its own.
+        assertNull("id absent", Utils.decodeEntry("""{"publicKey":"k"}"""))
+        assertNull("publicKey absent", Utils.decodeEntry("""{"id":"x"}"""))
+        assertNull("both absent", Utils.decodeEntry("""{"fields":{"a":{"value":"v"}}}"""))
+        assertNull("explicit nulls", Utils.decodeEntry("""{"id":null,"publicKey":null}"""))
+        assertNull("explicit null id", Utils.decodeEntry("""{"id":null,"publicKey":"k"}"""))
+        assertNull("explicit null key", Utils.decodeEntry("""{"id":"x","publicKey":null}"""))
+
+        // Positive controls. Without these the whole table passes against a decodeEntry that
+        // returns null for everything, which is the mutant a file of assertNulls cannot see.
+        assertNotNull("a real identity must survive", Utils.decodeEntry("""{"id":"x","publicKey":"k"}"""))
+        assertNotNull(
+            "one non-whitespace character is enough on either side",
+            Utils.decodeEntry("""{"id":" x ","publicKey":" k "}"""),
+        )
+        assertEquals(
+            "surrounding whitespace is kept, not trimmed — only all-blank is refused",
+            " x ",
+            Utils.decodeEntry("""{"id":" x ","publicKey":" k "}""")?.id,
+        )
+        assertNull(
+            "Kotlin's isBlank also asks isSpaceChar, so U+00A0 alone is blank and is refused",
+            Utils.decodeEntry("{\"id\":\"\u00A0\",\"publicKey\":\"\u00A0\"}"),
+        )
+        assertNotNull(
+            "...but a non-breaking space *inside* a token leaves it non-blank and live",
+            Utils.decodeEntry("{\"id\":\"a\u00A0b\",\"publicKey\":\"k\"}"),
+        )
     }
 
     /**

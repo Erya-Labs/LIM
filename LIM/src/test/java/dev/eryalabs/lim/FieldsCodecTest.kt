@@ -97,16 +97,33 @@ class FieldsCodecTest {
     /**
      * The payoff: a decoded field can be fed straight to [FieldType.normalize] without the
      * caller defending against a null the type system already promised was impossible.
+     *
+     * Every assertion here names the value it expects. The two it replaces did not —
+     * `assertEquals(field.value.length, field.value.length)` and
+     * `assertTrue(normalize(field.type).isNotEmpty())` — and neither could fail for any input:
+     * the first compares an expression with itself, and `normalize` folds a blank type to
+     * `"String"`, so its result is never empty whatever it is handed. They went red today only
+     * as a side effect, by throwing an NPE on the way to asserting nothing, and would have
+     * stopped doing even that the day `TypedField.value` was declared nullable. What the
+     * repair actually promises is a *specific* value and a *specific* type per malformed
+     * shape, so that is what is written down.
      */
     @Test
     fun `decoded fields are safe to dereference`() {
         val decoded = Utils.decodeFields("""{"a":{"value":"x"},"b":{"type":"int"},"c":{}}""")
-        decoded.forEach { (key, field) ->
-            assertEquals("$key length is readable", field.value.length, field.value.length)
-            assertTrue("$key type normalizes", FieldType.normalize(field.type).isNotEmpty())
-        }
-        assertEquals(FieldType.STRING, decoded["c"]?.type)
-        assertEquals("", decoded["c"]?.value)
+
+        assertEquals(setOf("a", "b", "c"), decoded.keys)
+        assertEquals("x", decoded["a"]!!.value)
+        assertEquals(1, decoded["a"]!!.value.length)
+        assertEquals(FieldType.STRING, decoded["a"]!!.type)
+
+        assertEquals("a missing value becomes empty, not null", "", decoded["b"]!!.value)
+        assertEquals(0, decoded["b"]!!.value.length)
+        assertEquals("an unknown spelling is kept verbatim", "int", decoded["b"]!!.type)
+        assertEquals("...and still normalizes", FieldType.INTEGER, FieldType.normalize(decoded["b"]!!.type))
+
+        assertEquals("", decoded["c"]!!.value)
+        assertEquals(FieldType.STRING, decoded["c"]!!.type)
     }
 
     // ── Negative controls: malformed input must degrade, never throw ─────
@@ -118,6 +135,56 @@ class FieldsCodecTest {
         assertEquals(emptyMap<String, TypedField>(), Utils.decodeFields("   "))
         assertEquals(emptyMap<String, TypedField>(), Utils.decodeFields("not json at all"))
         assertEquals(emptyMap<String, TypedField>(), Utils.decodeFields("""{"unclosed": """))
+    }
+
+    /**
+     * The case broken JSON does not cover, and the one a peer app is most likely to send by
+     * accident: a document that parses perfectly and is simply not a field map. Gson is
+     * type-directed, so the failure here is not a syntax error — it is an adapter asked for a
+     * `Map<String, TypedField>` and handed a number, and what it does about that is Gson's
+     * business rather than something this library states. [Utils.decodeEntry] has had this
+     * pinned since T1; its sibling had only broken-syntax cases.
+     */
+    @Test
+    fun `well-formed json of the wrong shape decodes to an empty map`() {
+        val wrongShapes = listOf(
+            "null",
+            "42",
+            "true",
+            "\"just a string\"",
+            "[]",
+            "[1,2,3]",
+            """[{"value":"x","type":"String"}]""",
+            """{"a":7}""",
+            """{"a":"x"}""",
+            """{"a":[{"value":"x"}]}""",
+            """{"a":{"value":{"nested":"x"}}}""",
+            """{"a":{"value":"x"}} trailing junk""",
+        )
+        wrongShapes.forEach { json ->
+            assertEquals("[$json] must degrade to an empty map", emptyMap<String, TypedField>(), Utils.decodeFields(json))
+        }
+    }
+
+    /**
+     * The other shape a hostile sender reaches for: not JSON at all, just bytes. A field
+     * payload and a Base64 blob travel in sibling extras of the same intent, so a vault that
+     * crosses its own wires puts one where the other belongs, and control characters are what
+     * arrives when the string is really binary.
+     */
+    @Test
+    fun `binary and base64-shaped junk decodes to an empty map`() {
+        val junk = listOf(
+            "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA",
+            "!!!!",
+            "====",
+            " ",
+            String(CharArray(64) { (it % 256).toChar() }),
+            "🔐�",
+        )
+        junk.forEach { text ->
+            assertEquals("[$text] must degrade to an empty map", emptyMap<String, TypedField>(), Utils.decodeFields(text))
+        }
     }
 
     /**

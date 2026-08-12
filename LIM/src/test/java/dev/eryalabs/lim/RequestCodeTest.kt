@@ -223,4 +223,46 @@ class RequestCodeTest {
     fun `a code carrying whitespace still matches itself exactly`() {
         assertTrue(Utils.matchesRequestCode(taggedIntent(" req-1 "), " req-1 "))
     }
+
+    /**
+     * Where "blank" actually stops, pinned because reading the Java method gets it wrong.
+     *
+     * T6's progress-log note reasoned that a non-breaking-space token matches itself, on the
+     * grounds that `Character.isWhitespace` excludes U+00A0. It does — but Kotlin's `isBlank`
+     * does not call it alone: `Char.isWhitespace()` is
+     * `Character.isWhitespace(c) || Character.isSpaceChar(c)`, and U+00A0 is `Zs`, so it passes
+     * the second test. A token made only of non-breaking spaces is therefore blank on both
+     * sides and matches nothing, which is the safer answer and the opposite of what was
+     * written down. The same rule decides the blank-identity refusal in `Utils.decodeEntry`,
+     * so it is worth one assertion rather than one comment.
+     */
+    @Test
+    fun `a non-breaking space is blank, but only when it is the whole token`() {
+        val nbsp = " "
+
+        // The character above is invisible, so it is checked rather than trusted: an editor or
+        // a re-encoding that quietly folded it to an ordinary space would leave every assertion
+        // below passing while testing something else entirely.
+        assertEquals(
+            "this test needs a literal U+00A0 — the source file's copy has been mangled",
+            0x00A0,
+            nbsp.single().code,
+        )
+
+        assertFalse(
+            "Kotlin's isBlank also asks isSpaceChar, so a lone U+00A0 never correlates",
+            Utils.matchesRequestCode(taggedIntent(nbsp), nbsp),
+        )
+        assertFalse("...on the expected side alone", Utils.matchesRequestCode(taggedIntent("req-1"), nbsp))
+        assertFalse("...on the intent side alone", Utils.matchesRequestCode(taggedIntent(nbsp), "req-1"))
+
+        assertTrue(
+            "a non-breaking space inside a token leaves it non-blank, so it is a real code",
+            Utils.matchesRequestCode(taggedIntent("req${nbsp}1"), "req${nbsp}1"),
+        )
+        assertFalse(
+            "...and it is not the same code as the one with an ordinary space",
+            Utils.matchesRequestCode(taggedIntent("req${nbsp}1"), "req${' '}1"),
+        )
+    }
 }
