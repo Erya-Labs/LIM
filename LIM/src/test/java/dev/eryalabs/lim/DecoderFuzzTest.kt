@@ -635,6 +635,154 @@ class DecoderFuzzTest {
     }
 
     /**
+     * The same corpus, into the request parsers — the boundary where the *vault* stands.
+     *
+     * A request intent is the one thing any installed app can fire at a vault unprovoked, so
+     * these three parsers face the most hostile input in the protocol. Each required and
+     * optional extra gets the fuzzed text in turn, and two structural properties ride along:
+     * the share parser's acceptance must agree exactly with [Utils.decodeEntry] (it is
+     * documented as the same bar), and no intent carrying a non-blank entry payload may ever
+     * parse as a query — the routing line `RequestParsingTest` pins with designed inputs,
+     * held here against inputs nobody designed.
+     */
+    @Test
+    fun `no mutated payload makes a request parser throw or yield something unsafe`() {
+        val master = Random(MASTER_SEED)
+        var shareRequests = 0
+        var queryRequests = 0
+        var signRequests = 0
+        var charsRead = 0
+
+        repeat(CASES) { index ->
+            val seed = master.nextLong()
+            val case = caseFor(seed)
+
+            fun bail(what: String, cause: Throwable? = null): Nothing =
+                throw AssertionError(report(what, index, seed, case), cause)
+
+            fun intentOf(vararg extras: Pair<String, String>) = Intent().apply {
+                extras.forEach { (key, value) -> putExtra(key, value) }
+            }
+
+            // The fuzzed text as the entry payload, with the optional extras fuzzed too.
+            val share = try {
+                Utils.parseShareRequest(
+                    intentOf(
+                        Utils.EXTRA_ENTRY_JSON to case.text,
+                        Utils.EXTRA_SHARE_REQUEST_CODE to case.text,
+                        Utils.EXTRA_PROTOCOL_VERSION to case.text,
+                    ),
+                )
+            } catch (t: Throwable) {
+                bail("parseShareRequest threw ${t.javaClass.name}: ${t.message}", t)
+            }
+            if (share != null) {
+                shareRequests++
+                charsRead += checkEntry(share.entry) { bail(it) }
+                try {
+                    share.toString()
+                } catch (t: Throwable) {
+                    bail("ShareRequest.toString() threw ${t.javaClass.name}: ${t.message}", t)
+                }
+            }
+            if ((share != null) != (Utils.decodeEntry(case.text) != null)) {
+                bail("parseShareRequest's acceptance disagrees with decodeEntry")
+            }
+
+            // The routing property under fuzz: a non-blank entry payload makes the intent a
+            // share, so the query parser must refuse it no matter what else it carries.
+            val hijacked = try {
+                Utils.parseQueryRequest(
+                    intentOf(
+                        Utils.EXTRA_ENTRY_JSON to case.text,
+                        Utils.EXTRA_PUBLIC_KEY to "PUBLIC-KEY-BASE64",
+                    ),
+                )
+            } catch (t: Throwable) {
+                bail("parseQueryRequest threw ${t.javaClass.name} on a share-shaped intent", t)
+            }
+            if (hijacked != null && case.text.isNotBlank()) {
+                bail("a query request was parsed out of an intent carrying an entry payload")
+            }
+
+            val query = try {
+                Utils.parseQueryRequest(
+                    intentOf(
+                        Utils.EXTRA_PUBLIC_KEY to case.text,
+                        Utils.EXTRA_SHARE_REQUEST_CODE to case.text,
+                        Utils.EXTRA_PROTOCOL_VERSION to case.text,
+                    ),
+                )
+            } catch (t: Throwable) {
+                bail("parseQueryRequest threw ${t.javaClass.name}: ${t.message}", t)
+            }
+            if (query != null) {
+                queryRequests++
+                if (query.publicKey != case.text) {
+                    bail("the parsed public key is not the one that was sent")
+                }
+                try {
+                    query.toString()
+                } catch (t: Throwable) {
+                    bail("QueryRequest.toString() threw ${t.javaClass.name}: ${t.message}", t)
+                }
+            } else if (case.text.isNotBlank()) {
+                bail("parseQueryRequest returned null for a non-blank public key")
+            }
+
+            val sign = try {
+                Utils.parseSignChallengeRequest(
+                    intentOf(
+                        Utils.EXTRA_PUBLIC_KEY to case.text,
+                        Utils.EXTRA_NONCE to case.text,
+                        Utils.EXTRA_NONCE_FORMAT to case.text,
+                        Utils.EXTRA_SHARE_REQUEST_CODE to case.text,
+                    ),
+                )
+            } catch (t: Throwable) {
+                bail("parseSignChallengeRequest threw ${t.javaClass.name}: ${t.message}", t)
+            }
+            if (sign != null) {
+                signRequests++
+                if (sign.nonce.isEmpty()) {
+                    bail("parseSignChallengeRequest returned a request carrying an empty nonce")
+                }
+                if (sign.nonceFormat != null && sign.nonceFormat != case.text) {
+                    bail("the nonce format did not travel verbatim")
+                }
+                try {
+                    sign.toString()
+                } catch (t: Throwable) {
+                    bail("SignChallengeRequest.toString() threw ${t.javaClass.name}: ${t.message}", t)
+                }
+            }
+        }
+
+        // Non-vacuity. The share floor mirrors the decoder run's `decodedEntries > 100`
+        // (same inputs, same decode); the query floor mirrors `queryResults > 2000` (same
+        // non-blank criterion); the sign floor sits far below the measured count — most
+        // payloads keep enough Base64-alphabet characters to decode to at least one byte.
+        assertTrue(
+            "the corpus must produce some share requests, else checkEntry never runs here; " +
+                "got $shareRequests of $CASES",
+            shareRequests > 100,
+        )
+        assertTrue(
+            "the corpus must produce some query requests; got $queryRequests of $CASES",
+            queryRequests > 2000,
+        )
+        assertTrue(
+            "the corpus must produce some sign-challenge requests, else the nonce gate is " +
+                "never exercised on accepted input; got $signRequests of $CASES",
+            signRequests > 500,
+        )
+        assertTrue(
+            "the safety checks must have dereferenced real characters; got $charsRead",
+            charsRead > 1_000,
+        )
+    }
+
+    /**
      * The reproducibility claim, pinned rather than described. `java.util.Random` is specified
      * bit-for-bit by the JDK, so this digest is the same on every machine and every run; if an
      * edit to the generator changes it, that is a deliberate act and this constant moves in the
