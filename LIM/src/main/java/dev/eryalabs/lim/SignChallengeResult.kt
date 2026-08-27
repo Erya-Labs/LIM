@@ -21,12 +21,20 @@ package dev.eryalabs.lim
  *                       until [isVerified] has returned `true`.
  * @property requestCode The correlation token echoed back by the vault, or `null` when absent
  *                       or blank.
+ * @property vaultProtocolVersion The protocol version the vault echoed under
+ *                       [Utils.EXTRA_PROTOCOL_VERSION], or `null` when it echoed nothing
+ *                       usable — a legacy vault, or a peer that sent a blank, non-numeric or
+ *                       non-positive value. `null` means "the vault did not say", never
+ *                       "version 1 confirmed". Unverified like everything else here: it says
+ *                       which protocol the sender claims to speak, not that the signature is
+ *                       genuine.
  */
 data class SignChallengeResult(
     val signature: ByteArray,
     val algorithm: String?,
     val fields: Map<String, TypedField>,
     val requestCode: String?,
+    val vaultProtocolVersion: Int? = null,
 ) {
 
     /**
@@ -50,7 +58,8 @@ data class SignChallengeResult(
         return signature.contentEquals(other.signature) &&
             algorithm == other.algorithm &&
             fields == other.fields &&
-            requestCode == other.requestCode
+            requestCode == other.requestCode &&
+            vaultProtocolVersion == other.vaultProtocolVersion
     }
 
     override fun hashCode(): Int {
@@ -58,6 +67,7 @@ data class SignChallengeResult(
         result = 31 * result + (algorithm?.hashCode() ?: 0)
         result = 31 * result + fields.hashCode()
         result = 31 * result + (requestCode?.hashCode() ?: 0)
+        result = 31 * result + (vaultProtocolVersion?.hashCode() ?: 0)
         return result
     }
 }

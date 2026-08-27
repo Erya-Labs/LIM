@@ -113,6 +113,8 @@ class PublicApiAuditTest {
         // ── Utils ────────────────────────────────────────────────────────
         "Utils.INSTANCE" to "every test in this suite — Java's handle on the Kotlin object",
         "Utils.DEFAULT_ENDEAVOR_PACKAGE" to "IntentBuilderTest: the default vault package is Endeavor",
+        "Utils.PROTOCOL_VERSION" to "ProtocolVersionTest: the protocol version and its extra key match the wire literals",
+        "Utils.EXTRA_PROTOCOL_VERSION" to "ProtocolVersionTest: the protocol version and its extra key match the wire literals",
         "Utils.EXTRA_ENTRY_JSON" to "IntentBuilderTest: extra keys match the literals the vault reads",
         "Utils.EXTRA_SHARE_REQUEST_CODE" to "IntentBuilderTest: extra keys match the literals the vault reads",
         "Utils.EXTRA_QUERY_RESULT_FIELDS" to "IntentBuilderTest: extra keys match the literals the vault reads",
@@ -203,9 +205,11 @@ class PublicApiAuditTest {
         "QueryResult.getFields" to "ResultParsingTest: a full query result is decoded",
         "QueryResult.getPublicKey" to "ResultParsingTest: a full query result is decoded",
         "QueryResult.getRequestCode" to "ResultParsingTest: a full query result is decoded",
-        "QueryResult.component1" to "PublicApiAuditTest: a query result destructures into its three properties",
-        "QueryResult.component2" to "PublicApiAuditTest: a query result destructures into its three properties",
-        "QueryResult.component3" to "PublicApiAuditTest: a query result destructures into its three properties",
+        "QueryResult.getVaultProtocolVersion" to "ProtocolVersionTest: a version-2 result reports the vault's protocol version on all three parsers",
+        "QueryResult.component1" to "PublicApiAuditTest: a query result destructures into its four properties",
+        "QueryResult.component2" to "PublicApiAuditTest: a query result destructures into its four properties",
+        "QueryResult.component3" to "PublicApiAuditTest: a query result destructures into its four properties",
+        "QueryResult.component4" to "PublicApiAuditTest: a query result destructures into its four properties",
         "QueryResult.copy" to "PublicApiAuditTest: query results carrying the same values are equal",
         "QueryResult.equals" to "PublicApiAuditTest: query results carrying the same values are equal",
         "QueryResult.hashCode" to "PublicApiAuditTest: query results carrying the same values are equal",
@@ -215,9 +219,11 @@ class PublicApiAuditTest {
         "ShareResult.getPublicKey" to "ResultParsingTest: a full share result is decoded",
         "ShareResult.getFields" to "ResultParsingTest: a full share result is decoded",
         "ShareResult.getRequestCode" to "ResultParsingTest: a full share result is decoded",
-        "ShareResult.component1" to "PublicApiAuditTest: a share result destructures into its three properties",
-        "ShareResult.component2" to "PublicApiAuditTest: a share result destructures into its three properties",
-        "ShareResult.component3" to "PublicApiAuditTest: a share result destructures into its three properties",
+        "ShareResult.getVaultProtocolVersion" to "ProtocolVersionTest: a version-2 result reports the vault's protocol version on all three parsers",
+        "ShareResult.component1" to "PublicApiAuditTest: a share result destructures into its four properties",
+        "ShareResult.component2" to "PublicApiAuditTest: a share result destructures into its four properties",
+        "ShareResult.component3" to "PublicApiAuditTest: a share result destructures into its four properties",
+        "ShareResult.component4" to "PublicApiAuditTest: a share result destructures into its four properties",
         "ShareResult.copy" to "PublicApiAuditTest: share results carrying the same values are equal",
         "ShareResult.equals" to "PublicApiAuditTest: share results carrying the same values are equal",
         "ShareResult.hashCode" to "PublicApiAuditTest: share results carrying the same values are equal",
@@ -228,10 +234,12 @@ class PublicApiAuditTest {
         "SignChallengeResult.getAlgorithm" to "ResultParsingTest: a full sign-challenge result is decoded",
         "SignChallengeResult.getFields" to "ResultParsingTest: a full sign-challenge result is decoded",
         "SignChallengeResult.getRequestCode" to "ResultParsingTest: a full sign-challenge result is decoded",
-        "SignChallengeResult.component1" to "PublicApiAuditTest: a sign-challenge result destructures into its four properties",
-        "SignChallengeResult.component2" to "PublicApiAuditTest: a sign-challenge result destructures into its four properties",
-        "SignChallengeResult.component3" to "PublicApiAuditTest: a sign-challenge result destructures into its four properties",
-        "SignChallengeResult.component4" to "PublicApiAuditTest: a sign-challenge result destructures into its four properties",
+        "SignChallengeResult.getVaultProtocolVersion" to "ProtocolVersionTest: a version-2 result reports the vault's protocol version on all three parsers",
+        "SignChallengeResult.component1" to "PublicApiAuditTest: a sign-challenge result destructures into its five properties",
+        "SignChallengeResult.component2" to "PublicApiAuditTest: a sign-challenge result destructures into its five properties",
+        "SignChallengeResult.component3" to "PublicApiAuditTest: a sign-challenge result destructures into its five properties",
+        "SignChallengeResult.component4" to "PublicApiAuditTest: a sign-challenge result destructures into its five properties",
+        "SignChallengeResult.component5" to "PublicApiAuditTest: a sign-challenge result destructures into its five properties",
         "SignChallengeResult.copy" to "PublicApiAuditTest: copying a sign-challenge result keeps it unauthenticated until verified",
         "SignChallengeResult.equals" to "ResultParsingTest: results carrying the same bytes are equal",
         "SignChallengeResult.hashCode" to "ResultParsingTest: results carrying the same bytes are equal",
@@ -441,21 +449,23 @@ class PublicApiAuditTest {
     }
 
     @Test
-    fun `a query result destructures into its three properties`() {
-        val (fields, publicKey, requestCode) =
-            QueryResult(mapOf("a" to TypedField("v")), "pk", "req-1")
+    fun `a query result destructures into its four properties`() {
+        val (fields, publicKey, requestCode, vaultProtocolVersion) =
+            QueryResult(mapOf("a" to TypedField("v")), "pk", "req-1", 2)
         assertEquals("v", fields["a"]?.value)
         assertEquals("pk", publicKey)
         assertEquals("req-1", requestCode)
+        assertEquals(2, vaultProtocolVersion)
     }
 
     @Test
-    fun `a share result destructures into its three properties`() {
-        val (publicKey, fields, requestCode) =
-            ShareResult("pk", mapOf("a" to TypedField("v")), "req-1")
+    fun `a share result destructures into its four properties`() {
+        val (publicKey, fields, requestCode, vaultProtocolVersion) =
+            ShareResult("pk", mapOf("a" to TypedField("v")), "req-1", 2)
         assertEquals("pk", publicKey)
         assertEquals("v", fields["a"]?.value)
         assertEquals("req-1", requestCode)
+        assertEquals(2, vaultProtocolVersion)
     }
 
     /**
@@ -473,17 +483,19 @@ class PublicApiAuditTest {
         assertNotEquals(a, a.copy(requestCode = "req-2"))
         assertNotEquals(a, a.copy(publicKey = null))
         assertNotEquals(a, a.copy(fields = emptyMap()))
+        assertNotEquals(a, a.copy(vaultProtocolVersion = 2))
         assertEquals("copy must carry the values it was not asked to change", "pk", a.copy(requestCode = "z").publicKey)
     }
 
     @Test
-    fun `a sign-challenge result destructures into its four properties`() {
-        val (signature, algorithm, fields, requestCode) =
-            SignChallengeResult(byteArrayOf(1, 2, 3), "SHA256withRSA", mapOf("a" to TypedField("v")), "req-1")
+    fun `a sign-challenge result destructures into its five properties`() {
+        val (signature, algorithm, fields, requestCode, vaultProtocolVersion) =
+            SignChallengeResult(byteArrayOf(1, 2, 3), "SHA256withRSA", mapOf("a" to TypedField("v")), "req-1", 2)
         assertTrue(byteArrayOf(1, 2, 3).contentEquals(signature))
         assertEquals("SHA256withRSA", algorithm)
         assertEquals("v", fields["a"]?.value)
         assertEquals("req-1", requestCode)
+        assertEquals(2, vaultProtocolVersion)
     }
 
     /**
@@ -503,6 +515,7 @@ class PublicApiAuditTest {
         assertNotEquals(a, a.copy(requestCode = "req-2"))
         assertNotEquals(a, a.copy(publicKey = null))
         assertNotEquals(a, a.copy(fields = emptyMap()))
+        assertNotEquals(a, a.copy(vaultProtocolVersion = 2))
         assertEquals("copy must carry the values it was not asked to change", "pk", a.copy(requestCode = "z").publicKey)
     }
 
@@ -694,11 +707,13 @@ class PublicApiAuditTest {
             "QueryResult.component1(): Map<String, TypedField>",
             "QueryResult.component2(): String",
             "QueryResult.component3(): String",
-            "QueryResult.copy(Map<String, TypedField>, String, String): QueryResult",
+            "QueryResult.component4(): Integer",
+            "QueryResult.copy(Map<String, TypedField>, String, String, Integer): QueryResult",
             "QueryResult.equals(Object): boolean",
             "QueryResult.getFields(): Map<String, TypedField>",
             "QueryResult.getPublicKey(): String",
             "QueryResult.getRequestCode(): String",
+            "QueryResult.getVaultProtocolVersion(): Integer",
             "QueryResult.hashCode(): int",
             "QueryResult.toString(): String",
             "RedactionKt.PUBLIC_KEY_PREVIEW_CHARS: int",
@@ -707,23 +722,27 @@ class PublicApiAuditTest {
             "ShareResult.component1(): String",
             "ShareResult.component2(): Map<String, TypedField>",
             "ShareResult.component3(): String",
-            "ShareResult.copy(String, Map<String, TypedField>, String): ShareResult",
+            "ShareResult.component4(): Integer",
+            "ShareResult.copy(String, Map<String, TypedField>, String, Integer): ShareResult",
             "ShareResult.equals(Object): boolean",
             "ShareResult.getFields(): Map<String, TypedField>",
             "ShareResult.getPublicKey(): String",
             "ShareResult.getRequestCode(): String",
+            "ShareResult.getVaultProtocolVersion(): Integer",
             "ShareResult.hashCode(): int",
             "ShareResult.toString(): String",
             "SignChallengeResult.component1(): byte[]",
             "SignChallengeResult.component2(): String",
             "SignChallengeResult.component3(): Map<String, TypedField>",
             "SignChallengeResult.component4(): String",
-            "SignChallengeResult.copy(byte[], String, Map<String, TypedField>, String): SignChallengeResult",
+            "SignChallengeResult.component5(): Integer",
+            "SignChallengeResult.copy(byte[], String, Map<String, TypedField>, String, Integer): SignChallengeResult",
             "SignChallengeResult.equals(Object): boolean",
             "SignChallengeResult.getAlgorithm(): String",
             "SignChallengeResult.getFields(): Map<String, TypedField>",
             "SignChallengeResult.getRequestCode(): String",
             "SignChallengeResult.getSignature(): byte[]",
+            "SignChallengeResult.getVaultProtocolVersion(): Integer",
             "SignChallengeResult.hashCode(): int",
             "SignChallengeResult.isVerified(String, byte[]): boolean",
             "SignChallengeResult.toString(): String",
@@ -745,11 +764,13 @@ class PublicApiAuditTest {
             "Utils.EXTRA_ENTRY_JSON: String",
             "Utils.EXTRA_FIELDS_JSON: String",
             "Utils.EXTRA_NONCE: String",
+            "Utils.EXTRA_PROTOCOL_VERSION: String",
             "Utils.EXTRA_PUBLIC_KEY: String",
             "Utils.EXTRA_QUERY_RESULT_FIELDS: String",
             "Utils.EXTRA_SHARE_REQUEST_CODE: String",
             "Utils.EXTRA_SIGNATURE: String",
             "Utils.INSTANCE: Utils",
+            "Utils.PROTOCOL_VERSION: int",
             "Utils.createQueryIntent(Context, String, String, String): Intent",
             // Two overloads, listed separately. A bare-name manifest cannot tell them apart,
             // which is the gap this snapshot exists to cover.

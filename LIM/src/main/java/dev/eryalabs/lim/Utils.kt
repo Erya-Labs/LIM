@@ -15,6 +15,25 @@ object Utils {
 
     const val DEFAULT_ENDEAVOR_PACKAGE = "com.github.adaydreamaway.endeavor"
 
+    /**
+     * The protocol generation this library speaks. Version 1 is the implicit legacy
+     * protocol: nothing on the wire ever says "1", absence says it instead. Every outgoing
+     * request carries this value under [EXTRA_PROTOCOL_VERSION], and a vault that
+     * understands it echoes its own version in the result — which is what finally lets a
+     * client tell "the vault honoured this" from "the vault ignored what it did not know",
+     * the question every future protocol addition has to be able to answer.
+     */
+    const val PROTOCOL_VERSION = 2
+
+    /**
+     * Carries [PROTOCOL_VERSION] as a decimal string, in both directions: attached to every
+     * outgoing request intent, and read back out of result intents into the parsers'
+     * `vaultProtocolVersion`. A legacy vault ignores the extra and echoes nothing, so its
+     * results parse exactly as before with a `null` version — never a default that fakes a
+     * modern vault.
+     */
+    const val EXTRA_PROTOCOL_VERSION = "extra_protocol_version"
+
     // ── Intent extras ────────────────────────────────────────────────────
     const val EXTRA_ENTRY_JSON          = "extra_entry_json"
     const val EXTRA_SHARE_REQUEST_CODE  = "extra_share_request_code"
@@ -69,6 +88,7 @@ object Utils {
         return Intent(shareDataAction(targetPackage)).apply {
             setPackage(targetPackage)
             putExtra(EXTRA_ENTRY_JSON, json)
+            putExtra(EXTRA_PROTOCOL_VERSION, PROTOCOL_VERSION.toString())
             // CLEAR_TOP ensures an existing vault instance receives onNewIntent instead of
             // stacking a second copy. FLAG_ACTIVITY_NEW_TASK is intentionally NOT set here —
             // it would put the vault in a separate task and block result delivery.
@@ -157,6 +177,7 @@ object Utils {
         setPackage(targetPackage)
         putExtra(EXTRA_PUBLIC_KEY, publicKey)
         putExtra(EXTRA_SHARE_REQUEST_CODE, requestCode)
+        putExtra(EXTRA_PROTOCOL_VERSION, PROTOCOL_VERSION.toString())
     }
 
     // ── Nonces ───────────────────────────────────────────────────────────
@@ -264,6 +285,7 @@ object Utils {
         putExtra(EXTRA_PUBLIC_KEY, publicKey)
         putExtra(EXTRA_NONCE, Base64.encodeToString(nonce, Base64.NO_WRAP))
         putExtra(EXTRA_SHARE_REQUEST_CODE, requestCode)
+        putExtra(EXTRA_PROTOCOL_VERSION, PROTOCOL_VERSION.toString())
     }
 
     // ── Signature verification ────────────────────────────────────────────
@@ -311,6 +333,22 @@ object Utils {
         null
     }
 
+    /**
+     * Read the protocol version the vault echoed under [EXTRA_PROTOCOL_VERSION].
+     *
+     * `null` for everything that is not an unambiguous declaration: an absent or blank
+     * extra, one of the wrong type, a value that is not a decimal integer, one that does
+     * not fit in an [Int], and zero or below. The extra arrives from another app, so none
+     * of that may throw — and none of it may *default*, either: `null` means "the vault
+     * did not say", and a vault that did not say must never be presented as a modern one.
+     *
+     * A version on its own is not an answer. Each parser's empty-envelope rule is checked
+     * over its flow's own extras before this is read, so an intent carrying nothing but a
+     * version still parses to `null`.
+     */
+    private fun Intent.vaultProtocolVersion(): Int? =
+        presentStringExtra(EXTRA_PROTOCOL_VERSION)?.toIntOrNull()?.takeIf { it > 0 }
+
     /** Base64-decode a signature, yielding `null` for anything that cannot be one. */
     private fun decodeSignature(encoded: String?): ByteArray? {
         if (encoded == null) return null
@@ -346,6 +384,7 @@ object Utils {
             algorithm = intent.presentStringExtra(EXTRA_ALGORITHM),
             fields = decodeFields(intent.presentStringExtra(EXTRA_FIELDS_JSON)),
             requestCode = intent.presentStringExtra(EXTRA_SHARE_REQUEST_CODE),
+            vaultProtocolVersion = intent.vaultProtocolVersion(),
         )
     }
 
@@ -373,6 +412,7 @@ object Utils {
             fields = decodeFields(fieldsJson),
             publicKey = publicKey,
             requestCode = requestCode,
+            vaultProtocolVersion = intent.vaultProtocolVersion(),
         )
     }
 
@@ -406,6 +446,7 @@ object Utils {
             publicKey = publicKey,
             fields = decodeFields(fieldsJson),
             requestCode = requestCode,
+            vaultProtocolVersion = intent.vaultProtocolVersion(),
         )
     }
 
