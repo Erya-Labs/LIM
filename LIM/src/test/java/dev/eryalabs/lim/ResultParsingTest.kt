@@ -142,12 +142,14 @@ class ResultParsingTest {
     fun `a null intent yields null`() {
         assertNull(Utils.parseSignChallengeResult(null))
         assertNull(Utils.parseQueryResult(null))
+        assertNull(Utils.parseShareResult(null))
     }
 
     @Test
     fun `an intent with no extras yields null`() {
         assertNull(Utils.parseSignChallengeResult(Intent()))
         assertNull(Utils.parseQueryResult(Intent()))
+        assertNull(Utils.parseShareResult(Intent()))
     }
 
     /**
@@ -278,6 +280,14 @@ class ResultParsingTest {
             3,
             queryIntent.reads,
         )
+
+        val shareIntent = UnreadableIntent()
+        assertNull(Utils.parseShareResult(shareIntent))
+        assertEquals(
+            "every share extra must be attempted and survive, not just the first",
+            3,
+            shareIntent.reads,
+        )
     }
 
     /**
@@ -307,6 +317,17 @@ class ResultParsingTest {
         assertTrue(
             "the query parser must ignore the sign-challenge fields key",
             queryResult.fields.isEmpty(),
+        )
+
+        val shareResult = Utils.parseShareResult(
+            resultIntent(
+                Utils.EXTRA_QUERY_RESULT_FIELDS to fieldsJson,
+                Utils.EXTRA_SHARE_REQUEST_CODE to "req-7",
+            ),
+        )!!
+        assertTrue(
+            "the share parser must ignore the query-result fields key",
+            shareResult.fields.isEmpty(),
         )
     }
 
@@ -491,5 +512,131 @@ class ResultParsingTest {
         )
 
         assertNull("none of the query extras are present", result)
+    }
+
+    // ── Share results ────────────────────────────────────────────────────
+    //
+    // The acknowledgement half of the share flow. The extras below are the ones the vault's
+    // ShareResultBuilder writes — EXTRA_PUBLIC_KEY, EXTRA_FIELDS_JSON via encodeFields, and
+    // a conditional EXTRA_SHARE_REQUEST_CODE — so these tests pin the client half of a wire
+    // surface that previously existed only as the vault's convention.
+
+    @Test
+    fun `a full share result is decoded`() {
+        val result = Utils.parseShareResult(
+            resultIntent(
+                Utils.EXTRA_PUBLIC_KEY to "PUBLIC-KEY-BASE64",
+                Utils.EXTRA_FIELDS_JSON to fieldsJson,
+                Utils.EXTRA_SHARE_REQUEST_CODE to "req-5",
+            ),
+        )
+
+        assertNotNull(result)
+        assertEquals("PUBLIC-KEY-BASE64", result!!.publicKey)
+        assertEquals("req-5", result.requestCode)
+        assertEquals(2, result.fields.size)
+        assertEquals("ada@example.com", result.fields["email"]?.value)
+        assertEquals(FieldType.EMAIL, result.fields["email"]?.type)
+        assertEquals("36", result.fields["age"]?.value)
+        assertEquals(FieldType.INTEGER, result.fields["age"]?.type)
+    }
+
+    /**
+     * The request-code extra is conditional on the vault side: it is echoed only when the
+     * share was created with the overload that carried one. An untagged share's result must
+     * still come back whole.
+     */
+    @Test
+    fun `a share result without a request code still comes back`() {
+        val result = Utils.parseShareResult(
+            resultIntent(
+                Utils.EXTRA_PUBLIC_KEY to "PUBLIC-KEY-BASE64",
+                Utils.EXTRA_FIELDS_JSON to fieldsJson,
+            ),
+        )
+
+        assertNotNull(result)
+        assertNull(result!!.requestCode)
+        assertEquals("PUBLIC-KEY-BASE64", result.publicKey)
+        assertEquals(2, result.fields.size)
+    }
+
+    /**
+     * Mirrors the sign-challenge rule for the same reason: the public key still stands on
+     * its own, and discarding the whole acknowledgement because the field echo was garbled
+     * would tell the client its share failed when it succeeded.
+     */
+    @Test
+    fun `a malformed share fields payload yields an empty map rather than null`() {
+        val result = Utils.parseShareResult(
+            resultIntent(
+                Utils.EXTRA_PUBLIC_KEY to "PUBLIC-KEY-BASE64",
+                Utils.EXTRA_FIELDS_JSON to "{not json at all",
+                Utils.EXTRA_SHARE_REQUEST_CODE to "req-5",
+            ),
+        )
+
+        assertNotNull("the public key and correlation token are still usable", result)
+        assertTrue(result!!.fields.isEmpty())
+        assertEquals("PUBLIC-KEY-BASE64", result.publicKey)
+        assertEquals("req-5", result.requestCode)
+    }
+
+    @Test
+    fun `blank share extras read as absent`() {
+        val result = Utils.parseShareResult(
+            resultIntent(
+                Utils.EXTRA_PUBLIC_KEY to "   ",
+                Utils.EXTRA_FIELDS_JSON to fieldsJson,
+                Utils.EXTRA_SHARE_REQUEST_CODE to "",
+            ),
+        )
+
+        assertNotNull(result)
+        assertNull(result!!.publicKey)
+        assertNull(result.requestCode)
+        assertEquals(2, result.fields.size)
+
+        assertNull(
+            "an envelope of nothing but blanks is not an answer",
+            Utils.parseShareResult(
+                resultIntent(
+                    Utils.EXTRA_PUBLIC_KEY to "",
+                    Utils.EXTRA_FIELDS_JSON to "  ",
+                    Utils.EXTRA_SHARE_REQUEST_CODE to "",
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `a share result ignores extras belonging to other flows`() {
+        val result = Utils.parseShareResult(
+            resultIntent(
+                Utils.EXTRA_ENTRY_JSON to """{"id":"x","publicKey":"k","fields":{}}""",
+                Utils.EXTRA_SIGNATURE to "c2ln",
+                Utils.EXTRA_QUERY_RESULT_FIELDS to fieldsJson,
+            ),
+        )
+
+        assertNull("none of the share extras are present", result)
+    }
+
+    @Test
+    fun `hostile share field entries are repaired rather than handed on`() {
+        val result = Utils.parseShareResult(
+            resultIntent(
+                Utils.EXTRA_PUBLIC_KEY to "PUBLIC-KEY-BASE64",
+                Utils.EXTRA_FIELDS_JSON to """{"a":{"value":"x"},"b":null,"c":{"type":"Email"}}""",
+            ),
+        )!!
+
+        assertNull("a null entry is dropped", result.fields["b"])
+        result.fields.forEach { (key, field) ->
+            assertNotNull("$key value", field.value)
+            assertNotNull("$key type", field.type)
+        }
+        assertEquals(FieldType.STRING, result.fields["a"]?.type)
+        assertEquals("", result.fields["c"]?.value)
     }
 }

@@ -53,8 +53,8 @@ object Utils {
      * Create an intent that pushes [entry] into the vault app identified by [targetPackage].
      *
      * Launch with `startActivityForResult` / `ActivityResultContracts.StartActivityForResult`
-     * when you need a result (e.g. the vault's confirmation). For fire-and-forget use
-     * [shareEntry] instead.
+     * when you need a result (e.g. the vault's confirmation), and decode that result with
+     * [parseShareResult]. For fire-and-forget use [shareEntry] instead.
      *
      * No validation happens here: an [Entry] with a blank `id` or `publicKey` is encoded
      * verbatim, and [decodeEntry] on the far side will reject it. Populate both before
@@ -372,6 +372,39 @@ object Utils {
         return QueryResult(
             fields = decodeFields(fieldsJson),
             publicKey = publicKey,
+            requestCode = requestCode,
+        )
+    }
+
+    /**
+     * Decode the result intent delivered in response to [createShareIntent] +
+     * `startActivityForResult` — the acknowledgement that the vault stored the pushed entry.
+     *
+     * The vault answers with the public key it stored the profile under
+     * ([EXTRA_PUBLIC_KEY]), the stored fields ([EXTRA_FIELDS_JSON], the same key the
+     * sign-challenge result uses for its disclosure), and — only when the share was created
+     * with the [createShareIntent] overload carrying a request code — the echoed
+     * [EXTRA_SHARE_REQUEST_CODE].
+     *
+     * The semantics mirror [parseQueryResult]: `null` only when [intent] is missing or none
+     * of the three extras is present — an intent with nothing in it is an empty envelope,
+     * not an answer. Blank extras read as absent, and a malformed fields payload is not
+     * fatal: the public key still stands on its own, so the result comes back with an empty
+     * field map rather than disappearing.
+     *
+     * [EXTRA_QUERY_RESULT_FIELDS] is deliberately not read here. The two field payloads sit
+     * under different keys at different points in the protocol, and the flows' keys are not
+     * interchangeable — the same separation [parseQueryResult] pins from its side.
+     */
+    fun parseShareResult(intent: Intent?): ShareResult? {
+        if (intent == null) return null
+        val publicKey = intent.presentStringExtra(EXTRA_PUBLIC_KEY)
+        val fieldsJson = intent.presentStringExtra(EXTRA_FIELDS_JSON)
+        val requestCode = intent.presentStringExtra(EXTRA_SHARE_REQUEST_CODE)
+        if (publicKey == null && fieldsJson == null && requestCode == null) return null
+        return ShareResult(
+            publicKey = publicKey,
+            fields = decodeFields(fieldsJson),
             requestCode = requestCode,
         )
     }
