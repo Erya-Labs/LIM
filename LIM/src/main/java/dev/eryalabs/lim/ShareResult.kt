@@ -18,9 +18,16 @@ package dev.eryalabs.lim
  * @property requestCode The correlation token echoed back by the vault, or `null` when absent
  *                       or blank — the vault only echoes one when the share was created with
  *                       the [Utils.createShareIntent] overload that carries one.
+ * @property vaultProtocolVersion The protocol version the vault echoed under
+ *                       [Utils.EXTRA_PROTOCOL_VERSION], or `null` when it echoed nothing
+ *                       usable — a legacy vault, or a peer that sent a blank, non-numeric or
+ *                       non-positive value. `null` means "the vault did not say", never
+ *                       "version 1 confirmed": only a non-null value proves the vault speaks
+ *                       a versioned protocol and saw yours.
  */
 data class ShareResult(
     val publicKey: String?,
     val fields: Map<String, TypedField>,
     val requestCode: String?,
+    val vaultProtocolVersion: Int? = null,
 )
