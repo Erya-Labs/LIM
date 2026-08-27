@@ -182,6 +182,30 @@ object Utils {
 
     // ── Nonces ───────────────────────────────────────────────────────────
 
+    /**
+     * Optional declaration, attached to a sign-challenge request via
+     * [createSignChallengeIntent]'s `nonceFormat` parameter, naming the layout of the nonce
+     * the request carries. Absent means undeclared — the legacy shape, and what every
+     * hand-rolled nonce stays.
+     *
+     * This exists for the *vault's* benefit: a vault cannot enforce nonce freshness across
+     * the board, because rejecting stale-looking nonces would break every client whose
+     * hand-rolled nonce carries no timestamp at all — it cannot tell which kind it holds.
+     * A client that declares its format is volunteering exactly the fact the vault is
+     * missing. Whether a vault then enforces anything for declaring clients is its own
+     * policy decision; this key only makes the declaration expressible.
+     */
+    const val EXTRA_NONCE_FORMAT = "extra_nonce_format"
+
+    /**
+     * The one format this library can declare: [generateNonce]'s layout, an 8-byte
+     * big-endian millisecond timestamp followed by 32 random bytes. Declare it only for a
+     * nonce that genuinely has that shape — [generateNonce]'s output, not a hand-rolled
+     * one — or a peer reading the header with [nonceTimestamp] will extract random bytes
+     * as a time.
+     */
+    const val NONCE_FORMAT_TIMESTAMPED = "lim-ts1"
+
     /** Big-endian millisecond timestamp prefixed to every nonce from [generateNonce]. */
     private const val NONCE_TIMESTAMP_BYTES = 8
 
@@ -244,17 +268,38 @@ object Utils {
         maxAgeMillis: Long,
         now: Long = System.currentTimeMillis(),
     ): Boolean {
-        if (nonce.size < NONCE_SIZE) return false
-        var timestamp = 0L
-        for (i in 0 until NONCE_TIMESTAMP_BYTES) {
-            timestamp = (timestamp shl 8) or (nonce[i].toLong() and 0xFF)
-        }
+        val timestamp = nonceTimestamp(nonce) ?: return false
         if (timestamp > now) return false
         val age = now - timestamp
         // A hostile timestamp far enough below `now` overflows the subtraction and wraps
         // negative; that must read as "not fresh", not as a small age.
         if (age < 0) return false
         return age <= maxAgeMillis
+    }
+
+    /**
+     * Read the big-endian millisecond timestamp out of a [generateNonce]-layout nonce, or
+     * `null` for anything shorter than the full 40-byte layout — the same rule
+     * [isNonceFresh] applies (they share this extraction, so they cannot disagree).
+     * Trailing bytes beyond the layout are ignored. A nonce reaches a peer from another
+     * app, so this is hostile input and never throws.
+     *
+     * This is the raw header for a *peer* to apply its own policy to; it deliberately
+     * decides nothing. [isNonceFresh] assumes the checker issued the nonce — it allows no
+     * clock skew, because your own clock cannot legitimately postdate your own nonce — and
+     * that assumption is exactly what a peer on a different device's clock does not get to
+     * make. Such a peer needs the timestamp itself, plus its own skew grace and its own
+     * freshness window. Only trust the value when the sender declared
+     * [NONCE_FORMAT_TIMESTAMPED] under [EXTRA_NONCE_FORMAT]: any 40 bytes have a first
+     * eight, and an undeclared nonce's header is just random bytes read as a time.
+     */
+    fun nonceTimestamp(nonce: ByteArray): Long? {
+        if (nonce.size < NONCE_SIZE) return null
+        var timestamp = 0L
+        for (i in 0 until NONCE_TIMESTAMP_BYTES) {
+            timestamp = (timestamp shl 8) or (nonce[i].toLong() and 0xFF)
+        }
+        return timestamp
     }
 
     // ── Proof-of-possession ──────────────────────────────────────────────
@@ -273,6 +318,14 @@ object Utils {
      *                    timestamp [isNonceFresh] needs to reject a replayed challenge.
      * @param requestCode Correlation token echoed back in the result intent.
      * @param targetPackage Package name of the vault app; defaults to [DEFAULT_ENDEAVOR_PACKAGE].
+     * @param nonceFormat Optional declaration of [nonce]'s layout, attached under
+     *                    [EXTRA_NONCE_FORMAT]. Pass [NONCE_FORMAT_TIMESTAMPED] when — and only
+     *                    when — [nonce] came from [generateNonce], so a vault that understands
+     *                    the declaration can read the embedded timestamp and apply its own
+     *                    freshness policy. The default `null` attaches nothing and leaves the
+     *                    intent identical to what this function built before the parameter
+     *                    existed: a nonce whose shape you have not declared makes no claim a
+     *                    vault could act on.
      */
     fun createSignChallengeIntent(
         context: Context,
@@ -280,12 +333,14 @@ object Utils {
         nonce: ByteArray,
         requestCode: String,
         targetPackage: String = DEFAULT_ENDEAVOR_PACKAGE,
+        nonceFormat: String? = null,
     ): Intent = Intent(signChallengeAction(targetPackage)).apply {
         setPackage(targetPackage)
         putExtra(EXTRA_PUBLIC_KEY, publicKey)
         putExtra(EXTRA_NONCE, Base64.encodeToString(nonce, Base64.NO_WRAP))
         putExtra(EXTRA_SHARE_REQUEST_CODE, requestCode)
         putExtra(EXTRA_PROTOCOL_VERSION, PROTOCOL_VERSION.toString())
+        if (nonceFormat != null) putExtra(EXTRA_NONCE_FORMAT, nonceFormat)
     }
 
     // ── Signature verification ────────────────────────────────────────────

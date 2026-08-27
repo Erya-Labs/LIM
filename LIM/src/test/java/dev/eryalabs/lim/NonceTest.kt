@@ -2,6 +2,7 @@ package dev.eryalabs.lim
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.security.SecureRandom
@@ -217,6 +218,81 @@ class NonceTest {
             "Long.MAX_VALUE against a far-negative clock",
             Utils.isNonceFresh(maxLong, 60_000, now = Long.MIN_VALUE),
         )
+    }
+
+    // ── The raw header, for a peer's own policy ──────────────────────────
+
+    @Test
+    fun `nonceTimestamp round-trips the pinned clock of a generated nonce`() {
+        assertEquals(clock, Utils.nonceTimestamp(Utils.generateNonce(seededRandom(1), clock)))
+        assertEquals(0L, Utils.nonceTimestamp(Utils.generateNonce(seededRandom(1), 0L)))
+        assertEquals(
+            "every byte above 0x7F — a sign-extending reader goes wrong here",
+            0x00FF_FFFF_FFFF_FFFFL,
+            Utils.nonceTimestamp(Utils.generateNonce(seededRandom(1), 0x00FF_FFFF_FFFF_FFFFL)),
+        )
+    }
+
+    /**
+     * The literal-byte anchor. The round trips above go through [Utils.generateNonce], so a
+     * self-consistent endianness flip in *both* the writer and the reader would pass every
+     * one of them; these bytes were laid out by hand, so only a big-endian reader gets the
+     * right answer.
+     */
+    @Test
+    fun `nonceTimestamp reads the header as big-endian bytes`() {
+        val nonce = byteArrayOf(0, 0, 0, 0, 0, 0, 1, 2) + ByteArray(32) { 0 }
+        assertEquals(258L, Utils.nonceTimestamp(nonce))
+    }
+
+    @Test
+    fun `nonceTimestamp ignores trailing bytes beyond the layout`() {
+        val padded = Utils.generateNonce(seededRandom(1), clock) + ByteArray(16) { 9 }
+        assertEquals(clock, Utils.nonceTimestamp(padded))
+    }
+
+    /**
+     * The same length rule [Utils.isNonceFresh] applies: anything shorter than the full
+     * 40-byte layout — not merely shorter than the 8-byte header — carries no timestamp
+     * worth reporting. A 39-byte nonce has a first eight bytes, and returning them would
+     * hand a peer a "timestamp" from a nonce that cannot be genuine.
+     */
+    @Test
+    fun `nonceTimestamp returns null for anything shorter than the layout, rather than throwing`() {
+        val nonce = Utils.generateNonce(seededRandom(1), clock)
+        assertNull("empty", Utils.nonceTimestamp(ByteArray(0)))
+        assertNull("header only", Utils.nonceTimestamp(nonce.copyOfRange(0, timestampBytes)))
+        assertNull("one byte short", Utils.nonceTimestamp(nonce.copyOfRange(0, nonceSize - 1)))
+    }
+
+    /**
+     * The two functions must agree, because a peer that extracts the timestamp and applies
+     * a zero-skew policy is re-deriving what [Utils.isNonceFresh] decides: fresh iff the
+     * extracted timestamp lands inside the window. Checked across the boundary, the future,
+     * and the too-short shape — where `null` and `false` must coincide.
+     */
+    @Test
+    fun `nonceTimestamp agrees with isNonceFresh on shared inputs`() {
+        val maxAge = 30_000L
+        val nonce = Utils.generateNonce(seededRandom(1), clock)
+        val inputs = listOf(
+            nonce to clock,                     // just issued
+            nonce to clock + maxAge,            // exactly at the boundary
+            nonce to clock + maxAge + 1,        // one past it
+            nonce to clock - 1,                 // stamped in the checker's future
+            nonce.copyOfRange(0, 39) to clock,  // too short to carry the layout
+        )
+
+        inputs.forEach { (bytes, now) ->
+            val timestamp = Utils.nonceTimestamp(bytes)
+            val fresh = Utils.isNonceFresh(bytes, maxAge, now)
+            val inWindow = timestamp != null && timestamp <= now && now - timestamp <= maxAge
+            assertEquals(
+                "at now=$now the two must tell one story: timestamp=$timestamp, fresh=$fresh",
+                inWindow,
+                fresh,
+            )
+        }
     }
 
     // ── Defaults ─────────────────────────────────────────────────────────
