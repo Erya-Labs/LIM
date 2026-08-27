@@ -132,6 +132,7 @@ class PublicApiAuditTest {
         "Utils.verifySignature" to "SignatureVerificationTest: a genuine signature over the nonce verifies",
         "Utils.parseSignChallengeResult" to "ResultParsingTest: a full sign-challenge result is decoded",
         "Utils.parseQueryResult" to "ResultParsingTest: a full query result is decoded",
+        "Utils.parseShareResult" to "ResultParsingTest: a full share result is decoded",
         "Utils.matchesRequestCode" to "RequestCodeTest: an echoed request code matches the one that was sent",
         "Utils.validateEntry" to "EntryValidationTest: a well-formed entry reports no problems",
         "Utils.encodeFields" to "FieldsCodecTest: round trip preserves every key, value and type",
@@ -209,6 +210,18 @@ class PublicApiAuditTest {
         "QueryResult.equals" to "PublicApiAuditTest: query results carrying the same values are equal",
         "QueryResult.hashCode" to "PublicApiAuditTest: query results carrying the same values are equal",
         "QueryResult.toString" to "ToStringRedactionTest: query result toString does not print disclosed field values",
+
+        // ── ShareResult ──────────────────────────────────────────────────
+        "ShareResult.getPublicKey" to "ResultParsingTest: a full share result is decoded",
+        "ShareResult.getFields" to "ResultParsingTest: a full share result is decoded",
+        "ShareResult.getRequestCode" to "ResultParsingTest: a full share result is decoded",
+        "ShareResult.component1" to "PublicApiAuditTest: a share result destructures into its three properties",
+        "ShareResult.component2" to "PublicApiAuditTest: a share result destructures into its three properties",
+        "ShareResult.component3" to "PublicApiAuditTest: a share result destructures into its three properties",
+        "ShareResult.copy" to "PublicApiAuditTest: share results carrying the same values are equal",
+        "ShareResult.equals" to "PublicApiAuditTest: share results carrying the same values are equal",
+        "ShareResult.hashCode" to "PublicApiAuditTest: share results carrying the same values are equal",
+        "ShareResult.toString" to "ToStringRedactionTest: share result toString does not print stored field values",
 
         // ── SignChallengeResult ──────────────────────────────────────────
         "SignChallengeResult.getSignature" to "ResultParsingTest: a full sign-challenge result is decoded",
@@ -397,7 +410,7 @@ class PublicApiAuditTest {
         assertTrue(
             "class discovery must find every published type; got $discovered",
             discovered.containsAll(
-                setOf("Utils", "FieldType", "Entry", "Entry\$Companion", "TypedField", "QueryResult", "SignChallengeResult"),
+                setOf("Utils", "FieldType", "Entry", "Entry\$Companion", "TypedField", "QueryResult", "ShareResult", "SignChallengeResult"),
             ),
         )
         // Not an oversight, and worth one assertion because it surprises people: `internal` is a
@@ -434,6 +447,33 @@ class PublicApiAuditTest {
         assertEquals("v", fields["a"]?.value)
         assertEquals("pk", publicKey)
         assertEquals("req-1", requestCode)
+    }
+
+    @Test
+    fun `a share result destructures into its three properties`() {
+        val (publicKey, fields, requestCode) =
+            ShareResult("pk", mapOf("a" to TypedField("v")), "req-1")
+        assertEquals("pk", publicKey)
+        assertEquals("v", fields["a"]?.value)
+        assertEquals("req-1", requestCode)
+    }
+
+    /**
+     * Same claim as its query sibling: only ordinary values here, so the generated `equals`
+     * is correct as generated — but that is a claim until it is a test.
+     */
+    @Test
+    fun `share results carrying the same values are equal`() {
+        val fields = mapOf("email" to TypedField("ada@example.com", FieldType.EMAIL))
+        val a = ShareResult("pk", fields, "req-1")
+        val b = ShareResult("pk", fields, "req-1")
+
+        assertEquals(a, b)
+        assertEquals(a.hashCode(), b.hashCode())
+        assertNotEquals(a, a.copy(requestCode = "req-2"))
+        assertNotEquals(a, a.copy(publicKey = null))
+        assertNotEquals(a, a.copy(fields = emptyMap()))
+        assertEquals("copy must carry the values it was not asked to change", "pk", a.copy(requestCode = "z").publicKey)
     }
 
     @Test
@@ -664,6 +704,16 @@ class PublicApiAuditTest {
             "RedactionKt.PUBLIC_KEY_PREVIEW_CHARS: int",
             "RedactionKt.previewedPublicKey(String): String",
             "RedactionKt.redactedValue(String): String",
+            "ShareResult.component1(): String",
+            "ShareResult.component2(): Map<String, TypedField>",
+            "ShareResult.component3(): String",
+            "ShareResult.copy(String, Map<String, TypedField>, String): ShareResult",
+            "ShareResult.equals(Object): boolean",
+            "ShareResult.getFields(): Map<String, TypedField>",
+            "ShareResult.getPublicKey(): String",
+            "ShareResult.getRequestCode(): String",
+            "ShareResult.hashCode(): int",
+            "ShareResult.toString(): String",
             "SignChallengeResult.component1(): byte[]",
             "SignChallengeResult.component2(): String",
             "SignChallengeResult.component3(): Map<String, TypedField>",
@@ -713,6 +763,7 @@ class PublicApiAuditTest {
             "Utils.isNonceFresh(byte[], long, long): boolean",
             "Utils.matchesRequestCode(Intent, String): boolean",
             "Utils.parseQueryResult(Intent): QueryResult",
+            "Utils.parseShareResult(Intent): ShareResult",
             "Utils.parseSignChallengeResult(Intent): SignChallengeResult",
             "Utils.shareDataAction(String): String",
             "Utils.shareEntry(Context, Entry, String): boolean",

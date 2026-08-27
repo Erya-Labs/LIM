@@ -442,7 +442,8 @@ class DecoderFuzzTest {
      * hostile JSON reaches it *through* a result intent, and the parsers are what unwrap it.
      * They decode the same payloads across the same IPC boundary, and T8's text named only the
      * three decoders, so nothing had ever pushed a mutated payload through them. This closes
-     * that: every extra either parser reads gets the fuzzed text in turn.
+     * that: every extra each parser reads gets the fuzzed text in turn — the share-result
+     * parser included, from the task that added it.
      *
      * `matchesRequestCode` and `isNonceFresh` ride along here for the same reason — both take
      * data another app chose, and neither had ever seen an input nobody thought of. What their
@@ -463,6 +464,7 @@ class DecoderFuzzTest {
         val genuineSignature = Base64.encodeToString(signature, Base64.DEFAULT)
         var signResults = 0
         var queryResults = 0
+        var shareResults = 0
         var nonEmptyParsedFields = 0
         var charsRead = 0
 
@@ -542,6 +544,31 @@ class DecoderFuzzTest {
                 bail("parseQueryResult returned null for an intent carrying three non-blank extras")
             }
 
+            // The share acknowledgement, through the same three positions its own flow defines.
+            val share = try {
+                Utils.parseShareResult(
+                    intentOf(
+                        Utils.EXTRA_PUBLIC_KEY to case.text,
+                        Utils.EXTRA_FIELDS_JSON to case.text,
+                        Utils.EXTRA_SHARE_REQUEST_CODE to case.text,
+                    ),
+                )
+            } catch (t: Throwable) {
+                bail("parseShareResult threw ${t.javaClass.name}: ${t.message}", t)
+            }
+            if (share != null) {
+                shareResults++
+                charsRead += checkFields(share.fields) { bail(it) }
+                if (share.fields.isNotEmpty()) nonEmptyParsedFields++
+                try {
+                    share.toString()
+                } catch (t: Throwable) {
+                    bail("ShareResult.toString() threw ${t.javaClass.name}: ${t.message}", t)
+                }
+            } else if (case.text.isNotBlank()) {
+                bail("parseShareResult returned null for an intent carrying three non-blank extras")
+            }
+
             // Correlation. The fuzzed code is a token the *sender* chose, so it may only ever
             // match a caller who supplied that exact string — and never the caller who supplied
             // one of their own.
@@ -596,6 +623,10 @@ class DecoderFuzzTest {
         assertTrue(
             "the corpus must produce some query results; got $queryResults of $CASES",
             queryResults > 2000,
+        )
+        assertTrue(
+            "the corpus must produce some share results; got $shareResults of $CASES",
+            shareResults > 2000,
         )
         assertTrue(
             "the safety checks must have dereferenced real characters; got $charsRead",

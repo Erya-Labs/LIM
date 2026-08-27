@@ -277,6 +277,17 @@ class ToStringRedactionTest {
         assertTrue("the field keys should still be named: $rendered", rendered.contains("email"))
     }
 
+    @Test
+    fun `share result toString does not print stored field values`() {
+        val rendered = ShareResult(
+            publicKey = "MIIBIjANBgkq",
+            fields = personal,
+            requestCode = "req-1",
+        ).toString()
+        assertFalse("ShareResult leaked a field value: $rendered", rendered.contains(SENTINEL))
+        assertTrue("the field keys should still be named: $rendered", rendered.contains("email"))
+    }
+
     // ── Hostile input: a rendering must never be the thing that throws ───
 
     /**
