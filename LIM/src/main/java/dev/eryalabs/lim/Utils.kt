@@ -389,29 +389,34 @@ object Utils {
     }
 
     /**
-     * Read the protocol version the vault echoed under [EXTRA_PROTOCOL_VERSION].
+     * Read the protocol version the peer declared under [EXTRA_PROTOCOL_VERSION] — the
+     * version a vault echoed into a result, or the version a client attached to a request.
      *
      * `null` for everything that is not an unambiguous declaration: an absent or blank
      * extra, one of the wrong type, a value that is not a decimal integer, one that does
      * not fit in an [Int], and zero or below. The extra arrives from another app, so none
-     * of that may throw — and none of it may *default*, either: `null` means "the vault
-     * did not say", and a vault that did not say must never be presented as a modern one.
+     * of that may throw — and none of it may *default*, either: `null` means "the peer
+     * did not say", and a peer that did not say must never be presented as a modern one.
      *
-     * A version on its own is not an answer. Each parser's empty-envelope rule is checked
-     * over its flow's own extras before this is read, so an intent carrying nothing but a
-     * version still parses to `null`.
+     * A version on its own is not an answer. Each parser's empty-envelope or
+     * required-extra rule is checked over its flow's own extras before this is read, so an
+     * intent carrying nothing but a version still parses to `null`.
      */
-    private fun Intent.vaultProtocolVersion(): Int? =
+    private fun Intent.declaredProtocolVersion(): Int? =
         presentStringExtra(EXTRA_PROTOCOL_VERSION)?.toIntOrNull()?.takeIf { it > 0 }
 
-    /** Base64-decode a signature, yielding `null` for anything that cannot be one. */
-    private fun decodeSignature(encoded: String?): ByteArray? {
+    /**
+     * Base64-decode a signature or nonce, yielding `null` for anything that cannot be one.
+     *
+     * DEFAULT, not NO_WRAP: signatures arrive DEFAULT-encoded (wrapped at 76 characters)
+     * and nonces NO_WRAP-encoded, and DEFAULT decodes both. Android's Base64 skips
+     * characters outside the alphabet rather than rejecting them, so junk can decode to
+     * zero bytes without throwing: reject that too — an empty signature can never verify,
+     * and an empty nonce is a challenge over nothing.
+     */
+    private fun nonEmptyBase64(encoded: String?): ByteArray? {
         if (encoded == null) return null
         return try {
-            // DEFAULT, not NO_WRAP: the vault encodes with DEFAULT, which wraps at 76
-            // characters, and a strict decoder would reject every real signature.
-            // Android's Base64 skips characters outside the alphabet rather than rejecting
-            // them, so junk can decode to zero bytes without throwing: reject that too.
             Base64.decode(encoded, Base64.DEFAULT).takeIf { it.isNotEmpty() }
         } catch (_: Exception) {
             null
@@ -433,13 +438,13 @@ object Utils {
      */
     fun parseSignChallengeResult(intent: Intent?): SignChallengeResult? {
         if (intent == null) return null
-        val signature = decodeSignature(intent.presentStringExtra(EXTRA_SIGNATURE)) ?: return null
+        val signature = nonEmptyBase64(intent.presentStringExtra(EXTRA_SIGNATURE)) ?: return null
         return SignChallengeResult(
             signature = signature,
             algorithm = intent.presentStringExtra(EXTRA_ALGORITHM),
             fields = decodeFields(intent.presentStringExtra(EXTRA_FIELDS_JSON)),
             requestCode = intent.presentStringExtra(EXTRA_SHARE_REQUEST_CODE),
-            vaultProtocolVersion = intent.vaultProtocolVersion(),
+            vaultProtocolVersion = intent.declaredProtocolVersion(),
         )
     }
 
@@ -467,7 +472,7 @@ object Utils {
             fields = decodeFields(fieldsJson),
             publicKey = publicKey,
             requestCode = requestCode,
-            vaultProtocolVersion = intent.vaultProtocolVersion(),
+            vaultProtocolVersion = intent.declaredProtocolVersion(),
         )
     }
 
@@ -501,7 +506,87 @@ object Utils {
             publicKey = publicKey,
             fields = decodeFields(fieldsJson),
             requestCode = requestCode,
-            vaultProtocolVersion = intent.vaultProtocolVersion(),
+            vaultProtocolVersion = intent.declaredProtocolVersion(),
+        )
+    }
+
+    // ── Request parsing (the vault's side) ───────────────────────────────
+    //
+    // The builders above pin what a request looks like leaving a client; these pin what one
+    // means arriving at a vault. Until now the request half of the wire format existed in
+    // this library only as the builders' output — every vault hand-read the extras back out,
+    // so the two ends could drift apart with nothing to fail. A request intent is the most
+    // hostile input a vault handles: any app can fire one at it, so every parser here fails
+    // closed and never throws.
+
+    /**
+     * Decode a share request intent — the vault's half of [createShareIntent].
+     *
+     * Returns `null` when [intent] is missing, carries no entry payload under
+     * [EXTRA_ENTRY_JSON], or carries one that [decodeEntry] refuses — a request whose entry
+     * is malformed or has a blank identity is not a share the vault could store, so it is
+     * refused whole rather than handed on half-parsed. A blank payload reads as absent, like
+     * every extra in this protocol.
+     *
+     * The share action doubles as the query action; the payload is what tells them apart.
+     * An intent carrying an entry payload is a share even if a public key rides alongside —
+     * the mirror of [parseQueryRequest]'s rule, so no intent parses as both.
+     */
+    fun parseShareRequest(intent: Intent?): ShareRequest? {
+        if (intent == null) return null
+        val entry = decodeEntry(intent.presentStringExtra(EXTRA_ENTRY_JSON)) ?: return null
+        return ShareRequest(
+            entry = entry,
+            requestCode = intent.presentStringExtra(EXTRA_SHARE_REQUEST_CODE),
+            protocolVersion = intent.declaredProtocolVersion(),
+        )
+    }
+
+    /**
+     * Decode a query request intent — the vault's half of [createQueryIntent].
+     *
+     * Returns `null` when [intent] is missing, carries a non-blank [EXTRA_ENTRY_JSON]
+     * payload — that intent is a share, and [parseShareRequest] is the parser that accepts
+     * it — or carries no usable public key under [EXTRA_PUBLIC_KEY]. The entry-payload rule
+     * is how the vault routes today, pinned here so both directions agree: no intent parses
+     * as both a share and a query. Blank extras read as absent, so a blank public key is a
+     * refusal, not a request naming nobody.
+     */
+    fun parseQueryRequest(intent: Intent?): QueryRequest? {
+        if (intent == null) return null
+        if (intent.presentStringExtra(EXTRA_ENTRY_JSON) != null) return null
+        val publicKey = intent.presentStringExtra(EXTRA_PUBLIC_KEY) ?: return null
+        return QueryRequest(
+            publicKey = publicKey,
+            requestCode = intent.presentStringExtra(EXTRA_SHARE_REQUEST_CODE),
+            protocolVersion = intent.declaredProtocolVersion(),
+        )
+    }
+
+    /**
+     * Decode a sign-challenge request intent — the vault's half of
+     * [createSignChallengeIntent], including the Base64 nonce decoding every vault
+     * previously did by hand.
+     *
+     * Returns `null` when [intent] is missing, carries no usable public key under
+     * [EXTRA_PUBLIC_KEY], or carries a nonce under [EXTRA_NONCE] that is absent, blank, not
+     * decodable Base64, or decodes to no bytes — Android's decoder *skips* characters
+     * outside the alphabet rather than rejecting them, so junk can decode to zero bytes
+     * without throwing, and a challenge over zero bytes is not a challenge. A parsed
+     * request is a claim, not an entitlement: whether to sign is the vault's consent
+     * decision, and [SignChallengeRequest.nonceFormat] is only what the client *declared*
+     * about its nonce, not something any parser verified.
+     */
+    fun parseSignChallengeRequest(intent: Intent?): SignChallengeRequest? {
+        if (intent == null) return null
+        val publicKey = intent.presentStringExtra(EXTRA_PUBLIC_KEY) ?: return null
+        val nonce = nonEmptyBase64(intent.presentStringExtra(EXTRA_NONCE)) ?: return null
+        return SignChallengeRequest(
+            publicKey = publicKey,
+            nonce = nonce,
+            requestCode = intent.presentStringExtra(EXTRA_SHARE_REQUEST_CODE),
+            nonceFormat = intent.presentStringExtra(EXTRA_NONCE_FORMAT),
+            protocolVersion = intent.declaredProtocolVersion(),
         )
     }
 
@@ -650,7 +735,7 @@ object Utils {
         if (compact.isEmpty() || compact.length % 4 == 1) return null
         if (!BASE64_PATTERN.matches(compact)) return null
         return try {
-            // No empty-result guard, unlike `decodeSignature`: there it is load-bearing
+            // No empty-result guard, unlike `nonEmptyBase64`: there it is load-bearing
             // because junk reaches the decoder, whereas the alphabet check above means every
             // character here carries bits, so a non-empty input yields at least one byte.
             Base64.decode(compact, Base64.DEFAULT)
