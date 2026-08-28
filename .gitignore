@@ -3,6 +3,7 @@
 build/
 
 .claude
+loop
 
 # Local configuration file (sdk path, etc)
 local.properties
