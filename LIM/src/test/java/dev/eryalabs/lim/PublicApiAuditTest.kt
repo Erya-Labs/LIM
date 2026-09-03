@@ -135,6 +135,10 @@ class PublicApiAuditTest {
         "Utils.NONCE_FORMAT_TIMESTAMPED" to "NonceFormatTest: the nonce-format constants match the wire literals",
         "Utils.createSignChallengeIntent" to "IntentBuilderTest: sign challenge intent carries key, nonce and request code",
         "Utils.verifySignature" to "SignatureVerificationTest: a genuine signature over the nonce verifies",
+        "Utils.STATEMENT_DOMAIN_V1" to "StatementPreImageTest: the domain prefix and the kind tag match the wire literals",
+        "Utils.STATEMENT_ROTATE_V1" to "StatementPreImageTest: the domain prefix and the kind tag match the wire literals",
+        "Utils.rotationStatementBytes" to "StatementPreImageTest: the pre-image of a fixed statement is frozen",
+        "Utils.isStatementPreImage" to "StatementPreImageTest: a pre-image arriving as a sign-challenge nonce is recognised",
         "Utils.parseSignChallengeResult" to "ResultParsingTest: a full sign-challenge result is decoded",
         "Utils.parseQueryResult" to "ResultParsingTest: a full query result is decoded",
         "Utils.parseShareResult" to "ResultParsingTest: a full share result is decoded",
@@ -276,6 +280,26 @@ class PublicApiAuditTest {
         "SignChallengeRequest.equals" to "RequestParsingTest: sign-challenge requests carrying the same nonce bytes are equal",
         "SignChallengeRequest.hashCode" to "RequestParsingTest: sign-challenge requests carrying the same nonce bytes are equal",
         "SignChallengeRequest.toString" to "RequestParsingTest: no request toString prints a field value",
+
+        // ── RotationStatement ────────────────────────────────────────────
+        //
+        // Not a wire type: it is never decoded from an intent, so there is no `Unsafe` hazard
+        // here and no parser to fail closed. What matters about it is that its five components
+        // all reach the signature, which is one test apiece rather than one line here.
+        "RotationStatement.getOldPublicKey" to "StatementPreImageTest: the pre-image reads back component for component",
+        "RotationStatement.getNewPublicKey" to "StatementPreImageTest: the pre-image reads back component for component",
+        "RotationStatement.getStatementId" to "StatementPreImageTest: the pre-image reads back component for component",
+        "RotationStatement.getIssuedAtMillis" to "StatementPreImageTest: the pre-image reads back component for component",
+        "RotationStatement.getExpiresAtMillis" to "StatementPreImageTest: the pre-image reads back component for component",
+        "RotationStatement.component1" to "PublicApiAuditTest: a rotation statement destructures into its five properties",
+        "RotationStatement.component2" to "PublicApiAuditTest: a rotation statement destructures into its five properties",
+        "RotationStatement.component3" to "PublicApiAuditTest: a rotation statement destructures into its five properties",
+        "RotationStatement.component4" to "PublicApiAuditTest: a rotation statement destructures into its five properties",
+        "RotationStatement.component5" to "PublicApiAuditTest: a rotation statement destructures into its five properties",
+        "RotationStatement.copy" to "StatementPreImageTest: changing the new public key changes the bytes",
+        "RotationStatement.equals" to "PublicApiAuditTest: rotation statements carrying the same values are equal",
+        "RotationStatement.hashCode" to "PublicApiAuditTest: rotation statements carrying the same values are equal",
+        "RotationStatement.toString" to "StatementPreImageTest: toString previews both real keys, truncated and distinct",
 
         // ── SignChallengeResult ──────────────────────────────────────────
         "SignChallengeResult.getSignature" to "ResultParsingTest: a full sign-challenge result is decoded",
@@ -470,6 +494,7 @@ class PublicApiAuditTest {
                     "Utils", "FieldType", "Entry", "Entry\$Companion", "TypedField",
                     "QueryResult", "ShareResult", "SignChallengeResult",
                     "ShareRequest", "QueryRequest", "SignChallengeRequest",
+                    "RotationStatement",
                 ),
             ),
         )
@@ -569,6 +594,43 @@ class PublicApiAuditTest {
         assertNotEquals(a, a.copy(fields = emptyMap()))
         assertNotEquals(a, a.copy(vaultProtocolVersion = 2))
         assertEquals("copy must carry the values it was not asked to change", "pk", a.copy(requestCode = "z").publicKey)
+    }
+
+    @Test
+    fun `a rotation statement destructures into its five properties`() {
+        val (oldKey, newKey, statementId, issuedAt, expiresAt) =
+            RotationStatement("K-OLD", "K-NEW", "rot-1", 10L, 20L)
+        assertEquals("K-OLD", oldKey)
+        assertEquals("K-NEW", newKey)
+        assertEquals("rot-1", statementId)
+        assertEquals(10L, issuedAt)
+        assertEquals(20L, expiresAt)
+    }
+
+    /**
+     * The generated `equals` is correct as generated — five ordinary values, no array — but a
+     * statement is compared for a living reason: a service deduplicating rotations it has been
+     * shown, or matching one against a record it kept, depends on it. The `copy` assertions are
+     * what `StatementPreImageTest`'s one-component-changed controls build on, so they are pinned
+     * here rather than assumed there.
+     */
+    @Test
+    fun `rotation statements carrying the same values are equal`() {
+        val a = RotationStatement("K-OLD", "K-NEW", "rot-1", 10L, 20L)
+        val b = RotationStatement("K-OLD", "K-NEW", "rot-1", 10L, 20L)
+
+        assertEquals(a, b)
+        assertEquals(a.hashCode(), b.hashCode())
+        assertNotEquals(a, a.copy(oldPublicKey = "K-OTHER"))
+        assertNotEquals(a, a.copy(newPublicKey = "K-OTHER"))
+        assertNotEquals(a, a.copy(statementId = "rot-2"))
+        assertNotEquals(a, a.copy(issuedAtMillis = 11L))
+        assertNotEquals(a, a.copy(expiresAtMillis = 21L))
+        assertEquals(
+            "copy must carry the values it was not asked to change",
+            "K-NEW",
+            a.copy(statementId = "rot-2").newPublicKey,
+        )
     }
 
     /**
@@ -781,6 +843,20 @@ class PublicApiAuditTest {
             "RedactionKt.PUBLIC_KEY_PREVIEW_CHARS: int",
             "RedactionKt.previewedPublicKey(String): String",
             "RedactionKt.redactedValue(String): String",
+            "RotationStatement.component1(): String",
+            "RotationStatement.component2(): String",
+            "RotationStatement.component3(): String",
+            "RotationStatement.component4(): long",
+            "RotationStatement.component5(): long",
+            "RotationStatement.copy(String, String, String, long, long): RotationStatement",
+            "RotationStatement.equals(Object): boolean",
+            "RotationStatement.getExpiresAtMillis(): long",
+            "RotationStatement.getIssuedAtMillis(): long",
+            "RotationStatement.getNewPublicKey(): String",
+            "RotationStatement.getOldPublicKey(): String",
+            "RotationStatement.getStatementId(): String",
+            "RotationStatement.hashCode(): int",
+            "RotationStatement.toString(): String",
             "ShareRequest.component1(): Entry",
             "ShareRequest.component2(): String",
             "ShareRequest.component3(): Integer",
@@ -859,6 +935,8 @@ class PublicApiAuditTest {
             "Utils.INSTANCE: Utils",
             "Utils.NONCE_FORMAT_TIMESTAMPED: String",
             "Utils.PROTOCOL_VERSION: int",
+            "Utils.STATEMENT_DOMAIN_V1: String",
+            "Utils.STATEMENT_ROTATE_V1: String",
             "Utils.createQueryIntent(Context, String, String, String): Intent",
             // Two overloads, listed separately. A bare-name manifest cannot tell them apart,
             // which is the gap this snapshot exists to cover.
@@ -873,6 +951,7 @@ class PublicApiAuditTest {
             "Utils.encodeFields(Map<String, TypedField>): String",
             "Utils.generateNonce(SecureRandom, long): byte[]",
             "Utils.isNonceFresh(byte[], long, long): boolean",
+            "Utils.isStatementPreImage(byte[]): boolean",
             "Utils.matchesRequestCode(Intent, String): boolean",
             "Utils.nonceTimestamp(byte[]): Long",
             "Utils.parseQueryRequest(Intent): QueryRequest",
@@ -881,6 +960,7 @@ class PublicApiAuditTest {
             "Utils.parseShareResult(Intent): ShareResult",
             "Utils.parseSignChallengeRequest(Intent): SignChallengeRequest",
             "Utils.parseSignChallengeResult(Intent): SignChallengeResult",
+            "Utils.rotationStatementBytes(RotationStatement): byte[]",
             "Utils.shareDataAction(String): String",
             "Utils.shareEntry(Context, Entry, String): boolean",
             "Utils.signChallengeAction(String): String",

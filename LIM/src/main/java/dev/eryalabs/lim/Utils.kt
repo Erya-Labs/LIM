@@ -6,6 +6,7 @@ import android.content.Intent
 import android.util.Base64
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import java.io.ByteArrayOutputStream
 import java.security.KeyFactory
 import java.security.SecureRandom
 import java.security.Signature
@@ -226,6 +227,14 @@ object Utils {
      * Keep the nonce you sent: verification needs the same bytes back, and [isNonceFresh]
      * reads the timestamp out of them rather than out of any state you have to store.
      *
+     * **A vault must not sign every nonce it is handed.** This flow signs arbitrary
+     * caller-supplied bytes with a profile's key, and those same bytes could be a signed
+     * statement's pre-image — a rotation authorizing an attacker's key, obtained under a consent
+     * dialog that said "prove your identity". Call [isStatementPreImage] on an incoming nonce
+     * and refuse a match; the signing device is the only place that check can be made, because
+     * no verifier can tell the two signatures apart afterwards. A nonce from this function never
+     * matches: a random 40-byte challenge cannot begin with [STATEMENT_DOMAIN_V1].
+     *
      * @param random Source of randomness; injected so tests can pin it. Defaults to a fresh
      *               [SecureRandom] — do not pass a plain `Random`.
      * @param now    Milliseconds since the epoch to stamp into the nonce; injected so tests
@@ -368,6 +377,165 @@ object Utils {
         }
     } catch (_: Exception) {
         false
+    }
+
+    // ── Signed statements: the canonical pre-image ────────────────────────
+    //
+    // A signature is only ever a signature over *bytes*. Everything the migration design rests
+    // on — "K_old authorized K_new" — therefore lives or dies on signer and verifier agreeing
+    // on those bytes exactly, so the encoding below is defined here once and both sides use it
+    // rather than each building "the obvious" concatenation.
+    //
+    // Two properties, and they are the whole design:
+    //
+    // 1. **Injective.** Every component is length-prefixed, so no value can spill into the slot
+    //    after it: a `statementId` ending exactly where the next component begins produces
+    //    different bytes, not the same ones. Two different statements sharing a pre-image would
+    //    mean a signature over one is a signature over the other.
+    // 2. **Domain-separated.** A fixed prefix marks these bytes as a statement, so a signing
+    //    device can refuse to sign them as a challenge — see [isStatementPreImage].
+    //
+    // Deliberately not built out of Gson, `String.format` or any date formatting. A pre-image
+    // whose bytes depend on a JSON library's escaping choices, or on the default `Locale`'s
+    // digits, is one that changes under you; timestamps travel as raw milliseconds precisely so
+    // that no calendar, timezone or locale ever enters a signature.
+
+    /**
+     * The fixed prefix every signed statement's pre-image begins with, whatever its kind.
+     *
+     * This is the barrier between "prove you hold this key" and "authorize replacing this key":
+     * the sign-challenge flow signs arbitrary caller-supplied bytes with the same key a
+     * statement is verified against, so without a marker a rotation pre-image can be sent as a
+     * login challenge. [isStatementPreImage] is the predicate; a vault calling it before signing
+     * is the mechanism.
+     */
+    const val STATEMENT_DOMAIN_V1 = "lim.statement.v1"
+
+    /** Kind tag naming a [RotationStatement] inside the pre-image, after the domain prefix. */
+    const val STATEMENT_ROTATE_V1 = "lim.rotate.v1"
+
+    /**
+     * Width of the big-endian length that precedes every text component. Four bytes rather than
+     * a varint: the encoding has to be reproducible by a peer implementation from a one-line
+     * description, and "four-byte big-endian length, then UTF-8 bytes" is that description.
+     */
+    private const val COMPONENT_LENGTH_BYTES = 4
+
+    /** Width of a raw millisecond timestamp component, big-endian and two's complement. */
+    private const val STATEMENT_TIMESTAMP_BYTES = 8
+
+    /** The domain prefix as the bytes it actually occupies, computed once. */
+    private val STATEMENT_DOMAIN_BYTES = STATEMENT_DOMAIN_V1.toByteArray(Charsets.UTF_8)
+
+    /** Big-endian, most significant byte first, exactly [width] bytes. */
+    private fun ByteArrayOutputStream.writeBigEndian(value: Long, width: Int) {
+        for (i in 0 until width) {
+            val shift = 8 * (width - 1 - i)
+            write(((value ushr shift) and 0xFF).toInt())
+        }
+    }
+
+    /**
+     * A length-prefixed UTF-8 component: four bytes of big-endian *byte* length — not character
+     * count, so a multi-byte value still delimits correctly — followed by the bytes themselves.
+     *
+     * The prefix is what makes the layout injective, and it is also what makes the pre-image
+     * readable back rather than merely comparable, which is what carrying one inside a transport
+     * envelope depends on.
+     */
+    private fun ByteArrayOutputStream.writeTextComponent(text: String) {
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        writeBigEndian(bytes.size.toLong(), COMPONENT_LENGTH_BYTES)
+        write(bytes, 0, bytes.size)
+    }
+
+    /**
+     * A timestamp component: eight raw big-endian bytes and no length prefix, because a
+     * fixed-width field is already self-delimiting — its width *is* its prefix. Negative values
+     * encode as two's complement and round-trip like any other.
+     */
+    private fun ByteArrayOutputStream.writeTimestampComponent(millis: Long) {
+        writeBigEndian(millis, STATEMENT_TIMESTAMP_BYTES)
+    }
+
+    /**
+     * Open a pre-image: the domain prefix, then the kind tag as a length-prefixed component.
+     *
+     * The prefix is written raw rather than length-prefixed so that [isStatementPreImage] can be
+     * a plain byte-prefix comparison; it is a constant shared by every statement, so leaving it
+     * unprefixed costs nothing in injectivity. The kind tag is prefixed like any other component
+     * — it is what separates "authorized to replace this key today" from other kinds of
+     * authorization, so it must be inside the signed bytes and unambiguously delimited.
+     */
+    private fun openStatement(kindTag: String): ByteArrayOutputStream {
+        val out = ByteArrayOutputStream()
+        out.write(STATEMENT_DOMAIN_BYTES, 0, STATEMENT_DOMAIN_BYTES.size)
+        out.writeTextComponent(kindTag)
+        return out
+    }
+
+    /**
+     * The exact bytes a [RotationStatement] is signed over, and the exact bytes a verifier must
+     * reconstruct. Signer and verifier disagreeing by one byte would make the whole mechanism
+     * theatre, so there is one encoder and both sides call it.
+     *
+     * Layout, in order: the [STATEMENT_DOMAIN_V1] prefix; [STATEMENT_ROTATE_V1]; then
+     * `oldPublicKey`, `newPublicKey` and `statementId` as length-prefixed UTF-8; then
+     * `issuedAtMillis` and `expiresAtMillis` as eight big-endian bytes each. Every component is
+     * present, so none can be silently absent from what gets signed — a pre-image that omitted
+     * `newPublicKey` would let any key at all be swapped in under a genuine signature.
+     *
+     * Deterministic: the same statement yields the same bytes on every call, on every machine,
+     * under every default [java.util.Locale].
+     *
+     * **Sign these bytes; do not sign a rendering of them.** And on the other side of the same
+     * coin, a device asked to sign bytes it did not construct must check them with
+     * [isStatementPreImage] first.
+     *
+     * One known equivalence, recorded rather than left to be discovered: components are encoded
+     * as UTF-8, and no `String` can encode an unpaired surrogate, so a component containing one
+     * encodes to the same bytes as one containing `?` in that position. Two such statements are
+     * therefore the same statement to a signature. Every component this protocol actually
+     * carries is Base64 or an opaque printable id, none of which contains a surrogate at all,
+     * and the alternative — refusing to encode, or throwing — would be worse in a function that
+     * a verifier calls on input it did not choose.
+     */
+    fun rotationStatementBytes(statement: RotationStatement): ByteArray {
+        val out = openStatement(STATEMENT_ROTATE_V1)
+        out.writeTextComponent(statement.oldPublicKey)
+        out.writeTextComponent(statement.newPublicKey)
+        out.writeTextComponent(statement.statementId)
+        out.writeTimestampComponent(statement.issuedAtMillis)
+        out.writeTimestampComponent(statement.expiresAtMillis)
+        return out.toByteArray()
+    }
+
+    /**
+     * Report whether [bytes] are a signed-statement pre-image — that is, whether they begin with
+     * [STATEMENT_DOMAIN_V1].
+     *
+     * **A vault must call this on every nonce before signing, and refuse a match.** That
+     * obligation is the entire reason the domain prefix exists, and the signing device is the
+     * only place it can be honoured: a verifier cannot distinguish a signature the user
+     * authorized as a rotation from one the user was tricked into producing as a login
+     * challenge, because in both cases the same key signed the same bytes. See
+     * [generateNonce] for the same warning from the challenge side, and [RotationStatement] for
+     * the shape of the attack.
+     *
+     * Total and never throws: `null` is `false`, so is an empty array, so is anything shorter
+     * than the prefix. A nonce arrives from another app, which is exactly why this must be safe
+     * to call on it unconditionally.
+     *
+     * A `true` says these bytes are *framed* as a statement, and nothing more — not that they
+     * parse, not that they are well-formed, and certainly not that anyone signed them. It is a
+     * refusal predicate, not a validator.
+     */
+    fun isStatementPreImage(bytes: ByteArray?): Boolean {
+        if (bytes == null || bytes.size < STATEMENT_DOMAIN_BYTES.size) return false
+        for (i in STATEMENT_DOMAIN_BYTES.indices) {
+            if (bytes[i] != STATEMENT_DOMAIN_BYTES[i]) return false
+        }
+        return true
     }
 
     // ── Result parsing ────────────────────────────────────────────────────
