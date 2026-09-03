@@ -860,6 +860,85 @@ class DecoderFuzzTest {
     }
 
     /**
+     * The same corpus, into the rotation verifier.
+     *
+     * A rotation statement reaches a service across a relay somebody else controls, so both the
+     * signature and the key the service compares it against can be anything at all by the time
+     * they arrive. The corpus goes into each of those positions in turn: nothing may throw, and —
+     * the security property, not merely a crash test — nothing the fuzzer produces may ever come
+     * back [StatementVerdict.VALID], because a `VALID` is a service swapping a user's account
+     * onto a new key.
+     *
+     * The arm rides the existing corpus deliberately: nothing here edits the generator, so
+     * [CORPUS_DIGEST] does not move. It is paired with a genuine statement after the loop for the
+     * reason every other arm in this file carries such a pairing — a verifier hardcoded to
+     * `SIGNATURE_INVALID` would satisfy the whole loop above and be no verifier at all.
+     */
+    @Test
+    fun `no mutated payload verifies as a rotation statement`() {
+        val master = Random(MASTER_SEED)
+        val verdicts = linkedSetOf<StatementVerdict>()
+
+        repeat(CASES) { index ->
+            val seed = master.nextLong()
+            val case = caseFor(seed)
+
+            fun bail(what: String, cause: Throwable? = null): Nothing =
+                throw AssertionError(report(what, index, seed, case), cause)
+
+            // The fuzzed text as the signature accompanying a genuine, in-window statement.
+            val asSignature = try {
+                Utils.verifyRotationStatement(
+                    rotation,
+                    case.text.toByteArray(),
+                    publicKeyBase64,
+                    FUZZ_CLOCK,
+                )
+            } catch (t: Throwable) {
+                bail("verifyRotationStatement threw ${t.javaClass.name} on a fuzzed signature", t)
+            }
+            if (asSignature == StatementVerdict.VALID) {
+                bail("a fuzzed payload was ACCEPTED as a signature over a rotation statement")
+            }
+            verdicts += asSignature
+
+            // The fuzzed text as the key the service stores — the account identifier itself.
+            val asStoredKey = try {
+                Utils.verifyRotationStatement(
+                    rotation,
+                    rotationSignature,
+                    case.text,
+                    FUZZ_CLOCK,
+                )
+            } catch (t: Throwable) {
+                bail("verifyRotationStatement threw ${t.javaClass.name} on a fuzzed stored key", t)
+            }
+            if (asStoredKey == StatementVerdict.VALID) {
+                bail("a genuine signature was ACCEPTED against a fuzzed stored public key")
+            }
+            verdicts += asStoredKey
+        }
+
+        // Stronger than "never VALID": nothing the corpus produces may get past the signature
+        // gate at all, so no fuzzed input may ever earn one of the verdicts that describe a
+        // genuine statement. Those verdicts are what an integrator reads as "this was really
+        // signed by your user, but…".
+        assertEquals(
+            "every fuzzed input must fail at the signature, not further down; got $verdicts",
+            setOf(StatementVerdict.SIGNATURE_INVALID),
+            verdicts,
+        )
+
+        // The non-vacuity floor. Without it this arm passes against a verifier hardcoded to
+        // SIGNATURE_INVALID, which refuses every forgery and every genuine rotation alike.
+        assertEquals(
+            "the verifier must accept a genuine statement, else its fuzz arm proves nothing",
+            StatementVerdict.VALID,
+            Utils.verifyRotationStatement(rotation, rotationSignature, publicKeyBase64, FUZZ_CLOCK),
+        )
+    }
+
+    /**
      * The reproducibility claim, pinned rather than described. `java.util.Random` is specified
      * bit-for-bit by the JDK, so this digest is the same on every machine and every run; if an
      * edit to the generator changes it, that is a deliberate act and this constant moves in the
@@ -1154,6 +1233,14 @@ class DecoderFuzzTest {
         private lateinit var publicKeyBase64: String
         private lateinit var signature: ByteArray
 
+        /**
+         * A genuine, in-window rotation statement and its genuine signature — the one input the
+         * rotation arm must *accept*, so that its "no fuzzed payload verifies" claim is a
+         * property of the verifier rather than of a function that refuses everything.
+         */
+        private lateinit var rotation: RotationStatement
+        private lateinit var rotationSignature: ByteArray
+
         /** 2048-bit RSA generation is slow (~100ms); do it once for the whole class. */
         @JvmStatic
         @BeforeClass
@@ -1165,6 +1252,25 @@ class DecoderFuzzTest {
             signature = Signature.getInstance("SHA256withRSA").run {
                 initSign(keyPair.private)
                 update(NONCE)
+                sign()
+            }
+
+            // A second real key, because a rotation onto the stored key is `SAME_KEY` and a
+            // rotation onto anything that is not an RSA key is `NEW_KEY_UNUSABLE` — either would
+            // make the arm's accept-one-genuine floor unreachable for the wrong reason.
+            val replacement = KeyPairGenerator.getInstance("RSA")
+                .apply { initialize(2048) }
+                .generateKeyPair()
+            rotation = RotationStatement(
+                oldPublicKey = publicKeyBase64,
+                newPublicKey = Base64.encodeToString(replacement.public.encoded, Base64.DEFAULT),
+                statementId = "rot-fuzz-0001",
+                issuedAtMillis = FUZZ_CLOCK - 1_000L,
+                expiresAtMillis = FUZZ_CLOCK + 1_000L,
+            )
+            rotationSignature = Signature.getInstance("SHA256withRSA").run {
+                initSign(keyPair.private)
+                update(Utils.rotationStatementBytes(rotation))
                 sign()
             }
         }
