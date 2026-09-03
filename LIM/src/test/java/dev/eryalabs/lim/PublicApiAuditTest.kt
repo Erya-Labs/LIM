@@ -139,6 +139,7 @@ class PublicApiAuditTest {
         "Utils.STATEMENT_ROTATE_V1" to "StatementPreImageTest: the domain prefix and the kind tag match the wire literals",
         "Utils.rotationStatementBytes" to "StatementPreImageTest: the pre-image of a fixed statement is frozen",
         "Utils.isStatementPreImage" to "StatementPreImageTest: a pre-image arriving as a sign-challenge nonce is recognised",
+        "Utils.verifyRotationStatement" to "RotationVerificationTest: a real statement signed by the stored key verifies VALID",
         "Utils.parseSignChallengeResult" to "ResultParsingTest: a full sign-challenge result is decoded",
         "Utils.parseQueryResult" to "ResultParsingTest: a full query result is decoded",
         "Utils.parseShareResult" to "ResultParsingTest: a full share result is decoded",
@@ -300,6 +301,24 @@ class PublicApiAuditTest {
         "RotationStatement.equals" to "PublicApiAuditTest: rotation statements carrying the same values are equal",
         "RotationStatement.hashCode" to "PublicApiAuditTest: rotation statements carrying the same values are equal",
         "RotationStatement.toString" to "StatementPreImageTest: toString previews both real keys, truncated and distinct",
+
+        // ── StatementVerdict ─────────────────────────────────────────────
+        //
+        // An enum's constants are public API in the strongest sense: an integrator writes an
+        // exhaustive `when` over them, so removing one breaks compilation and *adding* one breaks
+        // it too. Each is therefore claimed by the test that proves a verifier can actually
+        // return it — a constant no verifier reaches would be a branch every integrator must
+        // write and no input can ever take.
+        "StatementVerdict.VALID" to "RotationVerificationTest: a real statement signed by the stored key verifies VALID",
+        "StatementVerdict.SIGNATURE_INVALID" to "RotationVerificationTest: a different keypair's signature over the same statement is SIGNATURE_INVALID",
+        "StatementVerdict.WRONG_SUBJECT" to "RotationVerificationTest: a genuine statement naming another profile is WRONG_SUBJECT",
+        "StatementVerdict.SAME_KEY" to "RotationVerificationTest: a rotation onto the key already stored is SAME_KEY",
+        "StatementVerdict.NEW_KEY_UNUSABLE" to "RotationVerificationTest: a blank, non-Base64 or non-key replacement is NEW_KEY_UNUSABLE",
+        "StatementVerdict.EXPIRED" to "RotationVerificationTest: exactly the expiry instant is still valid and one millisecond later is not",
+        "StatementVerdict.NOT_YET_VALID" to "RotationVerificationTest: exactly the issue instant is valid and one millisecond earlier is not",
+        "StatementVerdict.values" to "PublicApiAuditTest: the verdict enum exposes exactly the documented values in order",
+        "StatementVerdict.valueOf" to "PublicApiAuditTest: the verdict enum exposes exactly the documented values in order",
+        "StatementVerdict.getEntries" to "PublicApiAuditTest: the verdict enum exposes exactly the documented values in order",
 
         // ── SignChallengeResult ──────────────────────────────────────────
         "SignChallengeResult.getSignature" to "ResultParsingTest: a full sign-challenge result is decoded",
@@ -494,7 +513,7 @@ class PublicApiAuditTest {
                     "Utils", "FieldType", "Entry", "Entry\$Companion", "TypedField",
                     "QueryResult", "ShareResult", "SignChallengeResult",
                     "ShareRequest", "QueryRequest", "SignChallengeRequest",
-                    "RotationStatement",
+                    "RotationStatement", "StatementVerdict",
                 ),
             ),
         )
@@ -631,6 +650,31 @@ class PublicApiAuditTest {
             "K-NEW",
             a.copy(statementId = "rot-2").newPublicKey,
         )
+    }
+
+    /**
+     * The enum's own generated API, and the one property of it that is not generated: the
+     * declared order.
+     *
+     * `values()`, `valueOf` and `entries` have no home in the verifier's own tests — nothing in
+     * this library calls them — but they ship, and a Java integrator reaches every one. The
+     * ordering matters beyond neatness: an enum's `ordinal` is what anything persisting a verdict
+     * by index writes down, so inserting a value in the middle silently reinterprets stored data.
+     * Listed rather than counted, so a rename shows up as the name it broke.
+     */
+    @Test
+    fun `the verdict enum exposes exactly the documented values in order`() {
+        assertEquals(
+            "adding a value is API a consumer's exhaustive `when` must handle; inserting one " +
+                "anywhere but the end also renumbers every ordinal after it",
+            listOf(
+                "VALID", "SIGNATURE_INVALID", "WRONG_SUBJECT", "SAME_KEY", "NEW_KEY_UNUSABLE",
+                "EXPIRED", "NOT_YET_VALID",
+            ),
+            StatementVerdict.values().map { it.name },
+        )
+        assertEquals(StatementVerdict.SAME_KEY, StatementVerdict.valueOf("SAME_KEY"))
+        assertEquals(StatementVerdict.values().toList(), StatementVerdict.entries)
     }
 
     /**
@@ -908,6 +952,16 @@ class PublicApiAuditTest {
             "SignChallengeResult.hashCode(): int",
             "SignChallengeResult.isVerified(String, byte[]): boolean",
             "SignChallengeResult.toString(): String",
+            "StatementVerdict.EXPIRED: StatementVerdict",
+            "StatementVerdict.NEW_KEY_UNUSABLE: StatementVerdict",
+            "StatementVerdict.NOT_YET_VALID: StatementVerdict",
+            "StatementVerdict.SAME_KEY: StatementVerdict",
+            "StatementVerdict.SIGNATURE_INVALID: StatementVerdict",
+            "StatementVerdict.VALID: StatementVerdict",
+            "StatementVerdict.WRONG_SUBJECT: StatementVerdict",
+            "StatementVerdict.getEntries(): EnumEntries<StatementVerdict>",
+            "StatementVerdict.valueOf(String): StatementVerdict",
+            "StatementVerdict.values(): StatementVerdict[]",
             "TypedField\$Creator.createFromParcel(Parcel): TypedField",
             "TypedField\$Creator.newArray(int): TypedField[]",
             "TypedField.CREATOR: Parcelable\$Creator<TypedField>",
@@ -965,6 +1019,7 @@ class PublicApiAuditTest {
             "Utils.shareEntry(Context, Entry, String): boolean",
             "Utils.signChallengeAction(String): String",
             "Utils.validateEntry(Entry): List<String>",
+            "Utils.verifyRotationStatement(RotationStatement, byte[], String, long): StatementVerdict",
             "Utils.verifySignature(String, byte[], byte[]): boolean",
         )
     }

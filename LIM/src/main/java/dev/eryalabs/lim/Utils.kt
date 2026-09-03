@@ -538,6 +538,127 @@ object Utils {
         return true
     }
 
+    // ── Signed statements: verification ───────────────────────────────────
+
+    /**
+     * Verify a [RotationStatement] against the public key a service already stores for the
+     * profile — the integrator-facing half of device migration.
+     *
+     * **The public key is the account identifier.** That is the rule the whole design rests on
+     * and this is the function where a service acts on it: migration means telling every service
+     * that stored `K_old` to store `K_new` instead, and the only thing that can say so credibly
+     * is a signature by the key the service already holds. A service that keys accounts on a
+     * disclosed field such as an email address instead cannot rotate safely — a new key would
+     * arrive with nothing to bind it to, and the service has already lost the property this
+     * protocol exists for, since that field is now the identifier a breach leaks.
+     *
+     * **What a [StatementVerdict.VALID] does not say.** It says the holder of [storedPublicKey]
+     * signed *these bytes* inside the window the statement declares. It cannot say whether they
+     * signed them knowingly as a rotation or were tricked into signing them as a login
+     * challenge: the sign-challenge flow signs arbitrary caller-supplied bytes with this very
+     * key, and no verifier can tell the two signatures apart afterwards — the bytes are the
+     * bytes. That separation is enforced at the signing device, where [isStatementPreImage] lets
+     * a vault refuse a nonce that is really a statement. A verifier implying otherwise is
+     * overselling what it checked. Consent for the rotation itself is the vault's to obtain.
+     *
+     * The check order is part of the contract, because which refusal an integrator is shown
+     * decides what they tell the user:
+     *
+     * 1. **The signature**, over [rotationStatementBytes] of [statement], against
+     *    [storedPublicKey]. Anything a forger or a tamperer produces stops here as
+     *    [StatementVerdict.SIGNATURE_INVALID] and never reaches a verdict that would describe
+     *    it as an ordinary, merely-stale statement.
+     * 2. **The subject**: [StatementVerdict.WRONG_SUBJECT] unless `statement.oldPublicKey`
+     *    equals [storedPublicKey] by exact string equality — no trimming, no normalising. The
+     *    protocol looks a profile up by the key *string*, so two spellings of one key are two
+     *    different accounts, and a genuine statement for another profile must not be applied
+     *    here.
+     * 3. **[StatementVerdict.SAME_KEY]**, when the replacement is the key already stored.
+     * 4. **[StatementVerdict.NEW_KEY_UNUSABLE]**, when `newPublicKey` is blank, is not standard
+     *    Base64, or does not parse as an RSA public key — the same parse [validateEntry]
+     *    performs, checked before the swap rather than trusted because it was signed.
+     * 5. **The window**, valid when `issuedAtMillis <= now <= expiresAtMillis`. Both ends are
+     *    inclusive, the boundary rule [isNonceFresh] already set. A statement whose window is
+     *    nonsensical (`expiresAtMillis < issuedAtMillis`) can never be valid, whatever `now` is;
+     *    where both window checks would fire at once, [StatementVerdict.NOT_YET_VALID] is the
+     *    answer, because such a statement never became valid rather than having gone stale.
+     *
+     * **The limit of check 4, recorded rather than quietly closed.** It rejects a key it cannot
+     * parse; it cannot reject a key that parses but is *spelled* differently from how the service
+     * will later look it up. `newPublicKey + "\n"` is accepted, because [Base64.DEFAULT] — what
+     * the vault encodes keys with — wraps at 76 characters, so refusing whitespace here would
+     * refuse every legitimately wrapped key. A service that stores such a spelling holds a key
+     * that authenticates fine and matches no profile, and its next rotation comes back
+     * [StatementVerdict.WRONG_SUBJECT] under check 2. That is the identity-matching hazard this
+     * protocol has throughout — one key, several spellings, one of which the lookup finds — and
+     * narrowing it here would need the vault to agree, so it is a human's decision and not this
+     * function's. **Store the exact string you verified**, and encode keys one way.
+     *
+     * This adds no algorithm. It **delegates to [verifySignature]** rather than re-implementing
+     * it, so the security-critical verifier stays byte-identical and there is exactly one place
+     * in this library where a signature is checked; `SHA256withRSA` stays hardcoded there, and
+     * honouring a peer-supplied [EXTRA_ALGORITHM] remains something a human must decide.
+     *
+     * Every *value* this can be handed comes back as a verdict: [signature] and [storedPublicKey]
+     * arrive from wherever the statement was relayed from, and empty, garbage and blank inputs
+     * are all answers rather than exceptions. The parameters are declared non-null, though, so a
+     * Java caller passing `null` — `intent.getByteArrayExtra(...)` on an absent extra is the way
+     * that happens — gets a [NullPointerException] from Kotlin's parameter check, exactly as
+     * [verifySignature] does. Null-check the extra; do not rely on a verdict for it.
+     *
+     * @param statement       The statement to check. Its five components are exactly what gets
+     *                        signed, so every one of them is covered by the signature check.
+     * @param signature       The raw signature bytes accompanying the statement.
+     * @param storedPublicKey The Base64 RSA public key this service holds for the profile — the
+     *                        account identifier, and the key the signature must be by.
+     * @param now             Milliseconds since the epoch to measure the window against;
+     *                        injected so tests can pin the clock.
+     * @return One of [StatementVerdict.VALID], [StatementVerdict.SIGNATURE_INVALID],
+     *         [StatementVerdict.WRONG_SUBJECT], [StatementVerdict.SAME_KEY],
+     *         [StatementVerdict.NEW_KEY_UNUSABLE], [StatementVerdict.EXPIRED] or
+     *         [StatementVerdict.NOT_YET_VALID]. Act only on [StatementVerdict.VALID].
+     */
+    fun verifyRotationStatement(
+        statement: RotationStatement,
+        signature: ByteArray,
+        storedPublicKey: String,
+        now: Long = System.currentTimeMillis(),
+    ): StatementVerdict {
+        if (!verifySignature(storedPublicKey, rotationStatementBytes(statement), signature)) {
+            return StatementVerdict.SIGNATURE_INVALID
+        }
+        if (statement.oldPublicKey != storedPublicKey) return StatementVerdict.WRONG_SUBJECT
+        // Against the stored key rather than against `oldPublicKey`, which the line above has
+        // just established is the same string. Stated this way because the fact that matters is
+        // "the service would be storing what it already stores", not a property of the statement.
+        if (statement.newPublicKey == storedPublicKey) return StatementVerdict.SAME_KEY
+        if (!isUsablePublicKey(statement.newPublicKey)) return StatementVerdict.NEW_KEY_UNUSABLE
+        if (now < statement.issuedAtMillis) return StatementVerdict.NOT_YET_VALID
+        if (now > statement.expiresAtMillis) return StatementVerdict.EXPIRED
+        return StatementVerdict.VALID
+    }
+
+    /**
+     * Whether [publicKey] is a key a service could actually store and later verify against:
+     * non-blank, standard Base64, and parsing as an X.509 RSA public key.
+     *
+     * The same two helpers [validateEntry] uses, composed rather than duplicated — but combined
+     * into one predicate here on purpose. [validateEntry] must keep the three failures apart
+     * because it reports them to a developer; a verifier only has to decide whether to let the
+     * swap happen, and a service told *why* the replacement key is unusable can do nothing
+     * different about it.
+     */
+    private fun isUsablePublicKey(publicKey: String): Boolean {
+        // Redundant on paper, and kept for the reason `matchesRequestCode`'s blank guard is:
+        // `base64Bytes` strips whitespace and then refuses an empty remainder, so removing this
+        // line changes no answer *today*. It rests on the behaviour of a different function,
+        // though, and "a blank key is not a key" is too load-bearing to leave resting there —
+        // storing one would lock the user out permanently.
+        if (publicKey.isBlank()) return false
+        val keyBytes = base64Bytes(publicKey) ?: return false
+        return parsesAsRsaPublicKey(keyBytes)
+    }
+
     // ── Result parsing ────────────────────────────────────────────────────
 
     /**
