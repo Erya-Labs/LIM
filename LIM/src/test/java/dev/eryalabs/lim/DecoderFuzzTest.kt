@@ -783,6 +783,83 @@ class DecoderFuzzTest {
     }
 
     /**
+     * The same corpus, into the signing-oracle guard.
+     *
+     * [Utils.isStatementPreImage] is what a vault calls on a nonce another app chose, so it sees
+     * whatever that app sends — and it is a *refusal* predicate, which makes a false positive
+     * the expensive direction: every one of these refuses a signature the client legitimately
+     * asked for. None of the corpus is a statement pre-image, so none of it may be reported as
+     * one, and none of it may throw.
+     *
+     * The arm rides the existing corpus deliberately: nothing here edits the generator, so
+     * [CORPUS_DIGEST] does not move. Paired with the genuine pre-image after the loop, without
+     * which this passes unchanged against a predicate hardcoded to `false`.
+     */
+    @Test
+    fun `no mutated payload is mistaken for a statement pre-image`() {
+        val master = Random(MASTER_SEED)
+        var decodedToBytes = 0
+
+        repeat(CASES) { index ->
+            val seed = master.nextLong()
+            val case = caseFor(seed)
+
+            fun bail(what: String, cause: Throwable? = null): Nothing =
+                throw AssertionError(report(what, index, seed, case), cause)
+
+            val claimed = try {
+                Utils.isStatementPreImage(case.text.toByteArray())
+            } catch (t: Throwable) {
+                bail("isStatementPreImage threw ${t.javaClass.name}: ${t.message}", t)
+            }
+            if (claimed) bail("isStatementPreImage reported a fuzzed payload as a statement")
+
+            // Also through Base64, the shape a nonce actually arrives in: a vault reads the
+            // decoded bytes, not the text, and the decoder skips characters outside its alphabet
+            // rather than rejecting them — so the bytes it yields are not the ones sent.
+            val decoded = try {
+                Base64.decode(case.text, Base64.DEFAULT)
+            } catch (_: Exception) {
+                ByteArray(0)
+            }
+            if (decoded.size >= Utils.STATEMENT_DOMAIN_V1.length) decodedToBytes++
+            val claimedDecoded = try {
+                Utils.isStatementPreImage(decoded)
+            } catch (t: Throwable) {
+                bail("isStatementPreImage threw ${t.javaClass.name} on decoded bytes", t)
+            }
+            if (claimedDecoded) bail("isStatementPreImage reported decoded fuzz as a statement")
+        }
+
+        // The floor for the Base64 half specifically. A failed decode lands on `ByteArray(0)`,
+        // which the predicate refuses for the same reason it refuses everything else here — so
+        // without this count, a platform decoder that threw on all 3000 payloads would leave that
+        // half asserting nothing while still passing. Counted at the prefix length rather than at
+        // one byte, because anything shorter short-circuits on `isStatementPreImage`'s length
+        // guard and never reaches the byte comparison: a floor of "decoded to something" would be
+        // the same vacuity one level down. The threshold matches the sign-request arm's, and the
+        // same decode gates `EXTRA_NONCE` there, so it holds with margin on this pinned corpus.
+        assertTrue(
+            "the corpus must decode to bytes long enough to reach the prefix comparison, else " +
+                "the Base64 half of this arm only ever exercises the length guard; got " +
+                "$decodedToBytes of $CASES",
+            decodedToBytes > 500,
+        )
+
+        // The non-vacuity floor every other arm in this file carries: a predicate that always
+        // says no would satisfy the whole loop above.
+        assertTrue(
+            "isStatementPreImage must recognise a genuine pre-image, else its fuzz arm passes " +
+                "against a constant false",
+            Utils.isStatementPreImage(
+                Utils.rotationStatementBytes(
+                    RotationStatement("K-OLD", "K-NEW", "rot-0001", 1L, 2L),
+                ),
+            ),
+        )
+    }
+
+    /**
      * The reproducibility claim, pinned rather than described. `java.util.Random` is specified
      * bit-for-bit by the JDK, so this digest is the same on every machine and every run; if an
      * edit to the generator changes it, that is a deliberate act and this constant moves in the
