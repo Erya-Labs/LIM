@@ -138,8 +138,14 @@ class PublicApiAuditTest {
         "Utils.STATEMENT_DOMAIN_V1" to "StatementPreImageTest: the domain prefix and the kind tag match the wire literals",
         "Utils.STATEMENT_ROTATE_V1" to "StatementPreImageTest: the domain prefix and the kind tag match the wire literals",
         "Utils.rotationStatementBytes" to "StatementPreImageTest: the pre-image of a fixed statement is frozen",
+        "Utils.STATEMENT_RECOVER_V1" to "RecoveryPreImageTest: the recovery and revocation kind tags match the wire literals",
+        "Utils.STATEMENT_REVOKE_V1" to "RecoveryPreImageTest: the recovery and revocation kind tags match the wire literals",
+        "Utils.recoveryAuthorizationBytes" to "RecoveryPreImageTest: the pre-image of a fixed recovery authorization is frozen",
+        "Utils.revocationBytes" to "RecoveryPreImageTest: the pre-image of a fixed revocation is frozen",
         "Utils.isStatementPreImage" to "StatementPreImageTest: a pre-image arriving as a sign-challenge nonce is recognised",
         "Utils.verifyRotationStatement" to "RotationVerificationTest: a real statement signed by the stored key verifies VALID",
+        "Utils.verifyRecoveryAuthorization" to "RecoveryVerificationTest: a real authorization signed by the stored key verifies VALID",
+        "Utils.verifyRevocation" to "RecoveryVerificationTest: a real revocation signed by the stored key verifies VALID",
         "Utils.parseSignChallengeResult" to "ResultParsingTest: a full sign-challenge result is decoded",
         "Utils.parseQueryResult" to "ResultParsingTest: a full query result is decoded",
         "Utils.parseShareResult" to "ResultParsingTest: a full share result is decoded",
@@ -301,6 +307,41 @@ class PublicApiAuditTest {
         "RotationStatement.equals" to "PublicApiAuditTest: rotation statements carrying the same values are equal",
         "RotationStatement.hashCode" to "PublicApiAuditTest: rotation statements carrying the same values are equal",
         "RotationStatement.toString" to "StatementPreImageTest: toString previews both real keys, truncated and distinct",
+
+        // ── RecoveryAuthorization ────────────────────────────────────────
+        //
+        // Like `RotationStatement`, not a wire type: never decoded from an intent, so no `Unsafe`
+        // hazard and no parser to fail closed. What matters is that all five components reach the
+        // signature — one test apiece — and that `sequence` in particular does, since the whole
+        // safety of revocation is an ordering over it.
+        "RecoveryAuthorization.getSubjectPublicKey" to "RecoveryPreImageTest: each pre-image reads back component for component",
+        "RecoveryAuthorization.getRecoveryPublicKey" to "RecoveryPreImageTest: each pre-image reads back component for component",
+        "RecoveryAuthorization.getAuthorizationId" to "RecoveryPreImageTest: each pre-image reads back component for component",
+        "RecoveryAuthorization.getSequence" to "RecoveryPreImageTest: each pre-image reads back component for component",
+        "RecoveryAuthorization.getIssuedAtMillis" to "RecoveryPreImageTest: each pre-image reads back component for component",
+        "RecoveryAuthorization.component1" to "PublicApiAuditTest: a recovery authorization destructures into its five properties",
+        "RecoveryAuthorization.component2" to "PublicApiAuditTest: a recovery authorization destructures into its five properties",
+        "RecoveryAuthorization.component3" to "PublicApiAuditTest: a recovery authorization destructures into its five properties",
+        "RecoveryAuthorization.component4" to "PublicApiAuditTest: a recovery authorization destructures into its five properties",
+        "RecoveryAuthorization.component5" to "PublicApiAuditTest: a recovery authorization destructures into its five properties",
+        "RecoveryAuthorization.copy" to "RecoveryPreImageTest: changing the recovery key changes the bytes",
+        "RecoveryAuthorization.equals" to "PublicApiAuditTest: recovery authorizations carrying the same values are equal",
+        "RecoveryAuthorization.hashCode" to "PublicApiAuditTest: recovery authorizations carrying the same values are equal",
+        "RecoveryAuthorization.toString" to "RecoveryPreImageTest: authorization toString previews both real keys, truncated and distinct",
+
+        // ── Revocation ───────────────────────────────────────────────────
+        "Revocation.getSubjectPublicKey" to "RecoveryPreImageTest: each pre-image reads back component for component",
+        "Revocation.getRevokedAuthorizationId" to "RecoveryPreImageTest: each pre-image reads back component for component",
+        "Revocation.getSequence" to "RecoveryPreImageTest: each pre-image reads back component for component",
+        "Revocation.getIssuedAtMillis" to "RecoveryPreImageTest: each pre-image reads back component for component",
+        "Revocation.component1" to "PublicApiAuditTest: a revocation destructures into its four properties",
+        "Revocation.component2" to "PublicApiAuditTest: a revocation destructures into its four properties",
+        "Revocation.component3" to "PublicApiAuditTest: a revocation destructures into its four properties",
+        "Revocation.component4" to "PublicApiAuditTest: a revocation destructures into its four properties",
+        "Revocation.copy" to "RecoveryPreImageTest: changing the revocation sequence changes the bytes",
+        "Revocation.equals" to "PublicApiAuditTest: revocations carrying the same values are equal",
+        "Revocation.hashCode" to "PublicApiAuditTest: revocations carrying the same values are equal",
+        "Revocation.toString" to "RecoveryPreImageTest: revocation toString previews its key and names what it revokes",
 
         // ── StatementVerdict ─────────────────────────────────────────────
         //
@@ -513,7 +554,8 @@ class PublicApiAuditTest {
                     "Utils", "FieldType", "Entry", "Entry\$Companion", "TypedField",
                     "QueryResult", "ShareResult", "SignChallengeResult",
                     "ShareRequest", "QueryRequest", "SignChallengeRequest",
-                    "RotationStatement", "StatementVerdict",
+                    "RotationStatement", "RecoveryAuthorization", "Revocation",
+                    "StatementVerdict",
                 ),
             ),
         )
@@ -649,6 +691,70 @@ class PublicApiAuditTest {
             "copy must carry the values it was not asked to change",
             "K-NEW",
             a.copy(statementId = "rot-2").newPublicKey,
+        )
+    }
+
+    @Test
+    fun `a recovery authorization destructures into its five properties`() {
+        val (subject, recovery, id, sequence, issuedAt) =
+            RecoveryAuthorization("K-SUBJECT", "K-RECOVERY", "rec-1", 7L, 10L)
+        assertEquals("K-SUBJECT", subject)
+        assertEquals("K-RECOVERY", recovery)
+        assertEquals("rec-1", id)
+        assertEquals(7L, sequence)
+        assertEquals(10L, issuedAt)
+    }
+
+    /**
+     * The generated `equals` is correct as generated — five ordinary values, no array — but an
+     * authorization is compared for a living reason: T17's revocation arithmetic decides which
+     * authorizations are still live by matching them against revocations, and a service holding a
+     * set of them de-duplicates by value. The `copy` assertions are what the pre-image's
+     * one-component-changed controls build on, so they are pinned here rather than assumed there.
+     */
+    @Test
+    fun `recovery authorizations carrying the same values are equal`() {
+        val a = RecoveryAuthorization("K-SUBJECT", "K-RECOVERY", "rec-1", 7L, 10L)
+        val b = RecoveryAuthorization("K-SUBJECT", "K-RECOVERY", "rec-1", 7L, 10L)
+
+        assertEquals(a, b)
+        assertEquals(a.hashCode(), b.hashCode())
+        assertNotEquals(a, a.copy(subjectPublicKey = "K-OTHER"))
+        assertNotEquals(a, a.copy(recoveryPublicKey = "K-OTHER"))
+        assertNotEquals(a, a.copy(authorizationId = "rec-2"))
+        assertNotEquals(a, a.copy(sequence = 8L))
+        assertNotEquals(a, a.copy(issuedAtMillis = 11L))
+        assertEquals(
+            "copy must carry the values it was not asked to change",
+            "K-RECOVERY",
+            a.copy(authorizationId = "rec-2").recoveryPublicKey,
+        )
+    }
+
+    @Test
+    fun `a revocation destructures into its four properties`() {
+        val (subject, revoked, sequence, issuedAt) = Revocation("K-SUBJECT", "rec-1", 8L, 10L)
+        assertEquals("K-SUBJECT", subject)
+        assertEquals("rec-1", revoked)
+        assertEquals(8L, sequence)
+        assertEquals(10L, issuedAt)
+    }
+
+    @Test
+    fun `revocations carrying the same values are equal`() {
+        val a = Revocation("K-SUBJECT", "rec-1", 8L, 10L)
+        val b = Revocation("K-SUBJECT", "rec-1", 8L, 10L)
+
+        assertEquals(a, b)
+        assertEquals(a.hashCode(), b.hashCode())
+        assertNotEquals(a, a.copy(subjectPublicKey = "K-OTHER"))
+        assertNotEquals(a, a.copy(revokedAuthorizationId = "rec-2"))
+        assertNotEquals(a, a.copy(sequence = 9L))
+        assertNotEquals(a, a.copy(issuedAtMillis = 11L))
+        assertEquals(
+            "copy must carry the values it was not asked to change",
+            "rec-1",
+            a.copy(sequence = 9L).revokedAuthorizationId,
         )
     }
 
@@ -884,9 +990,35 @@ class PublicApiAuditTest {
             "QueryResult.getVaultProtocolVersion(): Integer",
             "QueryResult.hashCode(): int",
             "QueryResult.toString(): String",
+            "RecoveryAuthorization.component1(): String",
+            "RecoveryAuthorization.component2(): String",
+            "RecoveryAuthorization.component3(): String",
+            "RecoveryAuthorization.component4(): long",
+            "RecoveryAuthorization.component5(): long",
+            "RecoveryAuthorization.copy(String, String, String, long, long): RecoveryAuthorization",
+            "RecoveryAuthorization.equals(Object): boolean",
+            "RecoveryAuthorization.getAuthorizationId(): String",
+            "RecoveryAuthorization.getIssuedAtMillis(): long",
+            "RecoveryAuthorization.getRecoveryPublicKey(): String",
+            "RecoveryAuthorization.getSequence(): long",
+            "RecoveryAuthorization.getSubjectPublicKey(): String",
+            "RecoveryAuthorization.hashCode(): int",
+            "RecoveryAuthorization.toString(): String",
             "RedactionKt.PUBLIC_KEY_PREVIEW_CHARS: int",
             "RedactionKt.previewedPublicKey(String): String",
             "RedactionKt.redactedValue(String): String",
+            "Revocation.component1(): String",
+            "Revocation.component2(): String",
+            "Revocation.component3(): long",
+            "Revocation.component4(): long",
+            "Revocation.copy(String, String, long, long): Revocation",
+            "Revocation.equals(Object): boolean",
+            "Revocation.getIssuedAtMillis(): long",
+            "Revocation.getRevokedAuthorizationId(): String",
+            "Revocation.getSequence(): long",
+            "Revocation.getSubjectPublicKey(): String",
+            "Revocation.hashCode(): int",
+            "Revocation.toString(): String",
             "RotationStatement.component1(): String",
             "RotationStatement.component2(): String",
             "RotationStatement.component3(): String",
@@ -990,6 +1122,8 @@ class PublicApiAuditTest {
             "Utils.NONCE_FORMAT_TIMESTAMPED: String",
             "Utils.PROTOCOL_VERSION: int",
             "Utils.STATEMENT_DOMAIN_V1: String",
+            "Utils.STATEMENT_RECOVER_V1: String",
+            "Utils.STATEMENT_REVOKE_V1: String",
             "Utils.STATEMENT_ROTATE_V1: String",
             "Utils.createQueryIntent(Context, String, String, String): Intent",
             // Two overloads, listed separately. A bare-name manifest cannot tell them apart,
@@ -1014,11 +1148,17 @@ class PublicApiAuditTest {
             "Utils.parseShareResult(Intent): ShareResult",
             "Utils.parseSignChallengeRequest(Intent): SignChallengeRequest",
             "Utils.parseSignChallengeResult(Intent): SignChallengeResult",
+            "Utils.recoveryAuthorizationBytes(RecoveryAuthorization): byte[]",
+            "Utils.revocationBytes(Revocation): byte[]",
             "Utils.rotationStatementBytes(RotationStatement): byte[]",
             "Utils.shareDataAction(String): String",
             "Utils.shareEntry(Context, Entry, String): boolean",
             "Utils.signChallengeAction(String): String",
             "Utils.validateEntry(Entry): List<String>",
+            // Neither takes a clock, and the absence is the design: an authorization declares no
+            // expiry, and a revocation that could go stale would un-revoke a stolen device.
+            "Utils.verifyRecoveryAuthorization(RecoveryAuthorization, byte[], String): StatementVerdict",
+            "Utils.verifyRevocation(Revocation, byte[], String): StatementVerdict",
             "Utils.verifyRotationStatement(RotationStatement, byte[], String, long): StatementVerdict",
             "Utils.verifySignature(String, byte[], byte[]): boolean",
         )

@@ -415,14 +415,28 @@ object Utils {
     const val STATEMENT_ROTATE_V1 = "lim.rotate.v1"
 
     /**
+     * Kind tag naming a [RecoveryAuthorization] inside the pre-image, after the domain prefix.
+     *
+     * The kind tag is not bookkeeping. A rotation and a recovery authorization carry the same
+     * *shapes* of component — two keys, an id, two 64-bit numbers — so without a kind inside the
+     * signed bytes a signature over one would be a signature over the other, and the difference
+     * between them is "authorized to replace this key today" against "authorized to replace it
+     * forever". That is why it is signed rather than carried alongside.
+     */
+    const val STATEMENT_RECOVER_V1 = "lim.recover.v1"
+
+    /** Kind tag naming a [Revocation] inside the pre-image, after the domain prefix. */
+    const val STATEMENT_REVOKE_V1 = "lim.revoke.v1"
+
+    /**
      * Width of the big-endian length that precedes every text component. Four bytes rather than
      * a varint: the encoding has to be reproducible by a peer implementation from a one-line
      * description, and "four-byte big-endian length, then UTF-8 bytes" is that description.
      */
     private const val COMPONENT_LENGTH_BYTES = 4
 
-    /** Width of a raw millisecond timestamp component, big-endian and two's complement. */
-    private const val STATEMENT_TIMESTAMP_BYTES = 8
+    /** Width of a raw 64-bit component — a timestamp or a sequence — big-endian, two's complement. */
+    private const val STATEMENT_LONG_BYTES = 8
 
     /** The domain prefix as the bytes it actually occupies, computed once. */
     private val STATEMENT_DOMAIN_BYTES = STATEMENT_DOMAIN_V1.toByteArray(Charsets.UTF_8)
@@ -450,12 +464,16 @@ object Utils {
     }
 
     /**
-     * A timestamp component: eight raw big-endian bytes and no length prefix, because a
-     * fixed-width field is already self-delimiting — its width *is* its prefix. Negative values
-     * encode as two's complement and round-trip like any other.
+     * A 64-bit component — a timestamp or a sequence number: eight raw big-endian bytes and no
+     * length prefix, because a fixed-width field is already self-delimiting, its width *is* its
+     * prefix. Negative values encode as two's complement and round-trip like any other.
+     *
+     * Raw bytes rather than a rendering, for both uses and for the same reason: a number formatted
+     * through a locale is a number that changes under you, so no calendar, timezone or locale ever
+     * enters a signature.
      */
-    private fun ByteArrayOutputStream.writeTimestampComponent(millis: Long) {
-        writeBigEndian(millis, STATEMENT_TIMESTAMP_BYTES)
+    private fun ByteArrayOutputStream.writeLongComponent(value: Long) {
+        writeBigEndian(value, STATEMENT_LONG_BYTES)
     }
 
     /**
@@ -505,14 +523,68 @@ object Utils {
         out.writeTextComponent(statement.oldPublicKey)
         out.writeTextComponent(statement.newPublicKey)
         out.writeTextComponent(statement.statementId)
-        out.writeTimestampComponent(statement.issuedAtMillis)
-        out.writeTimestampComponent(statement.expiresAtMillis)
+        out.writeLongComponent(statement.issuedAtMillis)
+        out.writeLongComponent(statement.expiresAtMillis)
+        return out.toByteArray()
+    }
+
+    /**
+     * The exact bytes a [RecoveryAuthorization] is signed over, through the same encoder
+     * [rotationStatementBytes] uses and with the same guarantees: one domain prefix, a kind tag,
+     * every component length-prefixed or fixed-width, no JSON and no formatting.
+     *
+     * Layout, in order: the [STATEMENT_DOMAIN_V1] prefix; [STATEMENT_RECOVER_V1]; then
+     * `subjectPublicKey`, `recoveryPublicKey` and `authorizationId` as length-prefixed UTF-8; then
+     * `sequence` and `issuedAtMillis` as eight big-endian bytes each.
+     *
+     * **The kind tag is what separates this from a rotation**, and it is inside the signed bytes
+     * for that reason: the two statements carry the same shapes of component, so a signature over
+     * a rotation must not also be a signature over an authorization that never expires. A
+     * `RotationStatement` and a `RecoveryAuthorization` whose components are pairwise identical
+     * therefore produce different bytes.
+     *
+     * The same UTF-8 surrogate equivalence [rotationStatementBytes] documents applies here, for
+     * the same reason and with the same irrelevance to a protocol whose components are Base64
+     * keys and opaque printable ids.
+     */
+    fun recoveryAuthorizationBytes(authorization: RecoveryAuthorization): ByteArray {
+        val out = openStatement(STATEMENT_RECOVER_V1)
+        out.writeTextComponent(authorization.subjectPublicKey)
+        out.writeTextComponent(authorization.recoveryPublicKey)
+        out.writeTextComponent(authorization.authorizationId)
+        out.writeLongComponent(authorization.sequence)
+        out.writeLongComponent(authorization.issuedAtMillis)
+        return out.toByteArray()
+    }
+
+    /**
+     * The exact bytes a [Revocation] is signed over, through the same encoder as the other two
+     * kinds.
+     *
+     * Layout, in order: the [STATEMENT_DOMAIN_V1] prefix; [STATEMENT_REVOKE_V1]; then
+     * `subjectPublicKey` and `revokedAuthorizationId` as length-prefixed UTF-8; then `sequence`
+     * and `issuedAtMillis` as eight big-endian bytes each.
+     *
+     * Four components rather than five, because a revocation names no second key — it cancels an
+     * authorization by id, and the id is the whole of what it points at. That is also why
+     * [verifyRevocation] can return fewer verdicts than the other two verifiers.
+     */
+    fun revocationBytes(revocation: Revocation): ByteArray {
+        val out = openStatement(STATEMENT_REVOKE_V1)
+        out.writeTextComponent(revocation.subjectPublicKey)
+        out.writeTextComponent(revocation.revokedAuthorizationId)
+        out.writeLongComponent(revocation.sequence)
+        out.writeLongComponent(revocation.issuedAtMillis)
         return out.toByteArray()
     }
 
     /**
      * Report whether [bytes] are a signed-statement pre-image — that is, whether they begin with
      * [STATEMENT_DOMAIN_V1].
+     *
+     * One predicate covers every kind. The prefix comes before the kind tag, so a
+     * [RotationStatement], a [RecoveryAuthorization] and a [Revocation] are all caught by the same
+     * comparison, and a kind added later is caught without a second mechanism.
      *
      * **A vault must call this on every nonce before signing, and refuse a match.** That
      * obligation is the entire reason the domain prefix exists, and the signing device is the
@@ -635,6 +707,123 @@ object Utils {
         if (!isUsablePublicKey(statement.newPublicKey)) return StatementVerdict.NEW_KEY_UNUSABLE
         if (now < statement.issuedAtMillis) return StatementVerdict.NOT_YET_VALID
         if (now > statement.expiresAtMillis) return StatementVerdict.EXPIRED
+        return StatementVerdict.VALID
+    }
+
+    /**
+     * Verify a [RecoveryAuthorization] against the public key a service already stores for the
+     * profile — the standing credential half of the recovery design.
+     *
+     * Mirrors [verifyRotationStatement] exactly, including the ordering, and for the same reasons:
+     *
+     * 1. **The signature**, over [recoveryAuthorizationBytes] of [authorization], against
+     *    [storedPublicKey]. A forged or tampered authorization stops here as
+     *    [StatementVerdict.SIGNATURE_INVALID] and never earns a verdict that describes it as
+     *    genuine-but-inapplicable.
+     * 2. **[StatementVerdict.WRONG_SUBJECT]** unless `authorization.subjectPublicKey` equals
+     *    [storedPublicKey] by exact string equality — no trimming, no normalising, because the
+     *    protocol looks a profile up by the key *string*.
+     * 3. **[StatementVerdict.SAME_KEY]**, when the recovery key is the key already stored: a
+     *    device authorizing itself is not a recovery plan, and honouring it would record a
+     *    standing credential that adds nothing and can still be stolen.
+     * 4. **[StatementVerdict.NEW_KEY_UNUSABLE]**, when `recoveryPublicKey` is blank, is not
+     *    standard Base64, or does not parse as an RSA public key. A blessed device that cannot
+     *    sign anything is a recovery plan that will fail at the only moment it is needed.
+     *
+     * **No window is checked, and there is none to check.** A [RecoveryAuthorization] declares no
+     * expiry on purpose — one that expired before the emergency would be worthless, since the
+     * emergency is precisely when nothing can refresh it. So this verifier can never return
+     * [StatementVerdict.EXPIRED] or [StatementVerdict.NOT_YET_VALID], and an integrator's
+     * exhaustive `when` needs no branch that can occur. The consequence to accept explicitly:
+     * a [StatementVerdict.VALID] here is valid *forever* unless a [Revocation] arrives, so
+     * distributing revocations is load-bearing rather than housekeeping.
+     *
+     * **A [StatementVerdict.VALID] is not "this device may act now".** It says the holder of
+     * [storedPublicKey] signed this authorization. Whether it is still live is a separate
+     * question, answered by the revocations the service has been shown, and this function looks
+     * at none of them. It also cannot say whether the user signed knowingly: the sign-challenge
+     * flow signs arbitrary caller-supplied bytes with this very key, and the separation is
+     * enforced at the signing device by [isStatementPreImage] — see [verifyRotationStatement] for
+     * the shape of that hazard, which reaches an authorization more sharply than a rotation
+     * because an authorization never goes stale.
+     *
+     * The same delegation and the same limits as [verifyRotationStatement]: one call to
+     * [verifySignature], `SHA256withRSA` and no other algorithm, no new dependency, and a key
+     * spelled with stray whitespace that decodes to the stored key is accepted here as it is
+     * there — **store the exact string you verified**.
+     *
+     * @param authorization   The authorization to check. All five components are inside the
+     *                        signature.
+     * @param signature       The raw signature bytes accompanying it.
+     * @param storedPublicKey The Base64 RSA public key this service holds for the profile.
+     * @return [StatementVerdict.VALID], [StatementVerdict.SIGNATURE_INVALID],
+     *         [StatementVerdict.WRONG_SUBJECT], [StatementVerdict.SAME_KEY] or
+     *         [StatementVerdict.NEW_KEY_UNUSABLE] — never a window verdict.
+     */
+    fun verifyRecoveryAuthorization(
+        authorization: RecoveryAuthorization,
+        signature: ByteArray,
+        storedPublicKey: String,
+    ): StatementVerdict {
+        if (!verifySignature(
+                storedPublicKey,
+                recoveryAuthorizationBytes(authorization),
+                signature,
+            )
+        ) {
+            return StatementVerdict.SIGNATURE_INVALID
+        }
+        if (authorization.subjectPublicKey != storedPublicKey) return StatementVerdict.WRONG_SUBJECT
+        // Against the stored key rather than against `subjectPublicKey`, which the line above has
+        // just established is the same string — the fact that matters is "the device being
+        // blessed is the one already holding the account", not a property of the statement.
+        if (authorization.recoveryPublicKey == storedPublicKey) return StatementVerdict.SAME_KEY
+        if (!isUsablePublicKey(authorization.recoveryPublicKey)) {
+            return StatementVerdict.NEW_KEY_UNUSABLE
+        }
+        return StatementVerdict.VALID
+    }
+
+    /**
+     * Verify a [Revocation] against the public key a service already stores for the profile.
+     *
+     * Two checks and no more, because a revocation names no second key:
+     *
+     * 1. **The signature**, over [revocationBytes] of [revocation], against [storedPublicKey].
+     * 2. **[StatementVerdict.WRONG_SUBJECT]** unless `revocation.subjectPublicKey` equals
+     *    [storedPublicKey] by exact string equality. This is what stops a revocation reaching
+     *    across profiles when an `authorizationId` collides between two of them.
+     *
+     * So the reachable verdicts are exactly [StatementVerdict.VALID],
+     * [StatementVerdict.SIGNATURE_INVALID] and [StatementVerdict.WRONG_SUBJECT].
+     * [StatementVerdict.SAME_KEY] and [StatementVerdict.NEW_KEY_UNUSABLE] have nothing to be
+     * about here, and the window verdicts are impossible by design: **a revocation that could go
+     * stale would un-revoke a stolen device**, which is the worst failure this feature has, so a
+     * revocation declares no window and none is applied.
+     *
+     * **A [StatementVerdict.VALID] does not say what this revocation kills.** It says the holder
+     * of the stored key signed it, and nothing else; which authorizations it cancels is set
+     * arithmetic over the sequence numbers, done by the caller against statements it has already
+     * verified with this function and [verifyRecoveryAuthorization].
+     *
+     * Same delegation to [verifySignature] and the same hostile-input contract as the other two
+     * verifiers: every *value* comes back as a verdict, while a `null` passed from Java to a
+     * non-null parameter is Kotlin's [NullPointerException] as everywhere else.
+     *
+     * @param revocation      The revocation to check. All four components are inside the
+     *                        signature.
+     * @param signature       The raw signature bytes accompanying it.
+     * @param storedPublicKey The Base64 RSA public key this service holds for the profile.
+     */
+    fun verifyRevocation(
+        revocation: Revocation,
+        signature: ByteArray,
+        storedPublicKey: String,
+    ): StatementVerdict {
+        if (!verifySignature(storedPublicKey, revocationBytes(revocation), signature)) {
+            return StatementVerdict.SIGNATURE_INVALID
+        }
+        if (revocation.subjectPublicKey != storedPublicKey) return StatementVerdict.WRONG_SUBJECT
         return StatementVerdict.VALID
     }
 

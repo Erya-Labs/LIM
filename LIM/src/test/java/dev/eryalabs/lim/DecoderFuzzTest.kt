@@ -847,14 +847,31 @@ class DecoderFuzzTest {
         )
 
         // The non-vacuity floor every other arm in this file carries: a predicate that always
-        // says no would satisfy the whole loop above.
+        // says no would satisfy the whole loop above. All three kinds, because one predicate is
+        // meant to cover all three — a prefix check that had drifted behind a kind tag would
+        // still pass on the rotation alone.
         assertTrue(
-            "isStatementPreImage must recognise a genuine pre-image, else its fuzz arm passes " +
-                "against a constant false",
+            "isStatementPreImage must recognise a genuine rotation pre-image, else its fuzz arm " +
+                "passes against a constant false",
             Utils.isStatementPreImage(
                 Utils.rotationStatementBytes(
                     RotationStatement("K-OLD", "K-NEW", "rot-0001", 1L, 2L),
                 ),
+            ),
+        )
+        assertTrue(
+            "and a recovery authorization's — the kind it matters most for, since one obtained " +
+                "by trickery never expires",
+            Utils.isStatementPreImage(
+                Utils.recoveryAuthorizationBytes(
+                    RecoveryAuthorization("K-SUBJECT", "K-RECOVERY", "rec-0001", 1L, 2L),
+                ),
+            ),
+        )
+        assertTrue(
+            "and a revocation's",
+            Utils.isStatementPreImage(
+                Utils.revocationBytes(Revocation("K-SUBJECT", "rec-0001", 2L, 3L)),
             ),
         )
     }
@@ -935,6 +952,128 @@ class DecoderFuzzTest {
             "the verifier must accept a genuine statement, else its fuzz arm proves nothing",
             StatementVerdict.VALID,
             Utils.verifyRotationStatement(rotation, rotationSignature, publicKeyBase64, FUZZ_CLOCK),
+        )
+    }
+
+    /**
+     * The same corpus, into the recovery verifier.
+     *
+     * A recovery authorization reaches a service across a relay somebody else controls, so both
+     * the signature and the key the service compares it against can be anything at all by the time
+     * they arrive. The corpus goes into each of those positions in turn: nothing may throw, and —
+     * the security property, not merely a crash test — nothing the fuzzer produces may ever come
+     * back [StatementVerdict.VALID], because a `VALID` here is a service recording a standing
+     * credential that **never expires** and can only be undone by a revocation it may never be
+     * shown.
+     *
+     * The arm rides the existing corpus deliberately: nothing here edits the generator, so
+     * [CORPUS_DIGEST] does not move. It is paired with a genuine authorization after the loop, the
+     * accept-one-genuine floor every other arm in this file carries — without it, a verifier
+     * hardcoded to `SIGNATURE_INVALID` would satisfy the whole loop and be no verifier at all.
+     */
+    @Test
+    fun `no mutated payload verifies as a recovery authorization`() {
+        val master = Random(MASTER_SEED)
+        val verdicts = linkedSetOf<StatementVerdict>()
+
+        repeat(CASES) { index ->
+            val seed = master.nextLong()
+            val case = caseFor(seed)
+
+            fun bail(what: String, cause: Throwable? = null): Nothing =
+                throw AssertionError(report(what, index, seed, case), cause)
+
+            val asSignature = try {
+                Utils.verifyRecoveryAuthorization(
+                    authorization,
+                    case.text.toByteArray(),
+                    publicKeyBase64,
+                )
+            } catch (t: Throwable) {
+                bail("verifyRecoveryAuthorization threw ${t.javaClass.name} on a fuzzed signature", t)
+            }
+            if (asSignature == StatementVerdict.VALID) {
+                bail("a fuzzed payload was ACCEPTED as a signature over a recovery authorization")
+            }
+            verdicts += asSignature
+
+            val asStoredKey = try {
+                Utils.verifyRecoveryAuthorization(authorization, authorizationSignature, case.text)
+            } catch (t: Throwable) {
+                bail("verifyRecoveryAuthorization threw ${t.javaClass.name} on a fuzzed stored key", t)
+            }
+            if (asStoredKey == StatementVerdict.VALID) {
+                bail("a genuine signature was ACCEPTED against a fuzzed stored public key")
+            }
+            verdicts += asStoredKey
+        }
+
+        // Stronger than "never VALID": nothing the corpus produces may get past the signature gate
+        // at all, so no fuzzed input may ever earn a verdict that describes a genuine statement.
+        assertEquals(
+            "every fuzzed input must fail at the signature, not further down; got $verdicts",
+            setOf(StatementVerdict.SIGNATURE_INVALID),
+            verdicts,
+        )
+
+        assertEquals(
+            "the verifier must accept a genuine authorization, else its fuzz arm proves nothing",
+            StatementVerdict.VALID,
+            Utils.verifyRecoveryAuthorization(authorization, authorizationSignature, publicKeyBase64),
+        )
+    }
+
+    /**
+     * The same corpus, into the revocation verifier — and this one has the sharpest consequence of
+     * the three. A fuzzed input accepted as a *rotation* moves an account; accepted as a
+     * *revocation* it cancels the recovery device a user is relying on, which they discover only
+     * when the primary phone is already gone.
+     *
+     * Same shape as the arms above, same pinned corpus, same accept-one-genuine floor.
+     */
+    @Test
+    fun `no mutated payload verifies as a revocation`() {
+        val master = Random(MASTER_SEED)
+        val verdicts = linkedSetOf<StatementVerdict>()
+
+        repeat(CASES) { index ->
+            val seed = master.nextLong()
+            val case = caseFor(seed)
+
+            fun bail(what: String, cause: Throwable? = null): Nothing =
+                throw AssertionError(report(what, index, seed, case), cause)
+
+            val asSignature = try {
+                Utils.verifyRevocation(revocation, case.text.toByteArray(), publicKeyBase64)
+            } catch (t: Throwable) {
+                bail("verifyRevocation threw ${t.javaClass.name} on a fuzzed signature", t)
+            }
+            if (asSignature == StatementVerdict.VALID) {
+                bail("a fuzzed payload was ACCEPTED as a signature over a revocation")
+            }
+            verdicts += asSignature
+
+            val asStoredKey = try {
+                Utils.verifyRevocation(revocation, revocationSignature, case.text)
+            } catch (t: Throwable) {
+                bail("verifyRevocation threw ${t.javaClass.name} on a fuzzed stored key", t)
+            }
+            if (asStoredKey == StatementVerdict.VALID) {
+                bail("a genuine signature was ACCEPTED against a fuzzed stored public key")
+            }
+            verdicts += asStoredKey
+        }
+
+        assertEquals(
+            "every fuzzed input must fail at the signature, not further down; got $verdicts",
+            setOf(StatementVerdict.SIGNATURE_INVALID),
+            verdicts,
+        )
+
+        assertEquals(
+            "the verifier must accept a genuine revocation, else its fuzz arm proves nothing",
+            StatementVerdict.VALID,
+            Utils.verifyRevocation(revocation, revocationSignature, publicKeyBase64),
         )
     }
 
@@ -1241,6 +1380,15 @@ class DecoderFuzzTest {
         private lateinit var rotation: RotationStatement
         private lateinit var rotationSignature: ByteArray
 
+        /**
+         * The same, for the other two statement kinds. Each arm needs one input it must *accept*,
+         * or "no fuzzed payload verifies" is a property of a function that refuses everything.
+         */
+        private lateinit var authorization: RecoveryAuthorization
+        private lateinit var authorizationSignature: ByteArray
+        private lateinit var revocation: Revocation
+        private lateinit var revocationSignature: ByteArray
+
         /** 2048-bit RSA generation is slow (~100ms); do it once for the whole class. */
         @JvmStatic
         @BeforeClass
@@ -1271,6 +1419,39 @@ class DecoderFuzzTest {
             rotationSignature = Signature.getInstance("SHA256withRSA").run {
                 initSign(keyPair.private)
                 update(Utils.rotationStatementBytes(rotation))
+                sign()
+            }
+
+            // The recovery device is that same second real key, for the same two reasons: an
+            // authorization onto the stored key is `SAME_KEY` and one onto anything that is not an
+            // RSA key is `NEW_KEY_UNUSABLE`, either of which would make the accept-one-genuine
+            // floor unreachable for the wrong reason. Neither verifier has a window, so unlike the
+            // rotation these carry no clock.
+            authorization = RecoveryAuthorization(
+                subjectPublicKey = publicKeyBase64,
+                recoveryPublicKey = Base64.encodeToString(
+                    replacement.public.encoded,
+                    Base64.DEFAULT,
+                ),
+                authorizationId = "rec-fuzz-0001",
+                sequence = 7L,
+                issuedAtMillis = FUZZ_CLOCK,
+            )
+            authorizationSignature = Signature.getInstance("SHA256withRSA").run {
+                initSign(keyPair.private)
+                update(Utils.recoveryAuthorizationBytes(authorization))
+                sign()
+            }
+
+            revocation = Revocation(
+                subjectPublicKey = publicKeyBase64,
+                revokedAuthorizationId = "rec-fuzz-0001",
+                sequence = 8L,
+                issuedAtMillis = FUZZ_CLOCK,
+            )
+            revocationSignature = Signature.getInstance("SHA256withRSA").run {
+                initSign(keyPair.private)
+                update(Utils.revocationBytes(revocation))
                 sign()
             }
         }
