@@ -1078,6 +1078,110 @@ class DecoderFuzzTest {
     }
 
     /**
+     * The same corpus, into the transport envelope's parser.
+     *
+     * [Utils.parseSignedStatement] reads text that crossed a relay somebody else controls — a
+     * file, a clipboard, a QR frame — so it sees whatever that relay carried. The corpus goes in
+     * three ways: as the whole envelope, and substituted into each of the two Base64 sections of
+     * a genuine one, which is the shape an attacker who can rewrite part of a line produces.
+     * Nothing may throw, and nothing the fuzzer produces may parse into a statement that verifies
+     * [StatementVerdict.VALID] against a real stored key.
+     *
+     * The arm rides the existing corpus deliberately: nothing here edits the generator, so
+     * [CORPUS_DIGEST] does not move. The accept-one-genuine floor after the loop is the one every
+     * arm in this file carries — without it this passes against a parser hardcoded to `null`,
+     * which would be no parser at all.
+     */
+    @Test
+    fun `no mutated payload parses into a statement that verifies`() {
+        val master = Random(MASTER_SEED)
+        val genuinePreImage = Base64.encodeToString(
+            Utils.rotationStatementBytes(rotation),
+            Base64.NO_WRAP,
+        )
+        val genuineSignature = Base64.encodeToString(rotationSignature, Base64.NO_WRAP)
+        var parsedSomething = 0
+
+        repeat(CASES) { index ->
+            val seed = master.nextLong()
+            val case = caseFor(seed)
+
+            fun bail(what: String, cause: Throwable? = null): Nothing =
+                throw AssertionError(report(what, index, seed, case), cause)
+
+            fun check(what: String, text: String) {
+                val parsed = try {
+                    Utils.parseSignedStatement(text)
+                } catch (t: Throwable) {
+                    bail("parseSignedStatement threw ${t.javaClass.name} on $what", t)
+                }
+                if (parsed == null) return
+                parsedSomething++
+                // Parsing is not the failure — the parse/verify split is the whole design. What
+                // must never happen is a fuzzed line reaching VALID against a key a service
+                // actually holds, which is a service moving a user's account.
+                val verdict = when (parsed) {
+                    is SignedStatement.Rotate -> Utils.verifyRotationStatement(
+                        parsed.statement,
+                        parsed.signature,
+                        publicKeyBase64,
+                        FUZZ_CLOCK,
+                    )
+
+                    is SignedStatement.Recover -> Utils.verifyRecoveryAuthorization(
+                        parsed.authorization,
+                        parsed.signature,
+                        publicKeyBase64,
+                    )
+
+                    is SignedStatement.Revoke -> Utils.verifyRevocation(
+                        parsed.revocation,
+                        parsed.signature,
+                        publicKeyBase64,
+                    )
+                }
+                if (verdict == StatementVerdict.VALID) {
+                    bail("a fuzzed envelope ($what) was ACCEPTED as a genuine statement")
+                }
+            }
+
+            check("the whole envelope", case.text)
+            check(
+                "a fuzzed pre-image section",
+                "lim.env.v1:lim.rotate.v1:${case.text}:$genuineSignature",
+            )
+            check(
+                "a fuzzed signature section",
+                "lim.env.v1:lim.rotate.v1:$genuinePreImage:${case.text}",
+            )
+        }
+
+        // The floor. Without it a parser returning `null` for everything satisfies the loop.
+        val genuine = Utils.parseSignedStatement(
+            Utils.encodeRotationStatement(rotation, rotationSignature),
+        )
+        assertTrue(
+            "the parser must read back a genuine envelope; got $genuine",
+            genuine is SignedStatement.Rotate,
+        )
+        assertEquals(
+            "…and what it read back must still verify, or the fuzz arm proves nothing",
+            StatementVerdict.VALID,
+            Utils.verifyRotationStatement(
+                (genuine as SignedStatement.Rotate).statement,
+                genuine.signature,
+                publicKeyBase64,
+                FUZZ_CLOCK,
+            ),
+        )
+
+        // Reported rather than asserted at a threshold: the corpus is JSON-shaped, so almost none
+        // of it survives the framing, and a floor here would pin a number that says nothing about
+        // safety. The genuine envelope above is what makes this arm non-vacuous.
+        println("parseSignedStatement fuzz: $parsedSomething of ${CASES * 3} inputs parsed")
+    }
+
+    /**
      * The reproducibility claim, pinned rather than described. `java.util.Random` is specified
      * bit-for-bit by the JDK, so this digest is the same on every machine and every run; if an
      * edit to the generator changes it, that is a deliberate act and this constant moves in the

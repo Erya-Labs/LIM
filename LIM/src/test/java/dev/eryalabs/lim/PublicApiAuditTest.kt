@@ -147,6 +147,11 @@ class PublicApiAuditTest {
         "Utils.verifyRecoveryAuthorization" to "RecoveryVerificationTest: a real authorization signed by the stored key verifies VALID",
         "Utils.verifyRevocation" to "RecoveryVerificationTest: a real revocation signed by the stored key verifies VALID",
         "Utils.isRevoked" to "RevocationOrderingTest: a revocation at a higher sequence revokes its authorization",
+        "Utils.STATEMENT_ENVELOPE_V1" to "StatementEnvelopeTest: the envelope is four colon-separated sections on one line",
+        "Utils.encodeRotationStatement" to "StatementEnvelopeTest: a rotation envelope round-trips field-for-field and still verifies",
+        "Utils.encodeRecoveryAuthorization" to "StatementEnvelopeTest: a recovery envelope round-trips field-for-field and still verifies",
+        "Utils.encodeRevocation" to "StatementEnvelopeTest: a revocation envelope round-trips field-for-field and still verifies",
+        "Utils.parseSignedStatement" to "StatementEnvelopeTest: a rotation envelope round-trips field-for-field and still verifies",
         "Utils.liveAuthorizations" to "RevocationOrderingTest: a revocation removes exactly its own authorization and leaves the others live",
         "Utils.parseSignChallengeResult" to "ResultParsingTest: a full sign-challenge result is decoded",
         "Utils.parseQueryResult" to "ResultParsingTest: a full query result is decoded",
@@ -363,6 +368,39 @@ class PublicApiAuditTest {
         "StatementVerdict.valueOf" to "PublicApiAuditTest: the verdict enum exposes exactly the documented values in order",
         "StatementVerdict.getEntries" to "PublicApiAuditTest: the verdict enum exposes exactly the documented values in order",
 
+        // ── SignedStatement ──────────────────────────────────────────────
+        //
+        // The transport envelope's parsed form. A sealed hierarchy is public API in the same
+        // strong sense an enum is: an integrator writes an exhaustive `when` over the three
+        // cases, so adding one breaks their compilation — which is the right place for that
+        // decision to surface. `signature` is declared on the parent, so it is audited there as
+        // well as on each case.
+        "SignedStatement.getSignature" to "StatementEnvelopeTest: a rotation envelope round-trips field-for-field and still verifies",
+        "SignedStatement\$Rotate.getStatement" to "StatementEnvelopeTest: a rotation envelope round-trips field-for-field and still verifies",
+        "SignedStatement\$Rotate.getSignature" to "StatementEnvelopeTest: a rotation envelope round-trips field-for-field and still verifies",
+        "SignedStatement\$Rotate.component1" to "PublicApiAuditTest: each signed-statement case destructures into its statement and signature",
+        "SignedStatement\$Rotate.component2" to "PublicApiAuditTest: each signed-statement case destructures into its statement and signature",
+        "SignedStatement\$Rotate.copy" to "StatementEnvelopeTest: envelopes carrying the same bytes are equal, and toString hides the signature",
+        "SignedStatement\$Rotate.equals" to "StatementEnvelopeTest: envelopes carrying the same bytes are equal, and toString hides the signature",
+        "SignedStatement\$Rotate.hashCode" to "StatementEnvelopeTest: envelopes carrying the same bytes are equal, and toString hides the signature",
+        "SignedStatement\$Rotate.toString" to "StatementEnvelopeTest: envelopes carrying the same bytes are equal, and toString hides the signature",
+        "SignedStatement\$Recover.getAuthorization" to "StatementEnvelopeTest: a recovery envelope round-trips field-for-field and still verifies",
+        "SignedStatement\$Recover.getSignature" to "StatementEnvelopeTest: a recovery envelope round-trips field-for-field and still verifies",
+        "SignedStatement\$Recover.component1" to "PublicApiAuditTest: each signed-statement case destructures into its statement and signature",
+        "SignedStatement\$Recover.component2" to "PublicApiAuditTest: each signed-statement case destructures into its statement and signature",
+        "SignedStatement\$Recover.copy" to "PublicApiAuditTest: each signed-statement case destructures into its statement and signature",
+        "SignedStatement\$Recover.equals" to "StatementEnvelopeTest: envelopes carrying the same bytes are equal, and toString hides the signature",
+        "SignedStatement\$Recover.hashCode" to "StatementEnvelopeTest: envelopes carrying the same bytes are equal, and toString hides the signature",
+        "SignedStatement\$Recover.toString" to "StatementEnvelopeTest: envelopes carrying the same bytes are equal, and toString hides the signature",
+        "SignedStatement\$Revoke.getRevocation" to "StatementEnvelopeTest: a revocation envelope round-trips field-for-field and still verifies",
+        "SignedStatement\$Revoke.getSignature" to "StatementEnvelopeTest: a revocation envelope round-trips field-for-field and still verifies",
+        "SignedStatement\$Revoke.component1" to "PublicApiAuditTest: each signed-statement case destructures into its statement and signature",
+        "SignedStatement\$Revoke.component2" to "PublicApiAuditTest: each signed-statement case destructures into its statement and signature",
+        "SignedStatement\$Revoke.copy" to "PublicApiAuditTest: each signed-statement case destructures into its statement and signature",
+        "SignedStatement\$Revoke.equals" to "StatementEnvelopeTest: envelopes carrying the same bytes are equal, and toString hides the signature",
+        "SignedStatement\$Revoke.hashCode" to "StatementEnvelopeTest: envelopes carrying the same bytes are equal, and toString hides the signature",
+        "SignedStatement\$Revoke.toString" to "StatementEnvelopeTest: envelopes carrying the same bytes are equal, and toString hides the signature",
+
         // ── SignChallengeResult ──────────────────────────────────────────
         "SignChallengeResult.getSignature" to "ResultParsingTest: a full sign-challenge result is decoded",
         "SignChallengeResult.getAlgorithm" to "ResultParsingTest: a full sign-challenge result is decoded",
@@ -558,6 +596,8 @@ class PublicApiAuditTest {
                     "ShareRequest", "QueryRequest", "SignChallengeRequest",
                     "RotationStatement", "RecoveryAuthorization", "Revocation",
                     "StatementVerdict",
+                    "SignedStatement", "SignedStatement\$Rotate", "SignedStatement\$Recover",
+                    "SignedStatement\$Revoke",
                 ),
             ),
         )
@@ -757,6 +797,47 @@ class PublicApiAuditTest {
             "copy must carry the values it was not asked to change",
             "rec-1",
             a.copy(sequence = 9L).revokedAuthorizationId,
+        )
+    }
+
+    /**
+     * The sealed hierarchy's generated API. Destructuring is what an integrator writes against a
+     * data class without thinking about it — `val (statement, signature) = signed` — so it is
+     * covered rather than waved through, and `copy` with it, since that is the one route by which
+     * a caller can build a signed statement the relay never carried. It stays as unverified as
+     * anything else here: copying does not make a signature fit.
+     */
+    @Test
+    fun `each signed-statement case destructures into its statement and signature`() {
+        val signature = ByteArray(8) { it.toByte() }
+
+        val (statement, rotateSignature) = SignedStatement.Rotate(
+            RotationStatement("K-OLD", "K-NEW", "rot-1", 10L, 20L),
+            signature,
+        )
+        assertEquals("rot-1", statement.statementId)
+        assertTrue(signature.contentEquals(rotateSignature))
+
+        val recover = SignedStatement.Recover(
+            RecoveryAuthorization("K-SUBJECT", "K-RECOVERY", "rec-1", 7L, 10L),
+            signature,
+        )
+        val (authorization, recoverSignature) = recover
+        assertEquals("rec-1", authorization.authorizationId)
+        assertTrue(signature.contentEquals(recoverSignature))
+        assertEquals(
+            "copy must carry what it was not asked to change",
+            "K-RECOVERY",
+            recover.copy(signature = ByteArray(1)).authorization.recoveryPublicKey,
+        )
+
+        val revoke = SignedStatement.Revoke(Revocation("K-SUBJECT", "rec-1", 8L, 10L), signature)
+        val (revocation, revokeSignature) = revoke
+        assertEquals(8L, revocation.sequence)
+        assertTrue(signature.contentEquals(revokeSignature))
+        assertEquals(
+            "rec-1",
+            revoke.copy(revocation = revocation.copy(sequence = 9L)).revocation.revokedAuthorizationId,
         )
     }
 
@@ -1086,6 +1167,31 @@ class PublicApiAuditTest {
             "SignChallengeResult.hashCode(): int",
             "SignChallengeResult.isVerified(String, byte[]): boolean",
             "SignChallengeResult.toString(): String",
+            "SignedStatement\$Recover.component1(): RecoveryAuthorization",
+            "SignedStatement\$Recover.component2(): byte[]",
+            "SignedStatement\$Recover.copy(RecoveryAuthorization, byte[]): SignedStatement\$Recover",
+            "SignedStatement\$Recover.equals(Object): boolean",
+            "SignedStatement\$Recover.getAuthorization(): RecoveryAuthorization",
+            "SignedStatement\$Recover.getSignature(): byte[]",
+            "SignedStatement\$Recover.hashCode(): int",
+            "SignedStatement\$Recover.toString(): String",
+            "SignedStatement\$Revoke.component1(): Revocation",
+            "SignedStatement\$Revoke.component2(): byte[]",
+            "SignedStatement\$Revoke.copy(Revocation, byte[]): SignedStatement\$Revoke",
+            "SignedStatement\$Revoke.equals(Object): boolean",
+            "SignedStatement\$Revoke.getRevocation(): Revocation",
+            "SignedStatement\$Revoke.getSignature(): byte[]",
+            "SignedStatement\$Revoke.hashCode(): int",
+            "SignedStatement\$Revoke.toString(): String",
+            "SignedStatement\$Rotate.component1(): RotationStatement",
+            "SignedStatement\$Rotate.component2(): byte[]",
+            "SignedStatement\$Rotate.copy(RotationStatement, byte[]): SignedStatement\$Rotate",
+            "SignedStatement\$Rotate.equals(Object): boolean",
+            "SignedStatement\$Rotate.getSignature(): byte[]",
+            "SignedStatement\$Rotate.getStatement(): RotationStatement",
+            "SignedStatement\$Rotate.hashCode(): int",
+            "SignedStatement\$Rotate.toString(): String",
+            "SignedStatement.getSignature(): byte[]",
             "StatementVerdict.EXPIRED: StatementVerdict",
             "StatementVerdict.NEW_KEY_UNUSABLE: StatementVerdict",
             "StatementVerdict.NOT_YET_VALID: StatementVerdict",
@@ -1124,6 +1230,7 @@ class PublicApiAuditTest {
             "Utils.NONCE_FORMAT_TIMESTAMPED: String",
             "Utils.PROTOCOL_VERSION: int",
             "Utils.STATEMENT_DOMAIN_V1: String",
+            "Utils.STATEMENT_ENVELOPE_V1: String",
             "Utils.STATEMENT_RECOVER_V1: String",
             "Utils.STATEMENT_REVOKE_V1: String",
             "Utils.STATEMENT_ROTATE_V1: String",
@@ -1139,6 +1246,9 @@ class PublicApiAuditTest {
             "Utils.decodeEntry(String): Entry",
             "Utils.decodeFields(String): Map<String, TypedField>",
             "Utils.encodeFields(Map<String, TypedField>): String",
+            "Utils.encodeRecoveryAuthorization(RecoveryAuthorization, byte[]): String",
+            "Utils.encodeRevocation(Revocation, byte[]): String",
+            "Utils.encodeRotationStatement(RotationStatement, byte[]): String",
             "Utils.generateNonce(SecureRandom, long): byte[]",
             "Utils.isNonceFresh(byte[], long, long): boolean",
             // Set arithmetic, not verification: neither takes a key or a signature, and the
@@ -1154,6 +1264,7 @@ class PublicApiAuditTest {
             "Utils.parseShareResult(Intent): ShareResult",
             "Utils.parseSignChallengeRequest(Intent): SignChallengeRequest",
             "Utils.parseSignChallengeResult(Intent): SignChallengeResult",
+            "Utils.parseSignedStatement(String): SignedStatement",
             "Utils.recoveryAuthorizationBytes(RecoveryAuthorization): byte[]",
             "Utils.revocationBytes(Revocation): byte[]",
             "Utils.rotationStatementBytes(RotationStatement): byte[]",

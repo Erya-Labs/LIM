@@ -633,6 +633,17 @@ object Utils {
      * a vault refuse a nonce that is really a statement. A verifier implying otherwise is
      * overselling what it checked. Consent for the rotation itself is the vault's to obtain.
      *
+     * **And it says nothing about whether `newPublicKey` is already one of your accounts —
+     * check that yourself, before the swap.** This library holds no account table and cannot.
+     * The attack it leaves you otherwise is cheap and needs nothing stolen: an attacker signs up
+     * with their own key `K_att`, then signs, perfectly genuinely, a rotation from `K_att` onto
+     * the *victim's* public key — which this service already stores, which every other service
+     * the victim uses also stores, and which a breach hands out. Every check above passes, the
+     * verdict is [StatementVerdict.VALID], and a service that swaps blindly has just written the
+     * attacker's account over the victim's row. **Refuse a rotation whose `newPublicKey` already
+     * names an account**, exactly as you would refuse a sign-up onto a key you already hold.
+     * `MigrationEndToEndTest` pins both the attack and the refusal.
+     *
      * The check order is part of the contract, because which refusal an integrator is shown
      * decides what they tell the user:
      *
@@ -928,6 +939,31 @@ object Utils {
      * a forged revocation locks a real device out, and a forged authorization lets a stranger's
      * device look live.
      *
+     * **A rotation ends the authorizations that named the old key. Discard them; do not re-file
+     * them under the new one.** Both lists are keyed by a subject *key* inside the statements
+     * themselves, and [verifyRotationStatement] changes which key identifies the account. An
+     * authorization carried across still names the old key, so the only revocation that could
+     * ever cancel it is one signed by that old key — which after a migration is the key the user
+     * no longer has. That makes it a standing credential nobody can withdraw, and it is how a
+     * device revoked *before* the migration comes back alive after it, which is precisely what
+     * ordering this way exists to prevent. The recovery plan is re-issued under the new key, by
+     * the device that now holds the account.
+     *
+     * **The revocations, though, keep.** They never go stale — that is why neither they nor
+     * [verifyRevocation] carry a window — and holding one costs a row. Dropping them is how a
+     * captured authorization envelope becomes live again the day that key names an account a
+     * second time, which a rotation back onto it makes possible. Discard the authorizations;
+     * keep the revocations for ever.
+     *
+     * **And the vault's half, which is the only durable one: sign a revocation for every
+     * authorization a rotation is about to strand, while the old key is still in hand.**
+     * Discarding is a service forgetting locally, and forgetting is not a fact about the world:
+     * a service that is later shown the same authorization envelope again — off a relay, by
+     * anyone who kept a copy — has nothing to weigh it against and will record it. A revocation
+     * is the fact, and only the key the authorization names can sign one, so the moment to do it
+     * is *during* the migration. Afterwards nobody can, for ever. `MigrationEndToEndTest` pins
+     * every half of this, including that limit.
+     *
      * @param authorizations The authorizations this service holds, for one profile or many.
      * @param revocations    Every revocation it has been shown.
      * @return The live subset, in input order. Empty when everything is revoked; never `null`.
@@ -938,6 +974,245 @@ object Utils {
         revocations: List<Revocation>,
     ): List<RecoveryAuthorization> =
         authorizations.filter { it != null && !isRevoked(it, revocations) }
+
+    // ── Signed statements: the transport envelope ─────────────────────────
+    //
+    // A statement nobody can transmit is not a protocol. Device A's signed statements have to
+    // reach device B and then each installed app, so there is one text form defined here and one
+    // parser for it; without that every relay invents its own shape and the vault has to guess.
+    //
+    // The envelope is deliberately channel-agnostic — one line of text, no transport in it — so
+    // it rides a file, a QR code or a clipboard equally well. Which channel the vault actually
+    // uses is a human's decision and is recorded as such.
+
+    /**
+     * The framing marker every LIM statement envelope begins with.
+     *
+     * Versioned separately from the statement kinds: this names the *framing*, the kind tag names
+     * what is inside it, and either can be revised without the other. A peer sending a framing
+     * this library does not know is refused whole by [parseSignedStatement] rather than
+     * half-understood.
+     */
+    const val STATEMENT_ENVELOPE_V1 = "lim.env.v1"
+
+    /**
+     * Section separator. A colon appears in neither the standard Base64 alphabet nor any kind
+     * tag, so the split is unambiguous and needs no escaping — and a value that somehow contained
+     * one would change the section count rather than smuggle itself into the next section.
+     */
+    private const val ENVELOPE_SEPARATOR = ':'
+
+    /** Framing marker, kind tag, pre-image, signature. Exactly four; anything else is damage. */
+    private const val ENVELOPE_SECTIONS = 4
+
+    /**
+     * Encode a [RotationStatement] and its signature as one line of text a relay can carry.
+     *
+     * Layout: [STATEMENT_ENVELOPE_V1], the kind tag, the canonical pre-image
+     * ([rotationStatementBytes]) and the signature, colon-separated, with the two binary sections
+     * Base64-encoded unwrapped. The pre-image travels verbatim rather than as re-listed fields,
+     * which is what makes the envelope provably carry the bytes that were signed.
+     *
+     * The signature must be non-empty: an empty one encodes to an empty section, which
+     * [parseSignedStatement] refuses. That asymmetry is deliberate and is the fail-closed
+     * direction — an envelope carrying no signature is not something a peer should be able to
+     * hand on and have parsed.
+     *
+     * See `MigrationEndToEndTest` for the whole flow this line exists for, written as an
+     * integrator would write it — a test rather than prose, so the example cannot go stale.
+     */
+    fun encodeRotationStatement(statement: RotationStatement, signature: ByteArray): String =
+        envelope(STATEMENT_ROTATE_V1, rotationStatementBytes(statement), signature)
+
+    /**
+     * Encode a [RecoveryAuthorization] and its signature, same framing as
+     * [encodeRotationStatement] and the same guarantees.
+     */
+    fun encodeRecoveryAuthorization(
+        authorization: RecoveryAuthorization,
+        signature: ByteArray,
+    ): String =
+        envelope(STATEMENT_RECOVER_V1, recoveryAuthorizationBytes(authorization), signature)
+
+    /**
+     * Encode a [Revocation] and its signature, same framing as [encodeRotationStatement].
+     *
+     * The kind whose delivery matters most: an authorization is live until a service is shown the
+     * revocation that cancels it, so a revocation that cannot be transmitted is one that does not
+     * exist.
+     */
+    fun encodeRevocation(revocation: Revocation, signature: ByteArray): String =
+        envelope(STATEMENT_REVOKE_V1, revocationBytes(revocation), signature)
+
+    /** The three encoders, which differ only in the kind tag and the pre-image they pass in. */
+    private fun envelope(kindTag: String, preImage: ByteArray, signature: ByteArray): String =
+        STATEMENT_ENVELOPE_V1 + ENVELOPE_SEPARATOR +
+            kindTag + ENVELOPE_SEPARATOR +
+            Base64.encodeToString(preImage, Base64.NO_WRAP) + ENVELOPE_SEPARATOR +
+            Base64.encodeToString(signature, Base64.NO_WRAP)
+
+    /**
+     * Read an envelope produced by one of the three encoders back into the statement it carries
+     * and the signature over it — the one router for all three kinds.
+     *
+     * **Parsed is not verified.** A non-null return says the text was well-formed, and nothing
+     * more: nobody's key has been consulted and no signature has been checked. Route the result
+     * to [verifyRotationStatement], [verifyRecoveryAuthorization] or [verifyRevocation] with the
+     * public key the service *already stores* for the profile. [SignedStatement] exposes no
+     * success signal of its own precisely so that "it parsed" cannot be mistaken for "it is
+     * genuine" — the same separation [parseSignChallengeResult] keeps.
+     *
+     * This is a trust boundary of the same class as the intent parsers: the text arrives from
+     * another device across a relay somebody else controls. It **fails closed and never throws**,
+     * returning `null` for a null, empty, blank or truncated input, a framing marker or kind tag
+     * it does not recognise, the wrong number of sections, a section that is not standard Base64,
+     * and a pre-image whose components do not read back exactly.
+     *
+     * **The envelope text is not canonical, and must never be used as an identity.** Whitespace
+     * inside a Base64 section is stripped (a peer that wraps at 76 characters is a peer this has
+     * to read), and Base64 itself is not injective in its last quantum — an unpadded tail and
+     * several spellings of the final character decode to the same bytes. So unboundedly many
+     * distinct strings parse to the identical statement and signature. Nothing is forged by that:
+     * the signature covers the pre-image, not the text. But a service deduplicating relayed
+     * statements, or keying an audit log, must do it on the *statement* — `statementId`,
+     * `authorizationId`, the subject key — and never on the envelope string, which an attacker
+     * can respell at will. For the same reason trailing junk after the last section is `null`
+     * only when it is junk the Base64 rules reject; junk that is itself well-formed Base64
+     * changes the signature and comes back [StatementVerdict.SIGNATURE_INVALID] instead, which is
+     * the same refusal one step later.
+     *
+     * An unrecognised kind tag is `null` rather than a guess, which is what a future
+     * `lim.rotate.v2` from a newer peer gets: refused whole, not half-understood, because a peer
+     * that revised the format did so for a reason this version cannot know.
+     *
+     * Two checks worth naming, because both close a route to reading a *different* statement out
+     * of the same signed bytes:
+     *
+     * - The kind tag in the framing must equal the one **inside** the pre-image. Only the inner
+     *   one is signed, so an outer tag that disagreed would be an unsigned claim about what the
+     *   signature means — exactly what the kind tag exists to prevent.
+     * - The parsed statement is re-encoded and must reproduce the transmitted pre-image byte for
+     *   byte. That makes the envelope's central promise structural rather than a property of this
+     *   reader: whatever a verifier reconstructs from the returned statement is what the relay
+     *   carried, so a signature over one is a signature over the other.
+     *
+     * See `MigrationEndToEndTest` for the whole flow — device A signing, the envelope crossing, a
+     * service verifying against the key it stores and swapping — written as an integrator would
+     * write it, and as a test rather than prose so the example cannot go stale.
+     *
+     * @param text One line of text as produced by [encodeRotationStatement],
+     *             [encodeRecoveryAuthorization] or [encodeRevocation]. Surrounding whitespace is
+     *             ignored, so a line read from a file still parses.
+     * @return The statement and its raw signature, or `null` for anything this version cannot
+     *         read back exactly.
+     */
+    fun parseSignedStatement(text: String?): SignedStatement? {
+        if (text == null) return null
+        val sections = text.trim().split(ENVELOPE_SEPARATOR)
+        if (sections.size != ENVELOPE_SECTIONS) return null
+        if (sections[0] != STATEMENT_ENVELOPE_V1) return null
+        val preImage = base64Bytes(sections[2]) ?: return null
+        val signature = base64Bytes(sections[3]) ?: return null
+
+        val parsed = when (val kindTag = sections[1]) {
+            STATEMENT_ROTATE_V1 -> statementComponents(preImage, kindTag, texts = 3, longs = 2)
+                ?.let { (texts, longs) ->
+                    SignedStatement.Rotate(
+                        RotationStatement(texts[0], texts[1], texts[2], longs[0], longs[1]),
+                        signature,
+                    )
+                }
+
+            STATEMENT_RECOVER_V1 -> statementComponents(preImage, kindTag, texts = 3, longs = 2)
+                ?.let { (texts, longs) ->
+                    SignedStatement.Recover(
+                        RecoveryAuthorization(texts[0], texts[1], texts[2], longs[0], longs[1]),
+                        signature,
+                    )
+                }
+
+            STATEMENT_REVOKE_V1 -> statementComponents(preImage, kindTag, texts = 2, longs = 2)
+                ?.let { (texts, longs) ->
+                    SignedStatement.Revoke(
+                        Revocation(texts[0], texts[1], longs[0], longs[1]),
+                        signature,
+                    )
+                }
+
+            else -> null
+        } ?: return null
+
+        // The signed bytes, reconstructed from what was parsed, must be the bytes that arrived.
+        // Cheap, and it closes the gap a reader alone leaves: a pre-image carrying malformed
+        // UTF-8, say, decodes to a `String` with replacement characters in it, which would
+        // re-encode to different bytes and therefore verify against a signature nobody made.
+        //
+        // This check is also *stronger* than three of the ones inside `statementComponents`, and
+        // recording that is more useful than leaving it to be rediscovered: with this in place,
+        // the domain-prefix guard, the kind-tag comparison and the nothing-left-over rule there
+        // are all equivalent mutants — remove any of them and the whole suite still passes,
+        // because re-encoding a statement read out of the wrong tag, out of bytes with no prefix,
+        // or out of bytes with a tail on them cannot reproduce what arrived. They are kept for
+        // the reason `isUsablePublicKey`'s blank guard is: `statementComponents` states its own
+        // contract, and a contract that holds only because its one caller happens to re-check it
+        // is one a second caller would break. Verified by planting each: none is killed.
+        val reEncoded = when (parsed) {
+            is SignedStatement.Rotate -> rotationStatementBytes(parsed.statement)
+            is SignedStatement.Recover -> recoveryAuthorizationBytes(parsed.authorization)
+            is SignedStatement.Revoke -> revocationBytes(parsed.revocation)
+        }
+        return if (reEncoded.contentEquals(preImage)) parsed else null
+    }
+
+    /**
+     * Read a canonical pre-image back into its components — the inverse of the encoder that
+     * [rotationStatementBytes] and its siblings share, and the reason T14 length-prefixed the
+     * layout rather than delimiting it.
+     *
+     * Total and never throws, because every byte of [preImage] came off a relay: a length prefix
+     * claiming more bytes than are present, a truncated fixed-width field, a kind tag that is not
+     * the expected one and anything left over after the last component are all `null`.
+     *
+     * @return the [texts] text components and the [longs] 64-bit components, in order, or `null`
+     *         if the bytes are not exactly that.
+     */
+    private fun statementComponents(
+        preImage: ByteArray,
+        kindTag: String,
+        texts: Int,
+        longs: Int,
+    ): Pair<List<String>, List<Long>>? {
+        if (!isStatementPreImage(preImage)) return null
+        var offset = STATEMENT_DOMAIN_BYTES.size
+
+        fun readBigEndian(width: Int): Long? {
+            if (preImage.size - offset < width) return null
+            var value = 0L
+            repeat(width) {
+                value = (value shl 8) or (preImage[offset].toLong() and 0xFF)
+                offset++
+            }
+            return value
+        }
+
+        fun readText(): String? {
+            // Unsigned, so a length whose top bit is set is a length that does not fit rather
+            // than a negative one that would index backwards.
+            val length = readBigEndian(COMPONENT_LENGTH_BYTES) ?: return null
+            if (length > preImage.size - offset) return null
+            val text = String(preImage, offset, length.toInt(), Charsets.UTF_8)
+            offset += length.toInt()
+            return text
+        }
+
+        if (readText() != kindTag) return null
+        val textValues = ArrayList<String>(texts)
+        repeat(texts) { textValues += readText() ?: return null }
+        val longValues = ArrayList<Long>(longs)
+        repeat(longs) { longValues += readBigEndian(STATEMENT_LONG_BYTES) ?: return null }
+        if (offset != preImage.size) return null
+        return textValues to longValues
+    }
 
     /**
      * Whether [publicKey] is a key a service could actually store and later verify against:
