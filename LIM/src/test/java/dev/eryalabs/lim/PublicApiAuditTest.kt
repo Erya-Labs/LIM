@@ -146,6 +146,8 @@ class PublicApiAuditTest {
         "Utils.verifyRotationStatement" to "RotationVerificationTest: a real statement signed by the stored key verifies VALID",
         "Utils.verifyRecoveryAuthorization" to "RecoveryVerificationTest: a real authorization signed by the stored key verifies VALID",
         "Utils.verifyRevocation" to "RecoveryVerificationTest: a real revocation signed by the stored key verifies VALID",
+        "Utils.isRevoked" to "RevocationOrderingTest: a revocation at a higher sequence revokes its authorization",
+        "Utils.liveAuthorizations" to "RevocationOrderingTest: a revocation removes exactly its own authorization and leaves the others live",
         "Utils.parseSignChallengeResult" to "ResultParsingTest: a full sign-challenge result is decoded",
         "Utils.parseQueryResult" to "ResultParsingTest: a full query result is decoded",
         "Utils.parseShareResult" to "ResultParsingTest: a full share result is decoded",
@@ -1139,7 +1141,11 @@ class PublicApiAuditTest {
             "Utils.encodeFields(Map<String, TypedField>): String",
             "Utils.generateNonce(SecureRandom, long): byte[]",
             "Utils.isNonceFresh(byte[], long, long): boolean",
+            // Set arithmetic, not verification: neither takes a key or a signature, and the
+            // absence is the contract — the caller must have verified the statements already.
+            "Utils.isRevoked(RecoveryAuthorization, List<Revocation>): boolean",
             "Utils.isStatementPreImage(byte[]): boolean",
+            "Utils.liveAuthorizations(List<RecoveryAuthorization>, List<Revocation>): List<RecoveryAuthorization>",
             "Utils.matchesRequestCode(Intent, String): boolean",
             "Utils.nonceTimestamp(byte[]): Long",
             "Utils.parseQueryRequest(Intent): QueryRequest",

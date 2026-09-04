@@ -827,6 +827,118 @@ object Utils {
         return StatementVerdict.VALID
     }
 
+    // ── Signed statements: revocation ordering ────────────────────────────
+
+    /**
+     * Whether [authorization] has been cancelled by any of [revocations].
+     *
+     * A [RecoveryAuthorization] never expires, so this ordering *is* the safety of the standing
+     * credential: a thief holding a stolen recovery device races the revocation to whichever
+     * service it reaches first, and every service has to decide which authorizations are still
+     * live from statements a relay delivered in whatever order it happened to. The rule is
+     * therefore stated over the statements themselves rather than over arrival time — three
+     * conditions, all of which must hold for some revocation in the list:
+     *
+     * 1. the same [Revocation.subjectPublicKey] as [RecoveryAuthorization.subjectPublicKey];
+     * 2. a [Revocation.revokedAuthorizationId] equal to
+     *    [RecoveryAuthorization.authorizationId];
+     * 3. a **strictly greater** [Revocation.sequence].
+     *
+     * Both string comparisons are exact — no trimming, no case folding — for the reason
+     * [matchesRequestCode] and [verifyRotationStatement] both give: these are opaque handles the
+     * signer minted, and normalising one merges two things it deliberately kept apart. Condition 1
+     * is what stops a revocation reaching across profiles when an id collides between two of them,
+     * which is why it is checked even though condition 2 usually implies it.
+     *
+     * **Strictly greater, not greater-or-equal**, and the asymmetry is the whole mechanism.
+     * Greater is what lets a revoked device be deliberately brought back — revoked at 7,
+     * re-authorized by a fresh authorization at 8 — and *not* equal-or-lower is what makes a
+     * captured old revocation useless against a newer authorization. Relaxing this to `>=` would
+     * quietly kill every re-issued device, which is why the test suite pins the equal case
+     * separately from the lower one.
+     *
+     * **This makes no authenticity claim whatsoever**, exactly as [parseSignChallengeResult] makes
+     * none. It is set arithmetic over statements the caller must *already* have verified with
+     * [verifyRecoveryAuthorization] and [verifyRevocation]; feeding it unverified statements is
+     * letting an attacker choose the answer, since anyone can mint a `Revocation` object and a
+     * revocation is only meaningful because the subject's own key signed it.
+     *
+     * Two consequences of the rule, documented rather than papered over, because both are states a
+     * signer can mint and neither can be repaired later:
+     *
+     * - An authorization at [Long.MAX_VALUE] is **permanently unrevocable**: no revocation can
+     *   carry a strictly greater sequence. Mint sequences from a small counter, not from a clock
+     *   and never from a saturating one.
+     * - An authorization whose [RecoveryAuthorization.authorizationId] is blank is likewise
+     *   unrevocable, and that is the safer half of a trap worth naming: a blank id must not match
+     *   another blank id, or a revocation that names *nobody* would cancel every such
+     *   authorization at once. "Nothing equals nothing" is the same bug [matchesRequestCode]
+     *   exists to prevent. A blank [RecoveryAuthorization.subjectPublicKey] needs no such guard —
+     *   it is the id that names the target, and an authorization with no subject key cannot have
+     *   been verified by [verifyRecoveryAuthorization] in the first place.
+     *
+     * Never throws. A `null` element in [revocations] — reachable from Java through an unchecked
+     * cast, the [validateEntry] precedent — revokes nothing rather than taking the caller down.
+     *
+     * @param authorization The authorization to ask about. Not modified.
+     * @param revocations   Every revocation this service has been shown for any profile; order and
+     *                      duplicates are irrelevant to the answer.
+     * @return `true` when some revocation cancels it. `false` means only "not cancelled by
+     *         anything in this list" — not that the list is complete, since a revocation nobody
+     *         has relayed here yet cannot be counted.
+     */
+    @Suppress("SENSELESS_COMPARISON")
+    fun isRevoked(authorization: RecoveryAuthorization, revocations: List<Revocation>): Boolean {
+        val id: String? = authorization.authorizationId
+        // The blank guard sits on the *authorization* rather than on the revocation because that
+        // is where it is total: a blank id here can match nothing, whichever way a revocation
+        // spells its own. Guarding only the revocation would leave two blanks matching.
+        if (id == null || id.isBlank()) return false
+        val subject: String? = authorization.subjectPublicKey
+        return revocations.any { revocation ->
+            revocation != null &&
+                revocation.revokedAuthorizationId == id &&
+                revocation.subjectPublicKey == subject &&
+                revocation.sequence > authorization.sequence
+        }
+    }
+
+    /**
+     * The authorizations from [authorizations] that [revocations] has not cancelled — [isRevoked]
+     * applied as a filter, which is the form a service actually wants when it asks "may this
+     * device act?".
+     *
+     * The result is:
+     *
+     * - **order-independent** in what survives: shuffling either list cannot change *which*
+     *   authorizations come back, because the rule compares statement to statement and never
+     *   consults position or arrival time;
+     * - **stable** in what it returns: survivors come back in the order they were given, and a
+     *   duplicated input authorization comes back duplicated, because this filters rather than
+     *   deduplicates. A caller wanting a set should make one;
+     * - **idempotent**: feeding the result back in with the same revocations returns it unchanged.
+     *
+     * A `null` element in either list is dropped rather than returned — handing back a `null`
+     * inside a `List<RecoveryAuthorization>` would push the problem one frame up, into a caller
+     * Kotlin has told there is nothing to check.
+     *
+     * **Verify first.** Like [isRevoked], this claims nothing about authenticity: it is arithmetic
+     * over statements the caller must already have checked with [verifyRecoveryAuthorization] and
+     * [verifyRevocation]. An unverified statement fed in here is an attacker choosing the answer —
+     * a forged revocation locks a real device out, and a forged authorization lets a stranger's
+     * device look live.
+     *
+     * @param authorizations The authorizations this service holds, for one profile or many.
+     * @param revocations    Every revocation it has been shown.
+     * @return The live subset, in input order. Empty when everything is revoked; never `null`.
+     */
+    @Suppress("SENSELESS_COMPARISON")
+    fun liveAuthorizations(
+        authorizations: List<RecoveryAuthorization>,
+        revocations: List<Revocation>,
+    ): List<RecoveryAuthorization> =
+        authorizations.filter { it != null && !isRevoked(it, revocations) }
+
     /**
      * Whether [publicKey] is a key a service could actually store and later verify against:
      * non-blank, standard Base64, and parsing as an X.509 RSA public key.
