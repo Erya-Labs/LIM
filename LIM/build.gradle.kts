@@ -1,8 +1,10 @@
+import com.vanniktech.maven.publish.AndroidSingleVariantLibrary
+
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
     id("org.jetbrains.kotlin.plugin.parcelize")
-    id("maven-publish")
+    alias(libs.plugins.vanniktech.publish)
 }
 
 android {
@@ -41,12 +43,10 @@ android {
         }
     }
 
-    publishing {
-        singleVariant("release"){
-            withSourcesJar()
-            withJavadocJar()
-        }
-    }
+    // Deliberately no `publishing { singleVariant("release") }` block here. The Maven Central
+    // configuration at the bottom of this file declares the release variant, its sources jar
+    // and its javadoc jar itself; declaring the variant in both places makes AGP fail with
+    // "Publishing for variant 'release' is already configured".
 }
 
 dependencies {
@@ -65,15 +65,57 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
 }
 
-afterEvaluate {
-    publishing {
-        publications {
-            create<MavenPublication>("release") {
-                from(components["release"])
-                groupId = "dev.eryalabs.lim"
-                artifactId = "lim"
-                version = "1.0.0"
+// ---------------------------------------------------------------------------------------
+// Maven Central, via the Sonatype Central Portal.
+//
+// Chosen over JitPack because JitPack can only ever serve `com.github.Erya-Labs:LIM`, while
+// every document the project publishes advertises `dev.eryalabs.lim:lim`. Central serves the
+// coordinate as declared, so the docs stay true.
+//
+// A released version on Central is PERMANENT — it can never be altered or withdrawn. Check
+// the POM below before the first release; after that it is public forever.
+//
+// No credential lives in this repository. Gradle reads these from ~/.gradle/gradle.properties:
+//   mavenCentralUsername / mavenCentralPassword       Portal *user token*, not the account login
+//   signingInMemoryKey / signingInMemoryKeyPassword   ASCII-armoured GPG secret key
+// ---------------------------------------------------------------------------------------
+mavenPublishing {
+    configure(AndroidSingleVariantLibrary("release", sourcesJar = true, publishJavadocJar = true))
+
+    coordinates("dev.eryalabs.lim", "lim", "1.0.0")
+
+    pom {
+        name.set("LIM")
+        description.set(
+            "Local Identity Management for Android: personal data stays encrypted on the " +
+                "device, a service receives only an RSA public key, and individual fields " +
+                "are disclosed per request with the user's consent."
+        )
+        inceptionYear.set("2026")
+        url.set("https://github.com/Erya-Labs/LIM")
+
+        licenses {
+            license {
+                name.set("The Apache License, Version 2.0")
+                url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
+                distribution.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
             }
         }
+        developers {
+            // No email address: a POM on Central is public and permanent.
+            developer {
+                id.set("eryalabs")
+                name.set("Erya Labs")
+                url.set("https://eryalabs.dev")
+            }
+        }
+        scm {
+            url.set("https://github.com/Erya-Labs/LIM")
+            connection.set("scm:git:git://github.com/Erya-Labs/LIM.git")
+            developerConnection.set("scm:git:ssh://git@github.com/Erya-Labs/LIM.git")
+        }
     }
+
+    publishToMavenCentral()
+    signAllPublications()
 }
