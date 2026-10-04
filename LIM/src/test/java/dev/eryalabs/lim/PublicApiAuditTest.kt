@@ -216,11 +216,18 @@ class PublicApiAuditTest {
 
         // ── RedactionKt ──────────────────────────────────────────────────
         //
-        // Declared `internal`, which is *not* private in the published jar: Kotlin compiles
-        // top-level internal functions to public JVM methods, so a Java consumer can call
-        // `RedactionKt.redactedValue(...)` even though a Kotlin one cannot see it. That makes
-        // them part of the shipped surface whether or not they were meant to be, so they are
-        // audited like everything else rather than filtered out for looking private in source.
+        // Two of these three are declared `public` in Kotlin as of T19 — `previewedPublicKey`
+        // and `PUBLIC_KEY_PREVIEW_CHARS`, published so the sibling vault can call the truncation
+        // rule instead of keeping a mirror copy of it. They are ordinary published API: stop
+        // rule 10 applies, and renaming one breaks apps compiled against it.
+        //
+        // `redactedValue` is still declared `internal`, which is *not* private in the published
+        // jar: Kotlin compiles top-level internal functions to public JVM methods, so a Java
+        // consumer can call `RedactionKt.redactedValue(...)` even though a Kotlin one cannot see
+        // it. That makes it part of the shipped surface whether or not it was meant to be, so it
+        // is audited like everything else rather than filtered out for looking private in source.
+        // `RedactionVisibilityTest` pins which of the three is which, at the source level —
+        // nothing in the bytecode can tell them apart, which is exactly why this went unnoticed.
         "RedactionKt.redactedValue" to "ToStringRedactionTest: a value is rendered as its length",
         "RedactionKt.previewedPublicKey" to "ToStringRedactionTest: two real public keys are distinguishable in the preview",
         "RedactionKt.PUBLIC_KEY_PREVIEW_CHARS" to "ToStringRedactionTest: the truncation boundary is inclusive",
@@ -471,10 +478,12 @@ class PublicApiAuditTest {
         assertEquals(
             "the audit names members reflection cannot find. For a member of the Kotlin-visible " +
                 "API, removing or renaming it breaks apps compiled against 1.0.0 and is stop " +
-                "rule 10 — fix the code, not this list. The RedactionKt.* entries are the " +
-                "exception: they are `internal`, so they are JVM surface by accident rather " +
-                "than API anybody was offered, and renaming one is an ordinary refactor that " +
-                "should simply be recorded here",
+                "rule 10 — fix the code, not this list. That now includes " +
+                "RedactionKt.previewedPublicKey and RedactionKt.PUBLIC_KEY_PREVIEW_CHARS, which " +
+                "T19 published for the sibling vault to call. RedactionKt.redactedValue is the " +
+                "one remaining exception: it is `internal`, so it is JVM surface by accident " +
+                "rather than API anybody was offered, and renaming it is an ordinary refactor " +
+                "that should simply be recorded here",
             emptyList<String>(),
             stale,
         )
@@ -601,12 +610,21 @@ class PublicApiAuditTest {
                 ),
             ),
         )
-        // Not an oversight, and worth one assertion because it surprises people: `internal` is a
-        // Kotlin-only visibility. These compile to public JVM methods and ship in the AAR, so
-        // Java callers can reach them and the audit has to account for them.
+        // Worth one assertion because the file mixes two cases that look identical from here.
+        // `previewedPublicKey` and `PUBLIC_KEY_PREVIEW_CHARS` are declared `public` (T19) and are
+        // API on purpose; `redactedValue` is declared `internal` and is JVM surface by accident,
+        // because `internal` is a Kotlin-only visibility that still compiles to a public JVM
+        // method and ships in the AAR. Reflection cannot tell the two apart — that is what
+        // `RedactionVisibilityTest` is for — but the audit has to account for all three.
         assertTrue(
-            "Redaction.kt's internal helpers are public in the bytecode and must be audited",
-            publicSurface().any { it.startsWith("RedactionKt.") },
+            "every Redaction.kt helper, published or merely JVM-visible, must be audited",
+            publicSurface().containsAll(
+                setOf(
+                    "RedactionKt.previewedPublicKey",
+                    "RedactionKt.PUBLIC_KEY_PREVIEW_CHARS",
+                    "RedactionKt.redactedValue",
+                ),
+            ),
         )
     }
 

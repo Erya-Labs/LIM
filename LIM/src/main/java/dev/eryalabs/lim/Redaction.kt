@@ -37,8 +37,23 @@ internal fun redactedValue(value: String?): String =
  *
  * `ToStringRedactionTest` pins both halves of that: two real generated keys share the first 44
  * characters, and their previews still differ.
+ *
+ * **Public, and what that does and does not freeze.** The *name and type* of this constant are
+ * published API: stop rule 10 applies, so it may not be renamed or removed. The *value* is not.
+ * 64 is a **log** format — no signature is computed over it, nothing on the wire is framed by it
+ * and no peer parses a preview back — so the number may still be tuned if a longer or shorter
+ * preview turns out to read better. What may not happen is two repositories tuning it
+ * separately: see [previewedPublicKey] for who owns the format.
+ *
+ * One consequence of `const` to know before relying on the number: a consumer's compiler inlines
+ * the literal, so a tuned value reaches an app only when that app *recompiles*. An app still
+ * built against the old value would print a [previewedPublicKey] preview at the new width and its
+ * own `take(PUBLIC_KEY_PREVIEW_CHARS)` at the old one — the same drift, now inside one app. That
+ * is a reason to call the function rather than to slice a key by hand, not a reason to copy the
+ * number; `const` is kept because dropping it would turn this field into a getter and change the
+ * published shape, which is the stop rule 10 this comment is about.
  */
-internal const val PUBLIC_KEY_PREVIEW_CHARS = 64
+public const val PUBLIC_KEY_PREVIEW_CHARS: Int = 64
 
 /**
  * Render a public key truncated but readable.
@@ -47,8 +62,20 @@ internal const val PUBLIC_KEY_PREVIEW_CHARS = 64
  * design hands out freely — a breached service is meant to leak nothing else — and it is what
  * makes a log line identifiable at all. Truncating it keeps the line short; hiding it would
  * make every entry in a log look the same.
+ *
+ * **Published for the vault to call, not to copy.** A vault app prints the same keys into the
+ * same kind of log line as a client does, and before this function was public the only way for it
+ * to match LIM's rendering was to keep its own copy of the truncation rule. Two copies of a format
+ * is one copy that drifts, and when it drifts the same key renders two ways in two apps' logs and
+ * nobody can line them up. **This repository owns the format**: call this function — and read the
+ * boundary off [PUBLIC_KEY_PREVIEW_CHARS] rather than writing 64 — instead of reimplementing it.
+ * The name and signature are now frozen under stop rule 10 like any other public member.
+ *
+ * Deliberately *not* published alongside it: `redactedValue`. It renders a field *value's*
+ * length, which is one app's own data rather than a shared identifier, and nothing outside this
+ * library needs to reproduce it character-for-character.
  */
-internal fun previewedPublicKey(publicKey: String?): String = when {
+public fun previewedPublicKey(publicKey: String?): String = when {
     publicKey == null -> "null"
     publicKey.length <= PUBLIC_KEY_PREVIEW_CHARS -> publicKey
     else -> publicKey.take(PUBLIC_KEY_PREVIEW_CHARS) + "…(${publicKey.length} chars)"
