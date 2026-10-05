@@ -79,6 +79,10 @@ object Utils {
      * No validation happens here: an [Entry] with a blank `id` or `publicKey` is encoded
      * verbatim, and [decodeEntry] on the far side will reject it. Populate both before
      * sending.
+     *
+     * See `ClientIntegrationExampleTest` for this flow written end to end the way an integrator
+     * writes it — sign-up, then query, then login, against one profile, with the refusal case
+     * alongside. It is a test rather than a snippet so it cannot go stale.
      */
     fun createShareIntent(
         context: Context,
@@ -100,6 +104,10 @@ object Utils {
     /**
      * Create an intent that pushes [entry] into the vault app, tagging it with [requestCode]
      * so the vault can echo it back in the result for correlation.
+     *
+     * See `ClientIntegrationExampleTest` for the whole sequence as a test: this call, the vault's
+     * answer, and the [matchesRequestCode] check that keeps it from being read as the answer to a
+     * different request.
      */
     fun createShareIntent(
         context: Context,
@@ -168,6 +176,10 @@ object Utils {
      * Decode the result intent with [parseQueryResult]. A query is a disclosure, not a login:
      * nothing in the answer is signed, so use [createSignChallengeIntent] when you need proof
      * that the holder of [publicKey] is present.
+     *
+     * See `ClientIntegrationExampleTest` for the sequence this call sits in, written as a test —
+     * including the refusal, where a declined query and a disclosure of nothing parse to the same
+     * [QueryResult] and only the result code tells them apart.
      */
     fun createQueryIntent(
         context: Context,
@@ -321,6 +333,10 @@ object Utils {
      * pass the result intent to [parseSignChallengeResult], then authenticate it with
      * [SignChallengeResult.isVerified], handing it this same [publicKey] and [nonce]. Parsing
      * alone proves nothing — it only reports what the vault said.
+     *
+     * See `ClientIntegrationExampleTest` for that order played out as a test — mint the nonce,
+     * keep it, verify against it and against the key you already store — along with the replay it
+     * refuses and the vault-side refusal of a nonce that is really a statement pre-image.
      *
      * @param publicKey   Base64-encoded RSA public key identifying the profile to authenticate.
      * @param nonce       Challenge bytes you generated. Use [generateNonce], which embeds the
