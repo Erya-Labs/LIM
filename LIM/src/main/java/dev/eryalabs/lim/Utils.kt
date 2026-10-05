@@ -12,6 +12,34 @@ import java.security.SecureRandom
 import java.security.Signature
 import java.security.spec.X509EncodedKeySpec
 
+/**
+ * The client half of the LIM protocol: intent builders, result parsers, nonce and statement
+ * helpers, and the verification this library's security rests on.
+ *
+ * **A non-null parameter met with `null` from Java is a programming error, and it throws.**
+ * Every parameter here that is not declared nullable compiles to a `checkNotNullParameter`
+ * intrinsic, and Java honours no Kotlin declaration, so
+ * `Utils.INSTANCE.isNonceFresh(intent.getByteArrayExtra(EXTRA_NONCE), 60_000L)` — the natural
+ * Java spelling, in which an absent extra is `null` — raises a [NullPointerException] rather
+ * than returning `false`. Null-check the extra; do not reach for a fail-closed answer that is
+ * not there. The entry points that *do* accept `null`, because they exist to be handed an
+ * unchecked IPC payload, are exactly these: the `intent` of [parseShareRequest],
+ * [parseQueryRequest], [parseSignChallengeRequest], [parseShareResult], [parseQueryResult],
+ * [parseSignChallengeResult], [describeIntent] and [matchesRequestCode]; the text of
+ * [decodeFields], [decodeEntry] and [parseSignedStatement]; [isStatementPreImage]'s `bytes`;
+ * and [createSignChallengeIntent]'s `nonceFormat`, whose `null` is the default and attaches no
+ * declaration. `NullArgumentTest` measures that split by calling every published parameter
+ * position with `null`, so neither a widening nor a narrowing can happen quietly — it turns that
+ * file's rows red. This paragraph is prose beside the check rather than the check itself, so it
+ * has to be updated alongside it.
+ *
+ * **Neither fact is a statement about the wire format.** Which parameters are declared nullable
+ * is a property of this library's source; what a peer app can put on an intent is a property of
+ * the protocol. Every *value* that arrives over IPC is hostile input and comes back as a
+ * fail-closed answer rather than an exception — that is what the decoders, the parsers and the
+ * verifiers each promise individually. A `null` reference reaching a non-null parameter is a bug
+ * in the calling code on this side of the boundary, which is why it is reported as one instead.
+ */
 object Utils {
 
     const val DEFAULT_ENDEAVOR_PACKAGE = "com.github.adaydreamaway.endeavor"

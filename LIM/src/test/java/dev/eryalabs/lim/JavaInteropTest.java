@@ -5,6 +5,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Application;
@@ -28,6 +29,7 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.SecureRandom;
 import java.security.Signature;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.TreeSet;
@@ -300,6 +302,45 @@ public class JavaInteropTest {
         assertEquals(Long.valueOf(pinned), Utils.INSTANCE.nonceTimestamp(atPinnedClock));
         assertTrue(Utils.INSTANCE.isNonceFresh(atPinnedClock, 1_000L, pinned + 1_000L));
         assertFalse(Utils.INSTANCE.isNonceFresh(atPinnedClock, 1_000L, pinned + 1_001L));
+    }
+
+    // ── Null arguments ───────────────────────────────────────────────────
+
+    /**
+     * One mechanism, two answers — and the half {@code NullArgumentTest} cannot prove.
+     *
+     * Reflection can substitute {@code null} at any position, but it cannot write <em>this</em>:
+     * a {@code null} literal binding to one of several {@code @JvmOverloads} arities, chosen by
+     * javac, at a call site a Java integrator would actually type. The first call below is the
+     * literal shape T21's review found — {@code getByteArrayExtra} on an absent extra is
+     * {@code null}, {@code isNonceFresh}'s {@code nonce} is declared non-null, and Kotlin's
+     * parameter intrinsic makes the difference a crash rather than a {@code false}. The other two
+     * are declared nullable and answer instead of throwing.
+     *
+     * The asymmetry is the point, and it is not an accident: a nonce's <em>value</em> is hostile
+     * input and fails closed, while a {@code null} reference is a bug in the Java code on this
+     * side of the IPC boundary. Whether the first group should join the second is drafted under
+     * "Blocked on human"; this test pins what happens today either way.
+     */
+    @Test
+    public void aNullArgumentEitherThrowsOrFailsClosed() {
+        Intent empty = new Intent();
+        assertNull(
+                "the premise: an absent byte-array extra reads as null, with no warning anywhere",
+                empty.getByteArrayExtra(Utils.EXTRA_NONCE));
+
+        // Exactly as an integrator writes it, and exactly what it does.
+        assertThrows(
+                NullPointerException.class,
+                () -> Utils.INSTANCE.isNonceFresh(empty.getByteArrayExtra(Utils.EXTRA_NONCE), 60_000L));
+
+        // Same null, declared nullable, so the answer is the fail-closed value and the client
+        // app stays up.
+        assertNull(Utils.INSTANCE.parseQueryResult(null));
+        assertEquals(
+                "an empty map and never null, so a Java caller needs no null check either",
+                Collections.<String, TypedField>emptyMap(),
+                Utils.INSTANCE.decodeFields(null));
     }
 
     // ── Statement verification ───────────────────────────────────────────
