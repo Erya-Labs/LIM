@@ -162,6 +162,7 @@ class PublicApiAuditTest {
         "Utils.parseSignChallengeRequest" to "RequestParsingTest: a sign-challenge intent round-trips through parseSignChallengeRequest field-for-field",
         "Utils.matchesRequestCode" to "RequestCodeTest: an echoed request code matches the one that was sent",
         "Utils.validateEntry" to "EntryValidationTest: a well-formed entry reports no problems",
+        "Utils.describeIntent" to "IntentDescriptionTest: a share request names its flow and the entry payload it carries",
         "Utils.encodeFields" to "FieldsCodecTest: round trip preserves every key, value and type",
         "Utils.decodeFields" to "FieldsCodecTest: round trip preserves every key, value and type",
         "Utils.decodeEntry" to "EntryCodecTest: round trip returns a well-formed entry unchanged",
@@ -1409,6 +1410,10 @@ class PublicApiAuditTest {
             "Utils.createSignChallengeIntent(Context, String, byte[], String, String, String): Intent",
             "Utils.decodeEntry(String): Entry",
             "Utils.decodeFields(String): Map<String, TypedField>",
+            // Advisory and diagnostic, the `validateEntry` precedent: it changes what no parser
+            // accepts, nothing in main source calls it, and its *wording* is explicitly not API —
+            // only this name and shape are.
+            "Utils.describeIntent(Intent): String",
             "Utils.encodeFields(Map<String, TypedField>): String",
             "Utils.encodeRecoveryAuthorization(RecoveryAuthorization, byte[]): String",
             "Utils.encodeRevocation(Revocation, byte[]): String",

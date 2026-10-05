@@ -1,7 +1,9 @@
 package dev.eryalabs.lim
 
+import android.content.Context
 import android.content.Intent
 import android.util.Base64
+import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.BeforeClass
@@ -1179,6 +1181,144 @@ class DecoderFuzzTest {
         // of it survives the framing, and a floor here would pin a number that says nothing about
         // safety. The genuine envelope above is what makes this arm non-vacuous.
         println("parseSignedStatement fuzz: $parsedSomething of ${CASES * 3} inputs parsed")
+    }
+
+    /**
+     * The same corpus, into the diagnostic — and the property here is not safety but *agreement*.
+     *
+     * [Utils.describeIntent] names which of LIM's flows its own parsers accept an intent as, and
+     * its KDoc commits to obtaining that set by **calling** the six parsers rather than by
+     * re-deriving the routing rule — a second copy of the share/query disambiguation would be a
+     * copy that drifts from the one `RequestParsingTest` pins in both directions. That commitment
+     * is checkable, and this is where it is checked: for every payload, in every extra position,
+     * the set the line names must be *exactly* the set of parsers returning non-null. A
+     * re-implementation that agreed on the designed inputs would have to agree here on three
+     * thousand nobody designed.
+     *
+     * Two lesser properties ride along: nothing throws — this is the function a client reaches
+     * for when something has already gone wrong, so it must not add a second failure — and the
+     * description is one line, whatever control characters the sender put in the extra.
+     *
+     * The arm rides the existing corpus deliberately: nothing here edits the generator, so
+     * [CORPUS_DIGEST] does not move. The accept-one-genuine floor after the loop is the one every
+     * arm in this file carries — an agreement property is satisfied by a function that names no
+     * flow for anything *and* by parsers that accept nothing, so one genuine intent of each of the
+     * six flows must come back named.
+     */
+    @Test
+    fun `no mutated payload makes describeIntent throw or disagree with the parsers`() {
+        val master = Random(MASTER_SEED)
+        var namedNothing = 0
+        var namedSomething = 0
+
+        repeat(CASES) { index ->
+            val seed = master.nextLong()
+            val case = caseFor(seed)
+
+            fun bail(what: String, cause: Throwable? = null): Nothing =
+                throw AssertionError(report(what, index, seed, case), cause)
+
+            // One intent per extra, plus one share-shaped intent carrying the payload as the
+            // entry alongside a genuine public key. That last shape is not decoration: the
+            // single-extra intents never hold both, so a flow set that had been re-derived as
+            // "a public key is present, therefore a query request" would agree with the parsers
+            // on every one of them. It diverges only where the share/query disambiguation
+            // actually decides something, which is here.
+            val shapes = IntentDescriptionTest.DESCRIBED_EXTRA_KEYS.map { key ->
+                key to Intent().apply { putExtra(key, case.text) }
+            } + ("both" to Intent().apply {
+                putExtra(Utils.EXTRA_ENTRY_JSON, case.text)
+                putExtra(Utils.EXTRA_PUBLIC_KEY, "PUBLIC-KEY-BASE64")
+            })
+
+            shapes.forEach { (key, intent) ->
+                val description = try {
+                    Utils.describeIntent(intent)
+                } catch (t: Throwable) {
+                    bail("describeIntent threw ${t.javaClass.name} with the payload in $key", t)
+                }
+                if (description.any { with(IntentDescriptionTest) { it.splitsALine() } }) {
+                    bail("describeIntent produced more than one line with the payload in $key")
+                }
+                // Bounded output, whatever arrived: the corpus reaches sixteen kilobytes, and
+                // every renderer truncates, counts or previews rather than printing. A line a
+                // client cannot log is not a diagnostic.
+                if (description.length > 4_096) {
+                    bail(
+                        "describeIntent produced ${description.length} characters with the " +
+                            "payload in $key — some renderer is printing its input whole",
+                    )
+                }
+
+                val expected = try {
+                    IntentDescriptionTest.parserFlows(intent)
+                } catch (t: Throwable) {
+                    bail("a parser threw ${t.javaClass.name} with the payload in $key", t)
+                }
+                val named = try {
+                    IntentDescriptionTest.flowsIn(description)
+                } catch (t: Throwable) {
+                    bail("the description has no readable flow set for $key: $description", t)
+                }
+                if (named != expected) {
+                    bail(
+                        "with the payload in $key the description names $named but the parsers " +
+                            "accept $expected — the flow set is not coming from the parsers",
+                    )
+                }
+                if (named.isEmpty()) namedNothing++ else namedSomething++
+            }
+        }
+
+        // Both halves of the agreement must actually occur, or it is an agreement about one
+        // answer: a function and a parser set that both always say "nothing" would otherwise
+        // satisfy every comparison above.
+        assertTrue(
+            "the corpus must produce some descriptions naming no flow at all; got $namedNothing",
+            namedNothing > 0,
+        )
+        assertTrue(
+            "…and some naming at least one, else the agreement is about the empty set only; " +
+                "got $namedSomething",
+            namedSomething > 0,
+        )
+
+        // The accept-one-genuine floor, across all six flows — a diagnostic that named nothing
+        // for anything would satisfy the whole loop above and be no diagnostic at all.
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val entry = Entry("profile-1", mapOf("email" to TypedField("a@b.c", FieldType.EMAIL)), "pk")
+        val fields = Utils.encodeFields(mapOf("email" to TypedField("a@b.c", FieldType.EMAIL)))
+        val genuine = listOf(
+            Utils.createShareIntent(context, entry),
+            Utils.createQueryIntent(context, publicKeyBase64, "req-7"),
+            Utils.createSignChallengeIntent(context, publicKeyBase64, NONCE, "req-9"),
+            Intent().apply {
+                putExtra(Utils.EXTRA_PUBLIC_KEY, publicKeyBase64)
+                putExtra(Utils.EXTRA_FIELDS_JSON, fields)
+            },
+            Intent().apply {
+                putExtra(Utils.EXTRA_QUERY_RESULT_FIELDS, fields)
+                putExtra(Utils.EXTRA_SHARE_REQUEST_CODE, "req-7")
+            },
+            Intent().apply {
+                putExtra(Utils.EXTRA_SIGNATURE, Base64.encodeToString(signature, Base64.DEFAULT))
+            },
+        )
+        val namedByGenuine = genuine.flatMap { intent ->
+            val description = Utils.describeIntent(intent)
+            assertEquals(
+                "a genuine intent's flow set must still agree with the parsers; got $description",
+                IntentDescriptionTest.parserFlows(intent),
+                IntentDescriptionTest.flowsIn(description),
+            )
+            IntentDescriptionTest.flowsIn(description)
+        }.toSet()
+        assertEquals(
+            "every flow must be named by a genuine intent of that flow, else this arm passes " +
+                "against a describeIntent that names nothing",
+            IntentDescriptionTest.ALL_FLOWS,
+            namedByGenuine,
+        )
     }
 
     /**

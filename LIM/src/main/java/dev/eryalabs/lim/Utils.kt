@@ -1683,6 +1683,340 @@ object Utils {
         false
     }
 
+    // ── Diagnostics ───────────────────────────────────────────────────────
+    //
+    // Every parser here fails closed and returns `null`, which is right and tells an integrator
+    // nothing. "Why did `parseQueryResult` return null" is the support question this API
+    // generates — the same argument [verifyRotationStatement] made when it chose a verdict over a
+    // `Boolean`, one layer out — and the answer is nearly always a detail of the intent in front
+    // of them: an extra that is blank rather than absent, a payload filed under the other flow's
+    // key, a request code that became a package name. This renders that detail, redacted.
+
+    /** Rendered for an extra that is not in the bundle at all, under any type. */
+    private const val DESCRIBE_ABSENT = "absent"
+
+    /**
+     * Present but blank. Named separately from [DESCRIBE_ABSENT] because every parser in this
+     * library treats the two alike and nothing else does: an extra that reads `blank` is a sender
+     * that *tried* to say something, which is a different bug from one that said nothing.
+     */
+    private const val DESCRIBE_BLANK = "blank"
+
+    /**
+     * Present under this key, but not as a `String`.
+     *
+     * [presentStringExtra] names this as one of the two hostile shapes it exists for — a peer that
+     * writes `putExtra(key, 7)` reads back as `null` and the parser refuses the intent — and it is
+     * the one state a diagnostic must not collapse into [DESCRIBE_ABSENT], because "you sent the
+     * wrong type" and "you sent nothing" are opposite instructions to the integrator.
+     */
+    private const val DESCRIBE_NOT_TEXT = "present but not text"
+
+    /**
+     * Reading this key threw: an extras bundle referencing a class this process does not have
+     * throws on unparcelling, and the sender chooses what goes in the bundle. Rendered for any
+     * failure out of the read, since a diagnostic cannot usefully classify one it did not survive.
+     */
+    private const val DESCRIBE_UNREADABLE = "unreadable"
+
+    /** A payload or Base64 section that is present and non-blank but could not be read back. */
+    private const val DESCRIBE_UNDECODABLE = "undecodable"
+
+    /**
+     * How much of a short text value [describeIntent] prints verbatim. An action string, a package
+     * name, a request code, `lim-ts1` and `SHA256withRSA` all sit well inside it; a peer that sends
+     * sixteen kilobytes instead gets truncated, because a diagnostic nobody can log is not a
+     * diagnostic.
+     *
+     * Deliberately **not** [PUBLIC_KEY_PREVIEW_CHARS] and not derived from it, despite both being
+     * truncation widths. That one is T19's published rule for a shared identifier, owned by this
+     * repository on behalf of the vault, and a key preview has to stay long enough to be
+     * distinguishable; this one is a private detail of one diagnostic line and may be tuned
+     * without telling anyone. The two numbers differ today (80 against 64) and are free to drift.
+     *
+     * Tuning it up is not free, and the reason is worth stating plainly. Redaction here is chosen
+     * by *key*, so a value that arrives under the wrong key gets this width rather than its own
+     * renderer: a peer that files a public key under [EXTRA_ALGORITHM] has it truncated at 80
+     * instead of previewed at 64, which is cosmetic because a public key is deliberately not
+     * secret — but a buggy vault that files a fields payload or an `Entry.id` under one of the
+     * four verbatim keys would put up to this many characters of personal data on a client's log
+     * line, which is not. That is a misdirected sender rather than a leak by this function, and
+     * fixing it here would mean sniffing every value's shape instead of trusting its key; the
+     * honest mitigation is to keep this number small.
+     */
+    private const val DESCRIBE_TEXT_CHARS = 80
+
+    /**
+     * Every extra this protocol defines, in the order [describeIntent] lists them: the entry
+     * payload, then the public key — the most widely shared extra here, carried by the query
+     * request and by all three results as well as by a sign-challenge request — then the rest of
+     * the sign-challenge flow's values, then the two field payloads, then the correlation token
+     * and the version declaration.
+     *
+     * All of them are listed on every line, including the absent ones. A diagnostic that only
+     * mentioned what was present could not answer the question it exists for, which is almost
+     * always about something that is *missing*.
+     */
+    private val DESCRIBED_EXTRAS = listOf(
+        EXTRA_ENTRY_JSON,
+        EXTRA_PUBLIC_KEY,
+        EXTRA_NONCE,
+        EXTRA_NONCE_FORMAT,
+        EXTRA_SIGNATURE,
+        EXTRA_ALGORITHM,
+        EXTRA_FIELDS_JSON,
+        EXTRA_QUERY_RESULT_FIELDS,
+        EXTRA_SHARE_REQUEST_CODE,
+        EXTRA_PROTOCOL_VERSION,
+    )
+
+    /**
+     * One redacted, human-readable line describing [intent] as this library sees it — the action
+     * and target package, the state of every extra the protocol defines, the protocol version the
+     * peer declared, and **which of LIM's flows this library's own parsers accept it as**.
+     *
+     * Log it when a parser returned `null` and it is not obvious why. The usual answers are all
+     * visible on the line: the extra is `blank` rather than `absent`, the field payload is under
+     * [EXTRA_QUERY_RESULT_FIELDS] when the parser you called reads [EXTRA_FIELDS_JSON], the
+     * package reads `"req-1"` because a request code was passed positionally to
+     * [createShareIntent], or the whole bundle is `unreadable`.
+     *
+     * **The flow list is a set, not an answer, and it is in a fixed order:** `shareRequest`,
+     * `queryRequest`, `signChallengeRequest`, `shareResult`, `queryResult`,
+     * `signChallengeResult`. These envelopes genuinely overlap — a share result carrying a public
+     * key is also a well-formed query request, because the two differ only in which direction they
+     * were travelling and **no parser here reads the action**, which is the only part of an
+     * [Intent] that records it — so a diagnostic that picked one would teach a falsehood. An empty
+     * list is the common and useful case: it means no parser here would accept this intent as
+     * anything.
+     *
+     * The set is obtained by **calling** [parseShareRequest], [parseQueryRequest],
+     * [parseSignChallengeRequest], [parseShareResult], [parseQueryResult] and
+     * [parseSignChallengeResult] and reporting which returned non-null. It is not re-derived: a
+     * second copy of the share/query disambiguation would be a copy that drifts from the one
+     * those parsers pin in both directions, and delegating is the same call
+     * [verifyRotationStatement] makes about [verifySignature].
+     *
+     * **Redaction is [toString]'s policy, not a new one.** A field value never appears: an entry
+     * payload renders as `decoded, 3 fields` or `undecodable` and never its contents or its field
+     * names, a field payload as a count, a nonce and a signature as byte lengths, and a public key
+     * through [previewedPublicKey] rather than a second truncation rule. Anything that would split
+     * a line is replaced with `.`, so one call is one line even when the sender chose otherwise.
+     *
+     * Exactly four values are printed close to verbatim, truncated but not reduced:
+     * [EXTRA_NONCE_FORMAT], [EXTRA_ALGORITHM], [EXTRA_PROTOCOL_VERSION] and
+     * [EXTRA_SHARE_REQUEST_CODE], alongside the action and package. The first three have
+     * vocabularies this protocol defines. The request code is the one judgement call: it is
+     * free-form and client-chosen, so it *could* hold anything — but it is the token the reader of
+     * this line minted and is trying to correlate, and the hazard the line exists to show (a
+     * request code that silently became a package name) is invisible without it. Do not put
+     * personal data in a request code; `Entry.id`, which is under the same client control, is
+     * reduced to its length for exactly that reason.
+     *
+     * **The wording is unstable and must never be parsed.** It is prose for a human to read; the
+     * spelling of the states, the punctuation and the set of sections may all change in any
+     * release, and none of it is wire format. Do not match on it, do not assert on it from another
+     * repository, and never route on it — route on the parser that returned the `null`. The one
+     * structural commitment, so that a human skimming a wrapped log line knows where to look, is
+     * that the bracketed `flows=[…]` section comes **last**.
+     *
+     * **Advisory only**, the [validateEntry] precedent: this changes what no parser accepts,
+     * nothing in this library's main source calls it, and a flow named here is still a flow whose
+     * contents are unverified. `IntentDescriptionTest` pins what this repository relies on.
+     *
+     * `null` is a description rather than an exception, and no value on the line can throw: this
+     * is what a client reaches for when something has *already* gone wrong, so it must not add a
+     * second failure on top. Note where that guarantee comes from, because it is not local: every
+     * extra is read defensively here, but the flow set is the six parsers' own fail-closed
+     * behaviour, pinned by `DecoderFuzzTest`'s arms over the shared corpus. A parser that began
+     * reading an extra without that discipline would break this promise from a distance.
+     */
+    fun describeIntent(intent: Intent?): String {
+        if (intent == null) return "LIM intent: intent=null, flows=[]"
+        val extras = DESCRIBED_EXTRAS.joinToString("; ") { key ->
+            "$key=${intent.describedExtra(key)}"
+        }
+        // `flows=[…]` goes last, and stays last — the one structural promise the KDoc makes. Its
+        // vocabulary is fixed, so a reader who needs the set can take the final bracketed section
+        // without a sender-chosen value — which can contain anything, including these words —
+        // getting in the way first.
+        return oneLine(
+            "LIM intent: action=${describedToken { intent.action }}, " +
+                "package=${describedToken { intent.`package` }}, " +
+                "protocolVersion=${intent.declaredProtocolVersion() ?: "undeclared"}, " +
+                "extras=[$extras], " +
+                "flows=[${acceptedFlows(intent).joinToString(", ")}]",
+        )
+    }
+
+    /**
+     * The action or the package, in the same three states an extra can be in.
+     *
+     * Read through a lambda with the same catch the extras get. Neither property can throw on an
+     * [Intent] that arrived over IPC — unparcelling always yields a plain one — but an in-process
+     * caller can pass a subclass, and "this is the call that cannot add a second failure" is a
+     * weaker promise if it holds only for the extras.
+     */
+    private inline fun describedToken(read: () -> String?): String = try {
+        val raw = read()
+        when {
+            raw == null -> DESCRIBE_ABSENT
+            raw.isBlank() -> DESCRIBE_BLANK
+            else -> describedText(raw)
+        }
+    } catch (_: Exception) {
+        DESCRIBE_UNREADABLE
+    }
+
+    /** Which parsers accept [intent], in [describeIntent]'s documented order. */
+    private fun acceptedFlows(intent: Intent): List<String> = buildList {
+        if (parseShareRequest(intent) != null) add("shareRequest")
+        if (parseQueryRequest(intent) != null) add("queryRequest")
+        if (parseSignChallengeRequest(intent) != null) add("signChallengeRequest")
+        if (parseShareResult(intent) != null) add("shareResult")
+        if (parseQueryResult(intent) != null) add("queryResult")
+        if (parseSignChallengeResult(intent) != null) add("signChallengeResult")
+    }
+
+    /**
+     * One extra's state, in five kinds: [DESCRIBE_ABSENT], [DESCRIBE_BLANK], [DESCRIBE_NOT_TEXT],
+     * [DESCRIBE_UNREADABLE], or a redacted rendering of what it holds.
+     *
+     * Read with `getStringExtra` directly rather than through [presentStringExtra], which returns
+     * `null` for all four of absent, blank, wrong-typed and unreadable — the whole value of this
+     * line is telling them apart. `hasExtra` is what separates the first two of those: a peer that
+     * wrote an `Int` under a key the protocol spells as text is a different bug from a peer that
+     * wrote nothing, and it is one the parsers cannot report because both read back as `null`.
+     */
+    private fun Intent.describedExtra(key: String): String = try {
+        val raw = getStringExtra(key)
+        when {
+            raw != null && raw.isBlank() -> DESCRIBE_BLANK
+            raw != null -> describedValue(key, raw)
+            hasExtra(key) -> DESCRIBE_NOT_TEXT
+            else -> DESCRIBE_ABSENT
+        }
+    } catch (_: Exception) {
+        DESCRIBE_UNREADABLE
+    }
+
+    /**
+     * What a present, non-blank extra is allowed to show about itself.
+     *
+     * The two field payloads report a count rather than `decoded`/`undecodable`, because
+     * [decodeFields] repairs a malformed payload to an empty map instead of refusing it — so
+     * `0 fields` genuinely means "empty, absent-ish or malformed", and claiming to know which
+     * would be a claim this library cannot make. The entry payload *can* say, because
+     * [decodeEntry] fails closed. Neither prints a field *name*: a key is as likely to be
+     * `email` as something the vault invented about one user, and a count answers the question.
+     *
+     * **Every key in [DESCRIBED_EXTRAS] has a deliberate arm here, and the `else` redacts.** The
+     * verbatim renderer is opt-in for exactly the four protocol tokens listed in [describeIntent]'s
+     * KDoc, so a future extra added to that list prints its length until someone decides what it
+     * may show. The alternative ordering — verbatim by default — is how a new extra ends up in a
+     * log line with no diff to notice: the drafted per-field query request under "Blocked on human"
+     * would carry a list of the field names a service asked about, which is precisely the kind of
+     * thing this function must not print by accident. `IntentDescriptionTest` pins that no listed
+     * key reaches this fallback.
+     */
+    private fun describedValue(key: String, raw: String): String = when (key) {
+        EXTRA_ENTRY_JSON ->
+            decodeEntry(raw)?.let { "decoded, ${fieldCount(it.fields.size)}" }
+                ?: DESCRIBE_UNDECODABLE
+
+        EXTRA_PUBLIC_KEY -> previewedPublicKey(raw)
+
+        EXTRA_NONCE, EXTRA_SIGNATURE ->
+            nonEmptyBase64(raw)?.let { "${it.size} bytes" } ?: DESCRIBE_UNDECODABLE
+
+        EXTRA_FIELDS_JSON, EXTRA_QUERY_RESULT_FIELDS -> fieldCount(decodeFields(raw).size)
+
+        EXTRA_NONCE_FORMAT, EXTRA_ALGORITHM, EXTRA_PROTOCOL_VERSION, EXTRA_SHARE_REQUEST_CODE ->
+            describedText(raw)
+
+        else -> redactedValue(raw)
+    }
+
+    /** `1 field`, `3 fields`. Prose, because the line is for a person to read. */
+    private fun fieldCount(count: Int): String = if (count == 1) "1 field" else "$count fields"
+
+    /** A short sender-chosen token, quoted and capped at [DESCRIBE_TEXT_CHARS]. */
+    private fun describedText(text: String): String {
+        if (text.length <= DESCRIBE_TEXT_CHARS) return "\"$text\""
+        // Never cut between a surrogate pair. Half a pair is not a valid string, and a client
+        // logging through a strict encoder can get an exception out of it — the second failure
+        // this function promises not to add on top of the first.
+        val cut =
+            if (text[DESCRIBE_TEXT_CHARS - 1].isHighSurrogate()) DESCRIBE_TEXT_CHARS - 1
+            else DESCRIBE_TEXT_CHARS
+        return "\"${text.take(cut)}\"…(${text.length} chars)"
+    }
+
+    /**
+     * Make the assembled description one loggable line: replace everything that would split it,
+     * and everything that would make it an invalid string, with `.`.
+     *
+     * Applied to the whole line rather than to each value, because the values come from several
+     * renderers and one of them is [previewedPublicKey], whose format this library owns elsewhere
+     * and must not fork here.
+     *
+     * Two classes are replaced, for the same reason — a client must be able to log the result
+     * without the attempt failing:
+     *
+     *  - **Line terminators.** [Char.isISOControl] is not sufficient on its own: it covers `\n`,
+     *    `\r` and the C1 range but not U+2028 LINE SEPARATOR or U+2029 PARAGRAPH SEPARATOR, which
+     *    Unicode defines as line terminators and which `Scanner` and most log viewers break on.
+     *  - **Unpaired surrogates.** A peer can put half a surrogate pair in an extra, and a lone
+     *    surrogate is not a valid encodable string: a client logging through a strict UTF-8 or
+     *    JSON encoder can get an exception out of it, which is exactly the second failure this
+     *    function promises not to add on top of the first. A *well-formed* pair passes through
+     *    untouched, so a legitimate astral character — an emoji in a request code — still renders.
+     *
+     * What deliberately survives: printable non-ASCII, including `…`, which this function's own
+     * truncation emits — and including the bidi controls U+202A..U+202E, which can visually
+     * reorder a rendered line but neither split it nor make it unencodable. Stripping those is a
+     * presentation policy for whatever displays the log rather than a property of this string, and
+     * a diagnostic that silently rewrote more of a sender's value than it had to would be lying
+     * about what arrived.
+     */
+    private fun oneLine(text: String): String {
+        if (text.none { it.splitsALine() || it.isSurrogate() }) return text
+        return buildString(text.length) {
+            var index = 0
+            while (index < text.length) {
+                val char = text[index]
+                val paired = char.isHighSurrogate() &&
+                    index + 1 < text.length &&
+                    text[index + 1].isLowSurrogate()
+                when {
+                    paired -> {
+                        append(char)
+                        append(text[index + 1])
+                        index++
+                    }
+
+                    char.splitsALine() || char.isSurrogate() -> append('.')
+                    else -> append(char)
+                }
+                index++
+            }
+        }
+    }
+
+    /**
+     * Whether this character would end the line a description is written on.
+     *
+     * **The two comparands on the next line are literal U+2028 and U+2029**, not escapes, which is
+     * a wart worth naming rather than leaving for a reader to squint at: a line terminator sitting
+     * in a source file is one an editor, a diff tool or a copy-paste can silently normalise away,
+     * and the predicate would then quietly stop covering the characters it exists for. The nearby
+     * tests spell their own control characters numerically for that reason. Rewriting these two as
+     * `code == 0x2028 || code == 0x2029` is a safe, behaviour-preserving cleanup for whoever next
+     * has an editor that can be trusted to leave them alone.
+     */
+    private fun Char.splitsALine(): Boolean =
+        isISOControl() || this == ' ' || this == ' '
+
     // ── Typed-field (de)serialization ─────────────────────────────────────
 
     /**
