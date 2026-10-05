@@ -39,6 +39,24 @@ import java.security.spec.X509EncodedKeySpec
  * fail-closed answer rather than an exception — that is what the decoders, the parsers and the
  * verifiers each promise individually. A `null` reference reaching a non-null parameter is a bug
  * in the calling code on this side of the boundary, which is why it is reported as one instead.
+ *
+ * **Every function here is stateless and safe to call from any thread, concurrently.** That is not
+ * a convenience — an Android library is called from a binder thread while the main thread parses a
+ * result, which is where the reference vault's handlers sit, and an integrator needs to be told.
+ * It holds because each call builds its own `Gson`, `KeyFactory` and `Signature` rather than
+ * sharing one: [java.security.Signature] and [java.security.KeyFactory] carry per-operation state
+ * and are not thread-safe, so two concurrent verifications sharing one instance would interleave
+ * `initVerify`/`update`/`verify` and could return each other's answers. `ThreadSafetyTest` is the
+ * check, and it is primarily a *structural* one — it snapshots the non-constant fields of this
+ * whole file, the object and its nested classes and the file facade alike, so hoisting a shared
+ * instance for speed fails a test by name instead of becoming an intermittent wrong `true`.
+ *
+ * **The one limit: this library does not copy what a caller hands it.** A `ByteArray` passed to
+ * [verifySignature], [isStatementPreImage] or [encodeRotationStatement] is read in place, so a
+ * caller mutating one while another thread is inside the call gets exactly what it asked for. The
+ * same goes for an [android.content.Intent]: two threads parsing one that has not been read yet
+ * race inside `Bundle.unparcel`, which is Android's object and not this library's.
+ * Hand over arguments you are finished with, and read a result intent once before sharing it.
  */
 object Utils {
 
