@@ -12,6 +12,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
+import java.lang.reflect.Method
 import java.lang.reflect.Modifier
 import java.lang.reflect.Type
 import java.net.JarURLConnection
@@ -440,15 +441,28 @@ class PublicApiAuditTest {
     private fun render(type: Type): String = PACKAGE_QUALIFIER.replace(type.typeName, "")
 
     /**
+     * What counts as published API, in one place.
+     *
+     * Synthetic and bridge methods are the noise the Kotlin compiler adds for its own use: the
+     * `$default` methods carrying default-argument values — public *and* static, which is why
+     * this filter matters to T21's static-method control below as much as to the two listings —
+     * and the covariant bridges a data class generates. Nobody writes against those, and they
+     * move with the compiler rather than with this library.
+     *
+     * Extracted rather than copied because three tests now ask the same question, and a filter
+     * with three copies is a filter that answers differently in each.
+     */
+    private fun Method.isPublishedApi(): Boolean =
+        Modifier.isPublic(modifiers) && !isSynthetic && !isBridge
+
+    /**
      * Public members as a Java consumer sees them, minus the noise the Kotlin compiler adds for
-     * its own use. Synthetic and bridge members are the `$default` overloads carrying
-     * default-argument values and the covariant bridges a data class generates; nobody writes
-     * against those, and they move with the compiler rather than with this library.
+     * its own use. See [isPublishedApi].
      */
     private fun publicSurface(): Set<String> = types.flatMap { type ->
         val name = type.name.substringAfterLast('.')
         val methods = type.declaredMethods
-            .filter { Modifier.isPublic(it.modifiers) && !it.isSynthetic && !it.isBridge }
+            .filter { it.isPublishedApi() }
             .map { "$name.${it.name}" }
         val fields = type.declaredFields
             .filter { Modifier.isPublic(it.modifiers) && !it.isSynthetic }
@@ -562,7 +576,7 @@ class PublicApiAuditTest {
         val actual = types.flatMap { type ->
             val name = type.name.substringAfterLast('.')
             val methods = type.declaredMethods
-                .filter { Modifier.isPublic(it.modifiers) && !it.isSynthetic && !it.isBridge }
+                .filter { it.isPublishedApi() }
                 .map { m ->
                     val params = m.genericParameterTypes.joinToString(", ", transform = ::render)
                     "$name.${m.name}($params): ${render(m.genericReturnType)}"
@@ -579,6 +593,125 @@ class PublicApiAuditTest {
                 "1.0.0 — see stop rule 10",
             SIGNATURES,
             actual,
+        )
+    }
+
+    /**
+     * **`Utils` exposes no static method, and that is a compatibility guarantee.**
+     *
+     * `@JvmOverloads` (T21) is additive: it adds shorter arities and leaves the full-arity method
+     * exactly where it was. `@JvmStatic` is not, and on a *named* object — not a companion — it
+     * is actively destructive: it **replaces** the instance method with a static one, so every
+     * already-compiled consumer's `invokevirtual` on `Utils.INSTANCE` becomes a
+     * `NoSuchMethodError`. That is the binary break already logged for `shareEntry`, and stop
+     * rule 10's "do not remove existing public members" in its most literal form. Whether to
+     * take it anyway — in exchange for dropping the `INSTANCE.` prefix a Java integrator writes
+     * — is recorded under "Blocked on human".
+     *
+     * This assertion is what makes that decision enforceable rather than advisory. The
+     * signature snapshot below cannot do it: it renders `name(params): return` and never the
+     * modifiers, so `@JvmStatic` would move no line in it.
+     *
+     * [isPublishedApi] is doing real work here, not tidying. The `$default` methods Kotlin emits
+     * for every defaulted parameter are public *and* static, and there are a dozen of them on
+     * `Utils`; an unfiltered assertion would fail on arrival, which for a control a 3am run
+     * meets is the worst possible outcome.
+     */
+    @Test
+    fun `every published method on Utils is an instance method`() {
+        val published = Utils::class.java.declaredMethods.filter { it.isPublishedApi() }
+
+        // Non-vacuity, since everything below is a filter over this list: a predicate that
+        // excluded everything would make the assertion trivially true.
+        assertTrue(
+            "the published-API filter found only ${published.size} methods on Utils; it is " +
+                "excluding real API and this control proves nothing",
+            published.size > 30,
+        )
+        assertTrue(
+            "createShareIntent must survive the filter, or it is removing the very members " +
+                "T21 annotated",
+            published.any { it.name == "createShareIntent" },
+        )
+
+        val statics = published
+            .filter { Modifier.isStatic(it.modifiers) }
+            .map { "${it.name}(${it.parameterCount})" }
+            .sorted()
+
+        assertEquals(
+            "a published method on Utils became static. @JvmStatic on a named object replaces " +
+                "the instance method rather than adding to it, so this breaks every app " +
+                "compiled against 1.0.0 — see stop rule 10 and the blocked @JvmStatic item",
+            emptyList<String>(),
+            statics,
+        )
+    }
+
+    /**
+     * Which arities each defaulted `Utils` function actually publishes — the mechanical form of
+     * "`@JvmOverloads` added and removed nothing".
+     *
+     * Read as a pair of claims per line: the **largest** number is the full-arity method a
+     * consumer compiled against 1.0.0 calls, and it must still be there; the smaller ones are
+     * what T21 added for Java, and a Java caller writes the smallest. Asserted by parameter
+     * count rather than by rendered signature so it stays legible next to the snapshot, which
+     * says the same thing in 11 more lines and sorted alphabetically.
+     *
+     * `createShareIntent` is the interesting line. Three arities — 2, 3 and 4 — and *one* method
+     * at arity 3, not two: the `requestCode` overload cannot carry `@JvmOverloads`, because its
+     * generated three-argument form would be `(Context, Entry, String)`, byte-for-byte the JVM
+     * signature the `targetPackage` overload already occupies. That is a platform declaration
+     * clash and does not compile. `JvmOverloadsTest` pins the hazard that leaves behind.
+     *
+     * **What it cannot see**, recorded the way the snapshot records its own blind spots: a
+     * defaulted function added later and never annotated. It publishes one arity, so it appears
+     * neither in `expected` nor in `multiArity` and nothing here fails — the omission is
+     * invisible precisely because the omission is the bug. Catching it needs Kotlin's
+     * default-parameter metadata, which means `kotlin-reflect`, which is a new dependency and a
+     * human decision under stop rule 5. So this test guards the annotations that exist; a new
+     * one still relies on whoever adds the function.
+     */
+    @Test
+    fun `every defaulted Utils function publishes its shorter arities and keeps its full one`() {
+        val arities: Map<String, List<Int>> = Utils::class.java.declaredMethods
+            .filter { it.isPublishedApi() }
+            .groupBy { it.name }
+            .mapValues { (_, overloads) -> overloads.map { it.parameterCount }.sorted() }
+
+        val expected = mapOf(
+            "shareDataAction" to listOf(0, 1),
+            "signChallengeAction" to listOf(0, 1),
+            // 2 generated, 3 the targetPackage overload, 4 the requestCode one. No second 3.
+            "createShareIntent" to listOf(2, 3, 4),
+            "shareEntry" to listOf(2, 3),
+            "createQueryIntent" to listOf(3, 4),
+            "generateNonce" to listOf(0, 1, 2),
+            "isNonceFresh" to listOf(2, 3),
+            "createSignChallengeIntent" to listOf(4, 5, 6),
+            "verifyRotationStatement" to listOf(3, 4),
+        )
+
+        assertEquals(
+            "the published arities of a defaulted function changed. An added shorter arity is " +
+                "fine; a missing largest one is a removed method and breaks apps compiled " +
+                "against 1.0.0 — see stop rule 10",
+            expected,
+            expected.keys.associateWith { arities[it] },
+        )
+
+        // The other direction, and it has to be a genuinely different question or it is a dead
+        // assertion: "is every expected name still on Utils" is already answered above, since a
+        // missing name maps to `null` and fails the comparison. The gap that is *not* covered
+        // above is a function annotated later and never listed here, which would quietly leave
+        // the only per-arity expectation in the suite incomplete. Every multi-arity name on
+        // `Utils` can only have got that way through `@JvmOverloads`, so every one must appear.
+        val multiArity = arities.filterValues { it.size > 1 }.keys
+        assertEquals(
+            "a Utils function publishes several arities without being listed above; it was " +
+                "annotated with @JvmOverloads and this expectation was not updated",
+            emptySet<String>(),
+            multiArity - expected.keys,
         )
     }
 
@@ -1252,14 +1385,27 @@ class PublicApiAuditTest {
             "Utils.STATEMENT_RECOVER_V1: String",
             "Utils.STATEMENT_REVOKE_V1: String",
             "Utils.STATEMENT_ROTATE_V1: String",
+            // T21 added `@JvmOverloads` to every defaulted function in `Utils` bar one, so each
+            // now publishes its shorter arities alongside the full one a Kotlin caller gets.
+            // Every line it added is a *new* arity; not one existing line moved, which is the
+            // mechanical form of "additive only". `every defaulted Utils function publishes its
+            // shorter arities and keeps its full one` says the same thing by parameter count.
+            "Utils.createQueryIntent(Context, String, String): Intent",
             "Utils.createQueryIntent(Context, String, String, String): Intent",
-            // Two overloads, listed separately. A bare-name manifest cannot tell them apart,
-            // which is the gap this snapshot exists to cover.
+            // Three arities and two source functions. A bare-name manifest cannot tell them
+            // apart, which is the gap this snapshot exists to cover — and arity 3 is a single
+            // method, because the `requestCode` overload's generated three-argument form would
+            // be exactly this signature. `@JvmOverloads` on it is a platform declaration clash
+            // and does not compile, so a Java caller still spells its `targetPackage` out.
+            "Utils.createShareIntent(Context, Entry): Intent",
             "Utils.createShareIntent(Context, Entry, String): Intent",
             "Utils.createShareIntent(Context, Entry, String, String): Intent",
             // T12 widened this with a defaulted `nonceFormat: String?` — an addition, which
-            // stop rule 10 permits; the pre-T12 arity is gone from the *Kotlin* signature
-            // (defaults compile to one method plus a $default bridge, not overloads).
+            // stop rule 10 permits; the pre-T12 arity came back as a *generated* overload under
+            // T21 rather than as the Kotlin signature (defaults compile to one method plus a
+            // $default bridge, and `@JvmOverloads` adds the shorter arities on top).
+            "Utils.createSignChallengeIntent(Context, String, byte[], String): Intent",
+            "Utils.createSignChallengeIntent(Context, String, byte[], String, String): Intent",
             "Utils.createSignChallengeIntent(Context, String, byte[], String, String, String): Intent",
             "Utils.decodeEntry(String): Entry",
             "Utils.decodeFields(String): Map<String, TypedField>",
@@ -1267,7 +1413,10 @@ class PublicApiAuditTest {
             "Utils.encodeRecoveryAuthorization(RecoveryAuthorization, byte[]): String",
             "Utils.encodeRevocation(Revocation, byte[]): String",
             "Utils.encodeRotationStatement(RotationStatement, byte[]): String",
+            "Utils.generateNonce(): byte[]",
+            "Utils.generateNonce(SecureRandom): byte[]",
             "Utils.generateNonce(SecureRandom, long): byte[]",
+            "Utils.isNonceFresh(byte[], long): boolean",
             "Utils.isNonceFresh(byte[], long, long): boolean",
             // Set arithmetic, not verification: neither takes a key or a signature, and the
             // absence is the contract — the caller must have verified the statements already.
@@ -1286,14 +1435,18 @@ class PublicApiAuditTest {
             "Utils.recoveryAuthorizationBytes(RecoveryAuthorization): byte[]",
             "Utils.revocationBytes(Revocation): byte[]",
             "Utils.rotationStatementBytes(RotationStatement): byte[]",
+            "Utils.shareDataAction(): String",
             "Utils.shareDataAction(String): String",
+            "Utils.shareEntry(Context, Entry): boolean",
             "Utils.shareEntry(Context, Entry, String): boolean",
+            "Utils.signChallengeAction(): String",
             "Utils.signChallengeAction(String): String",
             "Utils.validateEntry(Entry): List<String>",
             // Neither takes a clock, and the absence is the design: an authorization declares no
             // expiry, and a revocation that could go stale would un-revoke a stolen device.
             "Utils.verifyRecoveryAuthorization(RecoveryAuthorization, byte[], String): StatementVerdict",
             "Utils.verifyRevocation(Revocation, byte[], String): StatementVerdict",
+            "Utils.verifyRotationStatement(RotationStatement, byte[], String): StatementVerdict",
             "Utils.verifyRotationStatement(RotationStatement, byte[], String, long): StatementVerdict",
             "Utils.verifySignature(String, byte[], byte[]): boolean",
         )
