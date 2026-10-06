@@ -61,6 +61,16 @@ import java.security.SecureRandom
  * The other half of this — the literal Java call, which reflection cannot write because
  * reflection has no compile-time overload resolution and no `null` literal binding to one of
  * several arities — is in `JavaInteropTest`.
+ *
+ * **And the other half of the hostile surface, which this file deliberately does not cover.**
+ * `null` is one way an argument can be hostile; the rest is a non-null reference carrying contents
+ * nobody designed — empty, oversized, control-charactered, type-confused, or a `null` *inside* a
+ * collection whose declared element type forbids one. `PublishedSurfaceFuzzTest` owns that half
+ * over the same enumeration: it draws hostile values by parameter type for every published method
+ * on `Utils`, and its own third assertion is that the set it invoked equals the published set. The
+ * two files split on the value, not on the member, and neither repeats the other: every argument
+ * here is `null` or a well-formed sample, and no *argument* there is ever `null` — only the
+ * contents of one.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
