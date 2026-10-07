@@ -32,8 +32,12 @@ import java.security.Signature
  * stale the moment the API moves — so it is written as a test instead, the same reason
  * `MigrationEndToEndTest` exists for the migration flow.
  *
- * Referenced from the KDoc of [Utils.createShareIntent] (both overloads),
- * [Utils.createQueryIntent] and [Utils.createSignChallengeIntent].
+ * Referenced from the KDoc of the client-side builders — [Utils.createShareIntent] (both
+ * overloads), [Utils.createQueryIntent], [Utils.createSignChallengeIntent] — and from the
+ * vault-side ones its own fixture vault answers with: [Utils.createShareResultIntent],
+ * [Utils.createQueryResultIntent] and [Utils.createSignChallengeResultIntent], each in the
+ * request-taking overload. The reference runs both directions, which is the point: the one
+ * runnable example of a vault answering a request must not teach hand-written extras.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -110,9 +114,10 @@ class ClientIntegrationExampleTest {
      * A vault holding one profile, with a locally generated JCE keypair standing in for the
      * Keystore key a real vault would never let out of the device.
      *
-     * LIM's request parsers on the way in and LIM's own `EXTRA_*` constants on the way out: a
-     * vault that hand-reads an extra is a vault that drifts from the client, which is the whole
-     * reason both halves of the wire format live in this library.
+     * LIM's request parsers on the way in and LIM's result builders on the way out, each answer
+     * built from the request it answers: a vault that hand-writes an extra is a vault that drifts
+     * from the client, which is the whole reason both halves of the wire format live in this
+     * library. The one hand-built intent left is [decline], and it says why.
      */
     private class Vault(
         private val keyPair: KeyPair,
@@ -157,12 +162,12 @@ class ClientIntegrationExampleTest {
                 publicKey = publicKey,
             )
             stored = created
+            // The request goes in so the correlation token comes out; the key and the fields are
+            // the vault's own, passed explicitly. `createShareResultIntent` reads nothing else off
+            // the request — notably not `request.entry.publicKey`, which is the client's.
             return VaultAnswer(
                 Activity.RESULT_OK,
-                answer(request.requestCode) {
-                    putExtra(Utils.EXTRA_PUBLIC_KEY, publicKey)
-                    putExtra(Utils.EXTRA_FIELDS_JSON, Utils.encodeFields(created.fields))
-                },
+                Utils.createShareResultIntent(request, publicKey, created.fields),
             )
         }
 
@@ -174,12 +179,12 @@ class ClientIntegrationExampleTest {
             if (held == null || !consents) {
                 return VaultAnswer(Activity.RESULT_CANCELED, decline(request.requestCode))
             }
+            // The query builder, not the share one: a disclosure's fields travel under
+            // `extra_query_result_fields` and the two keys are not interchangeable. Choosing
+            // between them by hand is the mistake this pair of functions exists to remove.
             return VaultAnswer(
                 Activity.RESULT_OK,
-                answer(request.requestCode) {
-                    putExtra(Utils.EXTRA_PUBLIC_KEY, publicKey)
-                    putExtra(Utils.EXTRA_QUERY_RESULT_FIELDS, Utils.encodeFields(held))
-                },
+                Utils.createQueryResultIntent(request, publicKey, held),
             )
         }
 
@@ -203,31 +208,32 @@ class ClientIntegrationExampleTest {
                 update(request.nonce)
                 sign()
             }
+            // The raw bytes go in and the builder does the Base64; `algorithm` is passed because
+            // it is part of this answer's shape, not because anything honours it — `isVerified`
+            // hardcodes `SHA256withRSA`. The fields are the disclosure a sign-challenge answer
+            // carries alongside the proof, under this flow's own `extra_fields_json`; they are
+            // unverified until the client's own `isVerified` says otherwise. The nonce is read off
+            // the request here and nowhere else: the builder never signs anything.
             return VaultAnswer(
                 Activity.RESULT_OK,
-                answer(request.requestCode) {
-                    putExtra(Utils.EXTRA_SIGNATURE, Base64.encodeToString(signature, Base64.DEFAULT))
-                    putExtra(Utils.EXTRA_ALGORITHM, SIGN_ALGORITHM)
-                    // A sign-challenge answer carries the disclosure alongside the proof — that is
-                    // what `EXTRA_FIELDS_JSON` is for on this flow. It is unverified until the
-                    // client's own `isVerified` says otherwise.
-                    putExtra(Utils.EXTRA_FIELDS_JSON, Utils.encodeFields(held.fields))
-                },
+                Utils.createSignChallengeResultIntent(request, signature, held.fields, SIGN_ALGORITHM),
             )
         }
-
-        /** Every successful answer: the flow's own extras, the echoed code, and the version. */
-        private fun answer(requestCode: String?, extras: Intent.() -> Unit): Intent =
-            Intent().apply {
-                extras()
-                putExtra(Utils.EXTRA_PROTOCOL_VERSION, Utils.PROTOCOL_VERSION.toString())
-                requestCode?.let { putExtra(Utils.EXTRA_SHARE_REQUEST_CODE, it) }
-            }
 
         /**
          * A refusal, as a vault actually sends one today: `RESULT_CANCELED` carrying the echoed
          * request code and nothing else. Not an empty intent — correlation has to survive a
          * refusal or a client cannot tell which request was refused.
+         *
+         * **Hand-built on purpose, and the one intent in this fixture that is.** Every result
+         * builder in this library writes `extra_protocol_version` unconditionally — that echo is
+         * the point of them, since it is what lets a client tell a vault that honoured a modern
+         * request from one that ignored what it did not know. A refusal honoured nothing, so
+         * routing one through a builder would attach a protocol version to a refusal: a change to
+         * the wire, not a tidy-up. There is no refusal builder to call, and whether there should
+         * be one is drafted under "Blocked on human" because it is a protocol decision. The
+         * negative control in scene four pins today's shape so the question has to be answered
+         * rather than assumed.
          */
         private fun decline(requestCode: String?): Intent = Intent().apply {
             requestCode?.let { putExtra(Utils.EXTRA_SHARE_REQUEST_CODE, it) }
@@ -320,6 +326,11 @@ class ClientIntegrationExampleTest {
         // The answer carries the disclosure alongside the proof, and the order matters: these
         // fields were unverified bytes from another app until the line above returned an account.
         assertEquals(SHARED_EMAIL, loginResult?.fields?.get("email")?.value)
+        // Declared, not honoured — `isVerified` hardcodes the algorithm and never reads this. It is
+        // asserted anyway because it is the one extra on this flow no other test in this file
+        // reads: a vault author copying the login scene and omitting it would delete
+        // `extra_algorithm` from the published example with every other assertion still green.
+        assertEquals("the vault declares what it signed with", SIGN_ALGORITHM, loginResult?.algorithm)
         // Freshness is a separate question from the signature, and the client owns it: the nonce
         // carries its own timestamp, so there is no server state to keep.
         assertTrue("the challenge is still inside its window", Utils.isNonceFresh(nonce, 60_000L))
@@ -349,6 +360,15 @@ class ClientIntegrationExampleTest {
         assertTrue(Utils.matchesRequestCode(declined.data, QUERY_CODE))
         // There is no signature to carry, so there is no sign-challenge result at all.
         assertNull(Utils.parseSignChallengeResult(declined.data))
+        // The boundary the successful paths below do *not* cross, pinned as a wire literal rather
+        // than described: a refusal carries the echoed code and nothing else. Every result builder
+        // in this library writes `extra_protocol_version` unconditionally and on purpose, so
+        // routing a refusal through one would attach a protocol version to a refusal — a wire
+        // change. This is the assertion a future "use a builder everywhere" refactor goes red on.
+        assertFalse(
+            "a refusal declares no protocol version",
+            declined.data!!.hasExtra("extra_protocol_version"),
+        )
 
         // And the trap. A decline parses into a perfectly good `QueryResult` with no fields —
         // identical to a vault that consented and disclosed nothing. The empty-envelope guard only

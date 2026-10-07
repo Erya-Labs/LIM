@@ -1671,6 +1671,9 @@ object Utils {
      * vault acknowledges is what the vault stored, so [publicKey] and [fields] stay explicit —
      * echoing the request's own contents would let the client decide what its answer says.
      *
+     * `ClientIntegrationExampleTest` is the runnable example, and it shows both halves: its
+     * fixture vault answers the sign-up scene with this function.
+     *
      * @param request   The request this result answers, as [parseShareRequest] returned it. Only
      *                  [ShareRequest.requestCode] is read; a `null` or blank one attaches nothing,
      *                  exactly as passing `null` to the sibling does.
@@ -1693,6 +1696,9 @@ object Utils {
      * rule exists for: that key is the one the caller asked about, so echoing it automatically
      * would let the caller choose the identifier naming its own disclosure. The key a result
      * names must be the one the vault holds, which is why [publicKey] is still required here.
+     *
+     * `ClientIntegrationExampleTest` is the runnable example, and it shows both halves: its
+     * fixture vault answers the query scene with this function.
      *
      * @param request   The request this result answers, as [parseQueryRequest] returned it. Only
      *                  [QueryRequest.requestCode] is read.
@@ -1717,6 +1723,10 @@ object Utils {
      * [SignChallengeRequest.nonce] with the private key the vault holds, and nothing here checks
      * that it was. A convenience that signed the request's nonce for you would be this library
      * holding a private key, which it does not do.
+     *
+     * `ClientIntegrationExampleTest` is the runnable example, and it shows both halves: its
+     * fixture vault answers the login scene with this function, signing the request's nonce
+     * itself — and refusing first when [isStatementPreImage] says those bytes are a statement.
      *
      * @param request   The request this result answers, as [parseSignChallengeRequest] returned
      *                  it. Only [SignChallengeRequest.requestCode] is read.
