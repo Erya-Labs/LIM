@@ -239,6 +239,37 @@ class PublishedSurfaceFuzzTest {
     private fun hostileRevocation(rnd: Random) =
         Revocation(text(rnd), text(rnd), long(rnd), long(rnd))
 
+    /**
+     * The three parsed-request types, hostile — T29's request overloads take one each, and a
+     * vault reaches them with whatever [Utils.parseShareRequest] and its siblings handed back.
+     *
+     * Built from this file's **own** corpus draws, [text] and [long], and no new corpus entry:
+     * the digest below is computed over the static `corpusText` and `corpusLongs` lists rather
+     * than over the draw sequence, so these vectors move it by nothing — and adding entries would
+     * put the every-entry-is-drawn floors at risk for no gain.
+     *
+     * **Wider than the parser in one direction and narrower in another, both stated.** A real
+     * parser returns a `requestCode` that is `null` or non-blank and never blank, and a `nonce`
+     * that is never empty — this provider produces both of those, because a vault can construct
+     * one of these itself and `ShareRequest` is a published constructor with no validation in
+     * it. What it does *not* produce is the `null` `requestCode`, since [text] is non-null by
+     * construction and adding a conditional draw would shift the draw sequence and so the corpus
+     * reach floors below. `ResultBuilderTest`'s codeless controls own that shape, over all three
+     * flows, through the parsers rather than around them.
+     *
+     * `protocolVersion` is a corpus `long` truncated to `Int`, so the saturating bounds reach it
+     * as `0` and `-1` rather than not at all. It is a declaration the client made and nothing
+     * here honours it, which is exactly why it must not crash a builder that ignores it.
+     */
+    private fun hostileShareRequest(rnd: Random) =
+        ShareRequest(hostileEntry(rnd), text(rnd), long(rnd).toInt())
+
+    private fun hostileQueryRequest(rnd: Random) =
+        QueryRequest(text(rnd), text(rnd), long(rnd).toInt())
+
+    private fun hostileSignChallengeRequest(rnd: Random) =
+        SignChallengeRequest(text(rnd), text(rnd).toByteArray(), text(rnd), text(rnd), long(rnd).toInt())
+
     private fun rawOf(type: Type): Class<*>? = when (type) {
         is ParameterizedType -> type.rawType as? Class<*>
         is Class<*> -> type
@@ -289,6 +320,9 @@ class PublishedSurfaceFuzzTest {
             RotationStatement::class.java -> hostileRotation(rnd)
             RecoveryAuthorization::class.java -> hostileAuthorization(rnd)
             Revocation::class.java -> hostileRevocation(rnd)
+            ShareRequest::class.java -> hostileShareRequest(rnd)
+            QueryRequest::class.java -> hostileQueryRequest(rnd)
+            SignChallengeRequest::class.java -> hostileSignChallengeRequest(rnd)
             Map::class.java -> hostileFields(rnd)
             Intent::class.java -> intentFor(intentShapes[rnd.nextInt(intentShapes.size)], text(rnd))
             List::class.java -> hostileList(type, rnd)
@@ -1030,7 +1064,9 @@ class PublishedSurfaceFuzzTest {
         private const val FUZZ_CLOCK = 1_770_000_000_000L
 
         /**
-         * Below the measured 47, so that *adding* a published member does not fail this — the
+         * Below the measured 64 — 47 when this file was written, plus T28's ten result-builder
+         * arities and T29's seven request overloads — so that *adding* a published member does
+         * not fail this — the
          * invoked-set equality is what notices that — while a filter drifting towards the empty
          * set does. The actual is printed on every run.
          */
@@ -1056,6 +1092,14 @@ class PublishedSurfaceFuzzTest {
             RotationStatement::class.java,
             RecoveryAuthorization::class.java,
             Revocation::class.java,
+            // T29's request overloads. Until these were added, the three parsed-request types
+            // were parameter types this provider had no vector for, so all seven of those methods
+            // landed in `uncovered` and the invoked-set equality failed naming each method and
+            // each rendered type — the `java.io.File` plant T27 wrote that assertion for, met for
+            // the first time by a real change.
+            ShareRequest::class.java,
+            QueryRequest::class.java,
+            SignChallengeRequest::class.java,
             Map::class.java,
             Intent::class.java,
             List::class.java,

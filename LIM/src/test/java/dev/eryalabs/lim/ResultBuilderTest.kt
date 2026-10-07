@@ -1,7 +1,9 @@
 package dev.eryalabs.lim
 
+import android.content.Context
 import android.content.Intent
 import android.util.Base64
+import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -84,6 +86,16 @@ class ResultBuilderTest {
      * *which key* the payload lands under and that it round-trips.
      */
     private val fieldsJson = Utils.encodeFields(fields)
+
+    /**
+     * Needed only by the request-overload section below, which builds its requests with the same
+     * client-side builders an integrator uses rather than by hand — that is the whole point of
+     * going through a round trip instead of constructing a [QueryRequest] directly.
+     */
+    private val context: Context = ApplicationProvider.getApplicationContext()
+
+    /** A pushable entry for the share flow; [Utils.decodeEntry] refuses a blank identity. */
+    private val entry = Entry("profile-1", fields, publicKey)
 
     // ── The wire, as literals ────────────────────────────────────────────
 
@@ -552,5 +564,413 @@ class ResultBuilderTest {
             "and a correct declaration buys a tampered signature nothing",
             welldeclared.isVerified(publicKey, nonce),
         )
+    }
+
+    // ── Answering a parsed request: the token, and nothing else ──────────
+    //
+    // T29's three overloads take a parsed request instead of a request-code string, so the one
+    // extra that must survive both a refusal and an answer stops being a hand-written line a
+    // vault can drop. The rule they publish is narrower than "answer the request": **the request
+    // is read, never retained, and the only value taken off it is the correlation token.**
+    //
+    // Everything below is one of two claims. The central property is that a token minted by a
+    // client survives LIM's own request builder, LIM's own request parser, the answer, and the
+    // result parser — reached with `matchesRequestCode`, which is the function a client actually
+    // uses to decide an answer is its own. The controls are the other half: that *nothing else*
+    // came off the request, swept over every extra rather than only the one it would be expected
+    // in, because the failure this shape prevents is a caller choosing the identifier that names
+    // its own disclosure.
+
+    /**
+     * Every extra of [intent] whose value contains [needle] — the sweep, not a spot check.
+     *
+     * Line breaks are stripped from both sides before matching, because this protocol uses two
+     * Base64 flavours: requests write `NO_WRAP` and results write `DEFAULT`, which wraps at 76
+     * characters. Comparing the raw strings would make the sweep blind to a leak re-encoded on
+     * the way out as soon as the payload outgrew one line — which is every signature.
+     *
+     * **Its remaining floor, stated rather than discovered later:** it reads values with
+     * `getStringExtra`, so a leak written as a non-`String` extra would read back `null` and pass
+     * this silently. Nothing in this protocol writes a non-string extra — every builder above
+     * writes `String` only — and the equivalence control's exact key-set assertions are what
+     * would catch one appearing. Widening this to walk the bundle by type would assert against a
+     * shape the wire format does not have.
+     */
+    private fun extrasMentioning(intent: Intent, needle: String): List<String> {
+        val flat = needle.replace("\n", "").replace("\r", "")
+        return intent.extras!!.keySet().filter { key ->
+            intent.getStringExtra(key)?.replace("\n", "")?.replace("\r", "")?.contains(flat) == true
+        }
+    }
+
+    @Test
+    fun `a parsed share request is answered with the token the client minted`() {
+        val minted = "req-share-1"
+        val request = Utils.parseShareRequest(
+            Utils.createShareIntent(context, entry, requestCode = minted),
+        )!!
+
+        val result = Utils.createShareResultIntent(request, publicKey, fields)
+
+        assertEquals(
+            ShareResult(publicKey, fields, minted, 2),
+            Utils.parseShareResult(result),
+        )
+        assertTrue(
+            "the token the client minted must correlate the answer it gets back",
+            Utils.matchesRequestCode(result, minted),
+        )
+    }
+
+    @Test
+    fun `a parsed query request is answered with the token the client minted`() {
+        val minted = "req-query-1"
+        val request = Utils.parseQueryRequest(
+            Utils.createQueryIntent(context, "CALLER-CHOSEN-KEY-QUERY", minted),
+        )!!
+
+        val result = Utils.createQueryResultIntent(request, publicKey, fields)
+
+        assertEquals(
+            QueryResult(fields, publicKey, minted, 2),
+            Utils.parseQueryResult(result),
+        )
+        assertTrue(Utils.matchesRequestCode(result, minted))
+    }
+
+    /**
+     * **What the correlation half of this property cannot see, measured rather than assumed.**
+     * Parse this answer back with `parseShareResult` instead and `matchesRequestCode` still says
+     * `true`, because both flows carry the token under the same extra and the two results differ
+     * only in which key the fields sit under. Nothing in *this* task reddens for that — the
+     * cross-flow separation is T28's control (a), `a result built for one flow discloses no
+     * fields to the other`, and it is the one place the two tasks' controls must not be expected
+     * to overlap. The whole-value `assertEquals` and the `isVerified` check below are what make
+     * this test about the sign-challenge flow rather than about any flow with a token in it.
+     */
+    @Test
+    fun `a parsed sign-challenge request is answered with the token the client minted`() {
+        val minted = "req-sign-1"
+        val request = Utils.parseSignChallengeRequest(
+            Utils.createSignChallengeIntent(
+                context,
+                publicKey,
+                nonce,
+                minted,
+                nonceFormat = Utils.NONCE_FORMAT_TIMESTAMPED,
+            ),
+        )!!
+        // Signed over the nonce the *parser* handed back, which is the only use a vault has for
+        // it: the overload will not sign anything for you, because this library holds no key.
+        val signature = sign(request.nonce)
+
+        val result =
+            Utils.createSignChallengeResultIntent(request, signature, fields, "SHA256withRSA")
+
+        assertEquals(
+            SignChallengeResult(signature, "SHA256withRSA", fields, minted, 2),
+            Utils.parseSignChallengeResult(result),
+        )
+        assertTrue(Utils.matchesRequestCode(result, minted))
+        assertTrue(
+            "…and the proof is genuine, so the round trip is over a real signature rather than " +
+                "an arbitrary byte array",
+            Utils.parseSignChallengeResult(result)!!.isVerified(publicKey, nonce),
+        )
+    }
+
+    // ── T29 control (a)+(c)+(d): the laundering control, and a codeless request ──
+
+    /**
+     * **The reason these overloads take `publicKey` explicitly.** A query request's `publicKey` is
+     * the key the *caller* chose to ask about; echoing it automatically would let the caller pick
+     * the identifier that appears in its own answer, and the key a result must name is the one the
+     * vault holds. So a request naming `A`, answered with `B`, yields a result naming `B` — and
+     * the string `A` appears under **no** extra of it, swept over every key rather than only
+     * `extra_public_key`.
+     *
+     * The same loop carries control (c), because a codeless request is where the echo is easiest
+     * to get wrong: `createQueryIntent` writes a blank request code as a present-but-blank extra,
+     * `presentStringExtra` reads that as absent, so `QueryRequest.requestCode` is `null` and the
+     * answer must carry **no** `extra_share_request_code` at all — `!hasExtra`, since
+     * `putExtra(key, null as String?)` leaves a present extra reading null. And
+     * `matchesRequestCode(result, "")` is `false`: "nothing equals nothing" is the mistake that
+     * pairs an untagged request with the first result that happens to arrive.
+     *
+     * **That last assertion is weaker than it reads, and is recorded as such.** It holds on
+     * `matchesRequestCode`'s `expected.isBlank()` short-circuit (`Utils.kt`) before the intent is
+     * read at all, so it would pass against a bare `Intent()` too — it exercises the *caller's*
+     * blank guard, not anything these builders do. It is here because it is the call a vault's
+     * client reaches for when it has no token, and `RequestCodeTest` owns the function's actual
+     * discrimination. What proves the builder's half is the `!hasExtra` line above it.
+     *
+     * Control (d) is the two counters: the loop must produce at least one answer that carries a
+     * code and at least one that does not, or either arm alone is satisfiable by a builder that
+     * echoes nothing.
+     */
+    @Test
+    fun `an answer names the vault's key and never the one the caller asked about`() {
+        val askedAbout = "CALLER-CHOSEN-KEY-LAUNDER"
+        var carryingCode = 0
+        var carryingNone = 0
+
+        listOf("req-query-7", "", "   ").forEach { minted ->
+            val request = Utils.parseQueryRequest(
+                Utils.createQueryIntent(context, askedAbout, minted),
+            )!!
+            assertEquals(
+                "the request really does name the caller's key, or this control sweeps for a " +
+                    "string that was never in play",
+                askedAbout,
+                request.publicKey,
+            )
+
+            val result = Utils.createQueryResultIntent(request, publicKey, fields)
+            val parsed = Utils.parseQueryResult(result)!!
+
+            assertEquals(
+                "the answer must name the key the vault holds, not the one it was asked about",
+                publicKey,
+                parsed.publicKey,
+            )
+            assertEquals(
+                "the caller's chosen key must appear under no extra of the answer at all",
+                emptyList<String>(),
+                extrasMentioning(result, askedAbout),
+            )
+            assertEquals(
+                "…and the disclosure itself is still there, so this is not satisfied by an " +
+                    "empty answer",
+                fields,
+                parsed.fields,
+            )
+
+            if (minted.isBlank()) {
+                assertNull(
+                    "a blank request code reads as absent, so the request is codeless",
+                    request.requestCode,
+                )
+                assertFalse(
+                    "a codeless request's answer must carry no request-code extra at all, not a " +
+                        "null one",
+                    result.hasExtra("extra_share_request_code"),
+                )
+                assertNull(parsed.requestCode)
+                assertFalse(
+                    "nothing equals nothing: a blank never correlates, not even with a codeless " +
+                        "answer",
+                    Utils.matchesRequestCode(result, ""),
+                )
+                carryingNone++
+            } else {
+                assertEquals(minted, parsed.requestCode)
+                assertTrue(Utils.matchesRequestCode(result, minted))
+                carryingCode++
+            }
+        }
+
+        // Control (d): either arm alone is satisfiable by a builder that echoes nothing.
+        assertTrue("no answer carried a code, so the echo arm proves nothing", carryingCode > 0)
+        assertTrue(
+            "no answer was codeless, so the omission arm proves nothing",
+            carryingNone > 0,
+        )
+    }
+
+    /**
+     * The same sweep for the other two flows, where the request carries more than a key: a share
+     * request's entry has an `id`, a `publicKey` and field *names* of the caller's choosing, and a
+     * sign-challenge request names a key too. None of it may reach the answer.
+     *
+     * Not folded into the loop above because the query flow is the one control (a) is *about* —
+     * there the laundering would be invisible, since `QueryResult.publicKey` is exactly where a
+     * reader expects the queried key to be.
+     */
+    @Test
+    fun `nothing else from a request reaches the answer either`() {
+        val callerEntry = Entry(
+            "CALLER-ENTRY-ID",
+            mapOf("caller_chosen_field" to TypedField("CALLER-VALUE", FieldType.STRING)),
+            "CALLER-CHOSEN-KEY-SHARE",
+        )
+        val shareResult = Utils.createShareResultIntent(
+            Utils.parseShareRequest(
+                Utils.createShareIntent(context, callerEntry, requestCode = "req-share-2"),
+            )!!,
+            publicKey,
+            fields,
+        )
+        listOf(
+            "CALLER-ENTRY-ID",
+            "CALLER-CHOSEN-KEY-SHARE",
+            "caller_chosen_field",
+            "CALLER-VALUE",
+        ).forEach { needle ->
+            assertEquals(
+                "a share answer must carry nothing off the request but its token; found $needle",
+                emptyList<String>(),
+                extrasMentioning(shareResult, needle),
+            )
+        }
+        assertTrue(Utils.matchesRequestCode(shareResult, "req-share-2"))
+        assertEquals(publicKey, Utils.parseShareResult(shareResult)!!.publicKey)
+
+        val signRequest = Utils.parseSignChallengeRequest(
+            Utils.createSignChallengeIntent(
+                context,
+                "CALLER-CHOSEN-KEY-SIGN",
+                nonce,
+                "req-sign-2",
+                nonceFormat = Utils.NONCE_FORMAT_TIMESTAMPED,
+            ),
+        )!!
+        val signResult =
+            Utils.createSignChallengeResultIntent(signRequest, sign(nonce), fields)
+        listOf(
+            "CALLER-CHOSEN-KEY-SIGN",
+            // NO_WRAP, which is what `createSignChallengeIntent` writes — and the sweep strips
+            // line breaks from both sides, so this needle also finds a leak re-encoded with
+            // `Base64.DEFAULT`, the wrapping flavour every result extra uses. Matching on one
+            // encoding only would go blind the moment a leaked payload outgrew a single line.
+            Base64.encodeToString(nonce, Base64.NO_WRAP),
+            Utils.NONCE_FORMAT_TIMESTAMPED,
+        ).forEach { needle ->
+            assertEquals(
+                "a sign-challenge answer must carry nothing off the request but its token; " +
+                    "found $needle",
+                emptyList<String>(),
+                extrasMentioning(signResult, needle),
+            )
+        }
+        assertTrue(Utils.matchesRequestCode(signResult, "req-sign-2"))
+    }
+
+    /**
+     * Control (c) for the other two flows, because the codeless path is where the overloads'
+     * delegation is easiest to get wrong and the loop above only walks the query one.
+     *
+     * The three delegations are character-for-character identical and `putPresentExtra` collapses
+     * `null` and blank alike, so this is cheap rather than deep — but "cheap" is not "covered",
+     * and a vault that answers a legacy untagged share is the client population this protocol
+     * cannot drop.
+     */
+    @Test
+    fun `a codeless share or sign-challenge request is answered without an echo`() {
+        val shareResult = Utils.createShareResultIntent(
+            Utils.parseShareRequest(Utils.createShareIntent(context, entry, requestCode = ""))!!,
+            publicKey,
+            fields,
+        )
+        assertFalse(
+            "a codeless share request's answer must carry no request-code extra at all",
+            shareResult.hasExtra("extra_share_request_code"),
+        )
+        // Weak for the reason the laundering control above records in full: this holds on
+        // `matchesRequestCode`'s own blank guard, not on anything the builder did. The `!hasExtra`
+        // line above and the whole-value assertion below are the load-bearing ones.
+        assertFalse(Utils.matchesRequestCode(shareResult, ""))
+        assertEquals(
+            "…and the acknowledgement is otherwise complete",
+            ShareResult(publicKey, fields, null, 2),
+            Utils.parseShareResult(shareResult),
+        )
+
+        val signature = sign(nonce)
+        val signResult = Utils.createSignChallengeResultIntent(
+            Utils.parseSignChallengeRequest(
+                Utils.createSignChallengeIntent(context, publicKey, nonce, "   "),
+            )!!,
+            signature,
+            fields,
+        )
+        assertFalse(signResult.hasExtra("extra_share_request_code"))
+        // Same caller-side blank guard, same caveat.
+        assertFalse(Utils.matchesRequestCode(signResult, ""))
+        assertEquals(
+            SignChallengeResult(signature, null, fields, null, 2),
+            Utils.parseSignChallengeResult(signResult),
+        )
+    }
+
+    // ── T29 control (b): equivalence, not a second wire format ───────────
+
+    /**
+     * The request overload and the string one must produce the **same** result — equal parsed
+     * objects *and* an identical set of present extra keys. A convenience that quietly wrote a
+     * different envelope would be a second wire format, which is the one thing a delegating
+     * overload must not become.
+     *
+     * The key sets are spelled as literals here rather than read off `Utils`: `DESCRIBED_EXTRAS`
+     * is private and `describeIntent`'s wording is explicitly not API, and an assertion written
+     * against a constant would move with a rename instead of catching it — `IntentBuilderTest`'s
+     * rule, applied to a key *set*.
+     */
+    @Test
+    fun `the request overload writes the same wire as the string one`() {
+        val shareRequest = Utils.parseShareRequest(
+            Utils.createShareIntent(context, entry, requestCode = "req-share-3"),
+        )!!
+        val queryRequest = Utils.parseQueryRequest(
+            Utils.createQueryIntent(context, "CALLER-CHOSEN-KEY-EQUIV", "req-query-3"),
+        )!!
+        val signRequest = Utils.parseSignChallengeRequest(
+            Utils.createSignChallengeIntent(context, publicKey, nonce, "req-sign-3"),
+        )!!
+        val signature = sign(nonce)
+
+        val share = Utils.createShareResultIntent(shareRequest, publicKey, fields) to
+            Utils.createShareResultIntent(publicKey, fields, shareRequest.requestCode)
+        assertEquals(
+            Utils.parseShareResult(share.second),
+            Utils.parseShareResult(share.first),
+        )
+        val shareKeys = setOf(
+            "extra_public_key",
+            "extra_fields_json",
+            "extra_share_request_code",
+            "extra_protocol_version",
+        )
+        assertEquals(shareKeys, share.first.extras!!.keySet())
+        assertEquals(shareKeys, share.second.extras!!.keySet())
+
+        val query = Utils.createQueryResultIntent(queryRequest, publicKey, fields) to
+            Utils.createQueryResultIntent(publicKey, fields, queryRequest.requestCode)
+        assertEquals(
+            Utils.parseQueryResult(query.second),
+            Utils.parseQueryResult(query.first),
+        )
+        val queryKeys = setOf(
+            "extra_public_key",
+            "extra_query_result_fields",
+            "extra_share_request_code",
+            "extra_protocol_version",
+        )
+        assertEquals(queryKeys, query.first.extras!!.keySet())
+        assertEquals(queryKeys, query.second.extras!!.keySet())
+
+        val sign = Utils.createSignChallengeResultIntent(
+            signRequest,
+            signature,
+            fields,
+            "SHA256withRSA",
+        ) to Utils.createSignChallengeResultIntent(
+            signature,
+            fields,
+            signRequest.requestCode,
+            "SHA256withRSA",
+        )
+        assertEquals(
+            Utils.parseSignChallengeResult(sign.second),
+            Utils.parseSignChallengeResult(sign.first),
+        )
+        val signKeys = setOf(
+            "extra_signature",
+            "extra_algorithm",
+            "extra_fields_json",
+            "extra_share_request_code",
+            "extra_protocol_version",
+        )
+        assertEquals(signKeys, sign.first.extras!!.keySet())
+        assertEquals(signKeys, sign.second.extras!!.keySet())
     }
 }

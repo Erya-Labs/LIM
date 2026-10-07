@@ -696,9 +696,19 @@ class PublicApiAuditTest {
             // T28's result builders: one required argument each, then the optionals. The
             // sign-challenge one carries a fourth — the informational `algorithm` — which is why
             // its list is one longer than its two siblings'.
-            "createShareResultIntent" to listOf(1, 2, 3),
-            "createQueryResultIntent" to listOf(1, 2, 3),
-            "createSignChallengeResultIntent" to listOf(1, 2, 3, 4),
+            //
+            // **Two source functions per name since T29**, so the repeated counts below are
+            // correct and a reader who "fixes" them to a distinct list breaks this test. The
+            // request overload's arities interleave with the string one's: `(ShareRequest,
+            // String)` is a 2 beside `(String, Map)`, and `(ShareRequest, String, Map)` a 3
+            // beside `(String, Map, String)`. Unlike `createShareIntent` above, nothing collides —
+            // every generated form differs from every sibling in its *first* parameter type, which
+            // is what T21's platform declaration clash turned on, and this list is the
+            // measurement of that. The sign-challenge name reaches seven because its request
+            // overload publishes three arities to the other two's two.
+            "createShareResultIntent" to listOf(1, 2, 2, 3, 3),
+            "createQueryResultIntent" to listOf(1, 2, 2, 3, 3),
+            "createSignChallengeResultIntent" to listOf(1, 2, 2, 3, 3, 4, 4),
             "generateNonce" to listOf(0, 1, 2),
             "isNonceFresh" to listOf(2, 3),
             "createSignChallengeIntent" to listOf(4, 5, 6),
@@ -1411,6 +1421,13 @@ class PublicApiAuditTest {
             // Every one is a new line; not one existing line moved, which is stop rule 10's
             // "additive only" in its mechanical form. No `Context` parameter, because a result is
             // `setResult`'s payload and carries no action and no package to resolve.
+            // T29's request overloads, sorting ahead of their string siblings because the
+            // rendered parameter type does: `QueryRequest` before `String`. Each takes the
+            // correlation token off a parsed request and *nothing else* — the public key stays an
+            // explicit parameter, because a query request's key is the one the caller chose and a
+            // result must name the one the vault holds.
+            "Utils.createQueryResultIntent(QueryRequest, String): Intent",
+            "Utils.createQueryResultIntent(QueryRequest, String, Map<String, TypedField>): Intent",
             "Utils.createQueryResultIntent(String): Intent",
             "Utils.createQueryResultIntent(String, Map<String, TypedField>): Intent",
             "Utils.createQueryResultIntent(String, Map<String, TypedField>, String): Intent",
@@ -1422,6 +1439,8 @@ class PublicApiAuditTest {
             "Utils.createShareIntent(Context, Entry): Intent",
             "Utils.createShareIntent(Context, Entry, String): Intent",
             "Utils.createShareIntent(Context, Entry, String, String): Intent",
+            "Utils.createShareResultIntent(ShareRequest, String): Intent",
+            "Utils.createShareResultIntent(ShareRequest, String, Map<String, TypedField>): Intent",
             "Utils.createShareResultIntent(String): Intent",
             "Utils.createShareResultIntent(String, Map<String, TypedField>): Intent",
             "Utils.createShareResultIntent(String, Map<String, TypedField>, String): Intent",
@@ -1432,6 +1451,12 @@ class PublicApiAuditTest {
             "Utils.createSignChallengeIntent(Context, String, byte[], String): Intent",
             "Utils.createSignChallengeIntent(Context, String, byte[], String, String): Intent",
             "Utils.createSignChallengeIntent(Context, String, byte[], String, String, String): Intent",
+            // Three request arities rather than two: the `algorithm` optional rides along, and
+            // `SignChallengeRequest` is deliberately not read for its nonce — this library holds
+            // no private key, so the signature it writes is one the caller made.
+            "Utils.createSignChallengeResultIntent(SignChallengeRequest, byte[]): Intent",
+            "Utils.createSignChallengeResultIntent(SignChallengeRequest, byte[], Map<String, TypedField>): Intent",
+            "Utils.createSignChallengeResultIntent(SignChallengeRequest, byte[], Map<String, TypedField>, String): Intent",
             "Utils.createSignChallengeResultIntent(byte[]): Intent",
             "Utils.createSignChallengeResultIntent(byte[], Map<String, TypedField>): Intent",
             "Utils.createSignChallengeResultIntent(byte[], Map<String, TypedField>, String): Intent",

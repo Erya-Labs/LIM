@@ -169,6 +169,22 @@ class NullArgumentTest {
                     it.hasExtra(Utils.EXTRA_SHARE_REQUEST_CODE) &&
                     !it.hasExtra(Utils.EXTRA_ALGORITHM)
             },
+        // T29's request overloads add seven published arities and exactly **one** tolerant
+        // position: the `algorithm` of the sign-challenge request overload's full arity. The
+        // `request` parameters are all on the throwing side and stay there — a vault that lost
+        // the request it is answering has nothing to correlate, which is `matchesRequestCode`'s
+        // own rule about `""` reached from the builder side. The other six arities declare
+        // nothing nullable at all: `publicKey`, `signature` and `fields` are each required.
+        //
+        // The request carries `"req-1"`, so the echoed token is present here while the algorithm
+        // is absent — which is what stops this from being satisfied by a builder that wrote
+        // neither.
+        "createSignChallengeResultIntent(SignChallengeRequest, byte[], Map<String, TypedField>, String)#3" to
+            Answer("an intent carrying its signature and echo, and no ${Utils.EXTRA_ALGORITHM}") {
+                it is Intent && it.hasExtra(Utils.EXTRA_SIGNATURE) &&
+                    it.hasExtra(Utils.EXTRA_SHARE_REQUEST_CODE) &&
+                    !it.hasExtra(Utils.EXTRA_ALGORITHM)
+            },
     )
 
     /**
@@ -193,9 +209,9 @@ class NullArgumentTest {
     /**
      * Non-vacuity floors. A filter that drifted to the empty set passes every assertion in this
      * file for ever, which is the trap the other suites' fuzz floors exist for. Set below the
-     * measured actuals (57 methods, 108 positions — T28's three result builders added ten
-     * published arities and 22 reference positions between them) so that adding a member does not
-     * fail this,
+     * measured actuals (64 methods, 127 positions — T28's three result builders added ten
+     * published arities and 22 reference positions between them, and T29's request overloads
+     * seven more arities and 19 more positions) so that adding a member does not fail this,
      * and the actual is printed on every run and recorded in the Progress log.
      */
     private val MINIMUM_METHODS = 45
@@ -222,6 +238,17 @@ class NullArgumentTest {
     private val rotation = RotationStatement("K-OLD", "K-NEW", "rot-1", 0L, Long.MAX_VALUE)
     private val authorization = RecoveryAuthorization("K-SUBJECT", "K-RECOVERY", "auth-1", 1L, 0L)
     private val revocation = Revocation("K-SUBJECT", "auth-1", 2L, 0L)
+
+    /**
+     * The three parsed-request types T29's result overloads take. Each carries a non-blank
+     * `requestCode`, which is what makes the `#2` and `#3` answers below legible: the builders
+     * read the token off the request, so a request with none would make "carries no algorithm"
+     * and "carries no request code" indistinguishable.
+     */
+    private val shareRequest = ShareRequest(entry, "req-1", Utils.PROTOCOL_VERSION)
+    private val queryRequest = QueryRequest("PUBLIC-KEY-BASE64", "req-1", Utils.PROTOCOL_VERSION)
+    private val signChallengeRequest =
+        SignChallengeRequest("PUBLIC-KEY-BASE64", nonce, "req-1", Utils.NONCE_FORMAT_TIMESTAMPED)
 
     /**
      * One well-formed value per published parameter *type*.
@@ -254,6 +281,9 @@ class NullArgumentTest {
             RotationStatement::class.java -> rotation
             RecoveryAuthorization::class.java -> authorization
             Revocation::class.java -> revocation
+            ShareRequest::class.java -> shareRequest
+            QueryRequest::class.java -> queryRequest
+            SignChallengeRequest::class.java -> signChallengeRequest
             Map::class.java -> fields
             List::class.java -> sampleList(type)
             else -> throw AssertionError(

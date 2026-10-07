@@ -1642,6 +1642,98 @@ object Utils {
         putExtra(EXTRA_PROTOCOL_VERSION, PROTOCOL_VERSION.toString())
     }
 
+    // ── Answering a parsed request ───────────────────────────────────────
+    //
+    // The three builders above take a request code as a string, so a vault that parsed a request
+    // with [parseShareRequest] and friends still carries the correlation token across to the
+    // result by hand — and that token is the one extra which must survive both a refusal and an
+    // answer. [matchesRequestCode] already names what a dropped line costs: "the accident is not
+    // a crash — it is acting on a disclosure meant for a different request."
+    //
+    // **The request is read, never retained.** The only value these overloads take off a request
+    // is the correlation token. Not its public key, not its entry, not its field names — those
+    // stay explicit parameters, and the reason is the whole point of the rule rather than an
+    // ergonomic preference. A query request's `publicKey` is the key the *caller* chose to ask
+    // about; echoing it automatically would let a caller pick the identifier that appears in its
+    // own answer, and the key a result must name is the one the *vault* holds. The reference
+    // vault reached the same rule independently and wrote it down, which is the strongest
+    // argument available that it is the right default to publish.
+    //
+    // Each delegates to its sibling above, so there is exactly one place that decides which
+    // extras a result carries and no second wire format to drift.
+
+    /**
+     * Answer a parsed [ShareRequest] — [createShareResultIntent] with the correlation token
+     * carried across for you.
+     *
+     * **[request] is read, never retained: the only value taken off it is the correlation
+     * token.** Not its entry, not that entry's public key, and not its field names. What the
+     * vault acknowledges is what the vault stored, so [publicKey] and [fields] stay explicit —
+     * echoing the request's own contents would let the client decide what its answer says.
+     *
+     * @param request   The request this result answers, as [parseShareRequest] returned it. Only
+     *                  [ShareRequest.requestCode] is read; a `null` or blank one attaches nothing,
+     *                  exactly as passing `null` to the sibling does.
+     * @param publicKey The key the profile was stored under — the vault's, not the request's.
+     * @param fields    The stored fields, under [EXTRA_FIELDS_JSON]; always written, even empty.
+     */
+    @JvmOverloads
+    fun createShareResultIntent(
+        request: ShareRequest,
+        publicKey: String,
+        fields: Map<String, TypedField> = emptyMap(),
+    ): Intent = createShareResultIntent(publicKey, fields, request.requestCode)
+
+    /**
+     * Answer a parsed [QueryRequest] — [createQueryResultIntent] with the correlation token
+     * carried across for you.
+     *
+     * **[request] is read, never retained: the only value taken off it is the correlation
+     * token.** [QueryRequest.publicKey] is deliberately *not* echoed, and this is the flow the
+     * rule exists for: that key is the one the caller asked about, so echoing it automatically
+     * would let the caller choose the identifier naming its own disclosure. The key a result
+     * names must be the one the vault holds, which is why [publicKey] is still required here.
+     *
+     * @param request   The request this result answers, as [parseQueryRequest] returned it. Only
+     *                  [QueryRequest.requestCode] is read.
+     * @param publicKey The queried profile's key as the *vault* holds it.
+     * @param fields    The disclosed fields, under [EXTRA_QUERY_RESULT_FIELDS]; always written,
+     *                  even empty. A refusal is `setResult(Activity.RESULT_CANCELED, …)` — the
+     *                  result code, not the payload.
+     */
+    @JvmOverloads
+    fun createQueryResultIntent(
+        request: QueryRequest,
+        publicKey: String,
+        fields: Map<String, TypedField> = emptyMap(),
+    ): Intent = createQueryResultIntent(publicKey, fields, request.requestCode)
+
+    /**
+     * Answer a parsed [SignChallengeRequest] — [createSignChallengeResultIntent] with the
+     * correlation token carried across for you.
+     *
+     * **[request] is read, never retained: the only value taken off it is the correlation
+     * token.** Not its public key, and emphatically not its nonce: [signature] must be made over
+     * [SignChallengeRequest.nonce] with the private key the vault holds, and nothing here checks
+     * that it was. A convenience that signed the request's nonce for you would be this library
+     * holding a private key, which it does not do.
+     *
+     * @param request   The request this result answers, as [parseSignChallengeRequest] returned
+     *                  it. Only [SignChallengeRequest.requestCode] is read.
+     * @param signature Raw signature bytes over the request's nonce, under [EXTRA_SIGNATURE].
+     *                  An empty array is not a signature — see the sibling.
+     * @param fields    The profile's fields, under [EXTRA_FIELDS_JSON]; always written.
+     * @param algorithm Informational only, and never honoured by anything here — see the
+     *                  sibling's note on algorithm confusion. `null` attaches nothing.
+     */
+    @JvmOverloads
+    fun createSignChallengeResultIntent(
+        request: SignChallengeRequest,
+        signature: ByteArray,
+        fields: Map<String, TypedField> = emptyMap(),
+        algorithm: String? = null,
+    ): Intent = createSignChallengeResultIntent(signature, fields, request.requestCode, algorithm)
+
     // ── Request parsing (the vault's side) ───────────────────────────────
     //
     // The builders above pin what a request looks like leaving a client; these pin what one
