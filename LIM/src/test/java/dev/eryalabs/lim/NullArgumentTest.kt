@@ -130,6 +130,45 @@ class NullArgumentTest {
                 it is Intent && it.hasExtra(Utils.EXTRA_NONCE) &&
                     !it.hasExtra(Utils.EXTRA_NONCE_FORMAT)
             },
+        // T28's result builders, five positions over four generated arities: `requestCode` is
+        // position #2 in each of the three full-arity forms *and* in the sign-challenge builder's
+        // three-argument one, with `algorithm` at #3. Each answer is a value rather than "it did
+        // not throw", and each names the flow's own extras as well as the absent one — a builder
+        // that returned a hollow intent would satisfy the weaker claim.
+        //
+        // `!hasExtra` and never `getStringExtra(…) == null`: `putExtra(key, null as String?)`
+        // stores a null and leaves `hasExtra` returning `true`, so the weaker spelling would pass
+        // against a builder that wrote the null these functions exist to omit.
+        "createShareResultIntent(String, Map<String, TypedField>, String)#2" to
+            Answer("an intent carrying its own extras and no ${Utils.EXTRA_SHARE_REQUEST_CODE}") {
+                it is Intent && it.hasExtra(Utils.EXTRA_PUBLIC_KEY) &&
+                    it.hasExtra(Utils.EXTRA_FIELDS_JSON) &&
+                    !it.hasExtra(Utils.EXTRA_SHARE_REQUEST_CODE)
+            },
+        "createQueryResultIntent(String, Map<String, TypedField>, String)#2" to
+            Answer("an intent carrying its own extras and no ${Utils.EXTRA_SHARE_REQUEST_CODE}") {
+                it is Intent && it.hasExtra(Utils.EXTRA_PUBLIC_KEY) &&
+                    it.hasExtra(Utils.EXTRA_QUERY_RESULT_FIELDS) &&
+                    !it.hasExtra(Utils.EXTRA_SHARE_REQUEST_CODE)
+            },
+        "createSignChallengeResultIntent(byte[], Map<String, TypedField>, String)#2" to
+            Answer("an intent carrying its own extras and no ${Utils.EXTRA_SHARE_REQUEST_CODE}") {
+                it is Intent && it.hasExtra(Utils.EXTRA_SIGNATURE) &&
+                    it.hasExtra(Utils.EXTRA_FIELDS_JSON) &&
+                    !it.hasExtra(Utils.EXTRA_SHARE_REQUEST_CODE)
+            },
+        "createSignChallengeResultIntent(byte[], Map<String, TypedField>, String, String)#2" to
+            Answer("an intent carrying its own extras and no ${Utils.EXTRA_SHARE_REQUEST_CODE}") {
+                it is Intent && it.hasExtra(Utils.EXTRA_SIGNATURE) &&
+                    it.hasExtra(Utils.EXTRA_FIELDS_JSON) &&
+                    !it.hasExtra(Utils.EXTRA_SHARE_REQUEST_CODE)
+            },
+        "createSignChallengeResultIntent(byte[], Map<String, TypedField>, String, String)#3" to
+            Answer("an intent carrying its signature and no ${Utils.EXTRA_ALGORITHM}") {
+                it is Intent && it.hasExtra(Utils.EXTRA_SIGNATURE) &&
+                    it.hasExtra(Utils.EXTRA_SHARE_REQUEST_CODE) &&
+                    !it.hasExtra(Utils.EXTRA_ALGORITHM)
+            },
     )
 
     /**
@@ -154,7 +193,9 @@ class NullArgumentTest {
     /**
      * Non-vacuity floors. A filter that drifted to the empty set passes every assertion in this
      * file for ever, which is the trap the other suites' fuzz floors exist for. Set below the
-     * measured actuals (47 methods, 86 positions) so that adding a member does not fail this,
+     * measured actuals (57 methods, 108 positions — T28's three result builders added ten
+     * published arities and 22 reference positions between them) so that adding a member does not
+     * fail this,
      * and the actual is printed on every run and recorded in the Progress log.
      */
     private val MINIMUM_METHODS = 45

@@ -27,8 +27,11 @@ import java.security.spec.X509EncodedKeySpec
  * [parseQueryRequest], [parseSignChallengeRequest], [parseShareResult], [parseQueryResult],
  * [parseSignChallengeResult], [describeIntent] and [matchesRequestCode]; the text of
  * [decodeFields], [decodeEntry] and [parseSignedStatement]; [isStatementPreImage]'s `bytes`;
- * and [createSignChallengeIntent]'s `nonceFormat`, whose `null` is the default and attaches no
- * declaration. `NullArgumentTest` measures that split by calling every published parameter
+ * [createSignChallengeIntent]'s `nonceFormat`, whose `null` is the default and attaches no
+ * declaration; and, on the same footing, the `requestCode` of all three result builders
+ * ([createShareResultIntent], [createQueryResultIntent], [createSignChallengeResultIntent]) plus
+ * the last one's `algorithm` — each defaulting to `null`, each attaching nothing when it is one.
+ * `NullArgumentTest` measures that split by calling every published parameter
  * position with `null`, so neither a widening nor a narrowing can happen quietly — it turns that
  * file's rows red. This paragraph is prose beside the check rather than the check itself, so it
  * has to be updated alongside it.
@@ -1480,6 +1483,163 @@ object Utils {
             requestCode = requestCode,
             vaultProtocolVersion = intent.declaredProtocolVersion(),
         )
+    }
+
+    // ── Result intents (the vault's side) ────────────────────────────────
+    //
+    // The parsers above pin what a result *means* arriving at a client; the three builders here
+    // pin what one *looks like* leaving a vault. Until now this library wrote six of the ten
+    // extras the protocol defines and only read the other four, so the result half of the wire
+    // format existed here as four parsers' expectations and nothing else — every vault
+    // hand-assembled its result intents, and the reference vault grew its own builder to do it.
+    //
+    // No new extra key, no new action and no new constant: every literal below already exists
+    // above and is frozen by `IntentBuilderTest`. Three rules are shared, and each is something a
+    // hand-written `putExtra` line gets wrong eventually:
+    //
+    // 1. **No action and no package.** A result is `setResult`'s payload, delivered to whoever
+    //    started the activity; both halves of this protocol work off extras alone and no parser
+    //    here reads the action (see [describeIntent]), so writing one would be new wire surface
+    //    for no reader.
+    // 2. **Blank is omitted, not written.** [presentStringExtra] maps blank to absent, so a
+    //    builder that wrote `""` would mint an intent its own parser disagrees with. Omitting
+    //    means not calling `putExtra` at all — `putExtra(key, null as String?)` stores a null and
+    //    leaves `hasExtra` returning `true`, which is a present extra by every other measure.
+    // 3. **The version echo is unconditional**, and it is the point of these functions.
+    //    [EXTRA_PROTOCOL_VERSION] in a result is what lets a client tell a vault that honoured a
+    //    modern request from one that ignored what it did not know; a vault that forgets the echo
+    //    is read as a legacy vault, with nothing anywhere to fail. A vault that uses these cannot
+    //    forget it.
+
+    /**
+     * Write [value] under [key], or nothing at all when it is absent or blank — rule 2 above.
+     *
+     * Not `putExtra(key, value)` with a nullable argument: that overload resolves to
+     * `putExtra(String, String?)` and stores the null, and the extra is then *present* for
+     * `hasExtra` while reading `null` for `getStringExtra`. Blank goes the same way as null
+     * because every parser in this library already treats the two alike.
+     */
+    private fun Intent.putPresentExtra(key: String, value: String?) {
+        if (!value.isNullOrBlank()) putExtra(key, value)
+    }
+
+    /**
+     * Build the result intent a vault returns from the share flow — the acknowledgement
+     * [parseShareResult] reads.
+     *
+     * Hand it to `setResult(Activity.RESULT_OK, …)`. It carries no action and no package by
+     * design (rule 1 above), and [EXTRA_PROTOCOL_VERSION] always (rule 3).
+     *
+     * @param publicKey   The key the profile was stored under, written to [EXTRA_PUBLIC_KEY]. A
+     *                    blank one is omitted rather than written (rule 2), which leaves a result
+     *                    whose only identity is its field payload — build it with a real key.
+     * @param fields      The stored fields, encoded with [encodeFields] under
+     *                    [EXTRA_FIELDS_JSON] — the share flow's key, *not*
+     *                    [EXTRA_QUERY_RESULT_FIELDS]. Always written, even for an empty map:
+     *                    `"{}"` reads back as an empty map, and "nothing disclosed" has to stay
+     *                    distinguishable from "the vault did not answer", which is the rule
+     *                    [parseShareResult] already states from its side.
+     * @param requestCode The correlation token the request carried, echoed under
+     *                    [EXTRA_SHARE_REQUEST_CODE] so a client can run
+     *                    [matchesRequestCode] against it. `null` — the default — and blank both
+     *                    attach nothing, which is the legacy shape of an untagged share.
+     */
+    @JvmOverloads
+    fun createShareResultIntent(
+        publicKey: String,
+        fields: Map<String, TypedField> = emptyMap(),
+        requestCode: String? = null,
+    ): Intent = Intent().apply {
+        putPresentExtra(EXTRA_PUBLIC_KEY, publicKey)
+        putExtra(EXTRA_FIELDS_JSON, encodeFields(fields))
+        putPresentExtra(EXTRA_SHARE_REQUEST_CODE, requestCode)
+        putExtra(EXTRA_PROTOCOL_VERSION, PROTOCOL_VERSION.toString())
+    }
+
+    /**
+     * Build the result intent a vault returns from the query flow — the disclosure
+     * [parseQueryResult] reads.
+     *
+     * Identical to [createShareResultIntent] in every parameter and in every extra **but one**:
+     * the field payload goes under [EXTRA_QUERY_RESULT_FIELDS], not [EXTRA_FIELDS_JSON]. The two
+     * keys are separate points in the protocol and are deliberately not interchangeable — reading
+     * either from either flow would let a query answer be presented as a signed disclosure — and
+     * choosing between them by hand is the one mistake this pair of functions exists to remove.
+     * `ResultParsingTest` pins the separation on the parser side; `ResultBuilderTest` pins it here.
+     *
+     * A query is a disclosure and nothing in it is signed. Use [createSignChallengeResultIntent]
+     * when the client asked for proof that the holder of the key is present.
+     *
+     * @param publicKey   The queried profile's key, written to [EXTRA_PUBLIC_KEY]; blank is
+     *                    omitted (rule 2).
+     * @param fields      The disclosed fields, encoded with [encodeFields] under
+     *                    [EXTRA_QUERY_RESULT_FIELDS]. Always written, even for an empty map: a
+     *                    vault answering "nothing disclosed" must not be mistaken for one that
+     *                    did not answer. A *refusal* is `setResult(Activity.RESULT_CANCELED, …)`
+     *                    — the result code, not the payload, is what distinguishes it.
+     * @param requestCode Echoed under [EXTRA_SHARE_REQUEST_CODE]; `null` or blank attaches
+     *                    nothing.
+     */
+    @JvmOverloads
+    fun createQueryResultIntent(
+        publicKey: String,
+        fields: Map<String, TypedField> = emptyMap(),
+        requestCode: String? = null,
+    ): Intent = Intent().apply {
+        putPresentExtra(EXTRA_PUBLIC_KEY, publicKey)
+        putExtra(EXTRA_QUERY_RESULT_FIELDS, encodeFields(fields))
+        putPresentExtra(EXTRA_SHARE_REQUEST_CODE, requestCode)
+        putExtra(EXTRA_PROTOCOL_VERSION, PROTOCOL_VERSION.toString())
+    }
+
+    /**
+     * Build the result intent a vault returns from the sign-challenge flow — the proof
+     * [parseSignChallengeResult] reads and [SignChallengeResult.isVerified] authenticates.
+     *
+     * [signature] must be a real `SHA256withRSA` signature over the nonce the request carried,
+     * made with the private key paired to the public key the client already stores. Nothing here
+     * checks that: this function writes what the vault says, and only the client's own
+     * verification decides whether it is true.
+     *
+     * **An empty byte array is not a signature.** It Base64-encodes to nothing, reads back as a
+     * blank extra, and [parseSignChallengeResult] refuses the whole intent — a signature over
+     * zero bytes could never authenticate anything, so there is no result worth handing back.
+     * That is the single case in which these builders produce an envelope their own parser
+     * rejects, and it is pinned as such rather than papered over.
+     *
+     * @param signature   Raw signature bytes, written to [EXTRA_SIGNATURE] as `Base64.DEFAULT` —
+     *                    which wraps at 76 characters, and is what the parser documents arriving.
+     * @param fields      The profile's fields, encoded with [encodeFields] under
+     *                    [EXTRA_FIELDS_JSON] — the same key the share result uses, and the
+     *                    sign-challenge flow's own. Always written, even for an empty map; a
+     *                    garbled payload costs the client the disclosure but not the proof, which
+     *                    stands on its own.
+     * @param requestCode Echoed under [EXTRA_SHARE_REQUEST_CODE]; `null` or blank attaches
+     *                    nothing.
+     * @param algorithm   What the vault signed with, written to [EXTRA_ALGORITHM] when non-null
+     *                    and non-blank — rule 2 again, since a blank one reads as undeclared.
+     *                    **Informational, and never honoured by anything in this library.**
+     *                    [verifySignature] hardcodes `SHA256withRSA` and a client that trusted a
+     *                    peer-supplied algorithm name would be taking the verification algorithm
+     *                    from the sender — an algorithm-confusion surface, and the allow-list
+     *                    question is a standing decision for a human rather than something this
+     *                    library settles. So a declaration of `"MD5withRSA"` changes no
+     *                    verification outcome anywhere, and neither does a correct one: declare it
+     *                    for a reader's benefit, not for a verifier's. This library publishes no
+     *                    algorithm constant for the same reason.
+     */
+    @JvmOverloads
+    fun createSignChallengeResultIntent(
+        signature: ByteArray,
+        fields: Map<String, TypedField> = emptyMap(),
+        requestCode: String? = null,
+        algorithm: String? = null,
+    ): Intent = Intent().apply {
+        putExtra(EXTRA_SIGNATURE, Base64.encodeToString(signature, Base64.DEFAULT))
+        putExtra(EXTRA_FIELDS_JSON, encodeFields(fields))
+        putPresentExtra(EXTRA_SHARE_REQUEST_CODE, requestCode)
+        putPresentExtra(EXTRA_ALGORITHM, algorithm)
+        putExtra(EXTRA_PROTOCOL_VERSION, PROTOCOL_VERSION.toString())
     }
 
     // ── Request parsing (the vault's side) ───────────────────────────────

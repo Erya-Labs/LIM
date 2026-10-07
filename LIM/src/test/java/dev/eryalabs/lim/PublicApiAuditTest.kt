@@ -129,6 +129,12 @@ class PublicApiAuditTest {
         "Utils.createShareIntent" to "IntentBuilderTest: share intent targets the vault and carries the entry as JSON",
         "Utils.shareEntry" to "ShareEntryTest: shareEntry returns true and starts the intent when a vault handles it",
         "Utils.createQueryIntent" to "IntentBuilderTest: query intent reuses the share action and carries the public key",
+        // The result half of the wire format, published by T28. Each is covered by its own
+        // build-then-parse property rather than by an extras check: that the whole result value
+        // comes back is the claim, and the version echo rides along inside it.
+        "Utils.createShareResultIntent" to "ResultBuilderTest: a built share result parses back as the result the vault meant",
+        "Utils.createQueryResultIntent" to "ResultBuilderTest: a built query result parses back as the result the vault meant",
+        "Utils.createSignChallengeResultIntent" to "ResultBuilderTest: a built sign-challenge result parses back as the result the vault meant",
         "Utils.generateNonce" to "NonceTest: a nonce is a timestamp followed by at least 32 random bytes",
         "Utils.isNonceFresh" to "NonceTest: a nonce exactly maxAgeMillis old is still fresh",
         "Utils.nonceTimestamp" to "NonceTest: nonceTimestamp round-trips the pinned clock of a generated nonce",
@@ -687,6 +693,12 @@ class PublicApiAuditTest {
             "createShareIntent" to listOf(2, 3, 4),
             "shareEntry" to listOf(2, 3),
             "createQueryIntent" to listOf(3, 4),
+            // T28's result builders: one required argument each, then the optionals. The
+            // sign-challenge one carries a fourth — the informational `algorithm` — which is why
+            // its list is one longer than its two siblings'.
+            "createShareResultIntent" to listOf(1, 2, 3),
+            "createQueryResultIntent" to listOf(1, 2, 3),
+            "createSignChallengeResultIntent" to listOf(1, 2, 3, 4),
             "generateNonce" to listOf(0, 1, 2),
             "isNonceFresh" to listOf(2, 3),
             "createSignChallengeIntent" to listOf(4, 5, 6),
@@ -1393,6 +1405,15 @@ class PublicApiAuditTest {
             // shorter arities and keeps its full one` says the same thing by parameter count.
             "Utils.createQueryIntent(Context, String, String): Intent",
             "Utils.createQueryIntent(Context, String, String, String): Intent",
+            // T28's three result builders and the ten arities they publish — the first functions
+            // in this library that *write* `extra_signature`, `extra_algorithm`,
+            // `extra_fields_json` and `extra_query_result_fields` rather than only reading them.
+            // Every one is a new line; not one existing line moved, which is stop rule 10's
+            // "additive only" in its mechanical form. No `Context` parameter, because a result is
+            // `setResult`'s payload and carries no action and no package to resolve.
+            "Utils.createQueryResultIntent(String): Intent",
+            "Utils.createQueryResultIntent(String, Map<String, TypedField>): Intent",
+            "Utils.createQueryResultIntent(String, Map<String, TypedField>, String): Intent",
             // Three arities and two source functions. A bare-name manifest cannot tell them
             // apart, which is the gap this snapshot exists to cover — and arity 3 is a single
             // method, because the `requestCode` overload's generated three-argument form would
@@ -1401,6 +1422,9 @@ class PublicApiAuditTest {
             "Utils.createShareIntent(Context, Entry): Intent",
             "Utils.createShareIntent(Context, Entry, String): Intent",
             "Utils.createShareIntent(Context, Entry, String, String): Intent",
+            "Utils.createShareResultIntent(String): Intent",
+            "Utils.createShareResultIntent(String, Map<String, TypedField>): Intent",
+            "Utils.createShareResultIntent(String, Map<String, TypedField>, String): Intent",
             // T12 widened this with a defaulted `nonceFormat: String?` — an addition, which
             // stop rule 10 permits; the pre-T12 arity came back as a *generated* overload under
             // T21 rather than as the Kotlin signature (defaults compile to one method plus a
@@ -1408,6 +1432,10 @@ class PublicApiAuditTest {
             "Utils.createSignChallengeIntent(Context, String, byte[], String): Intent",
             "Utils.createSignChallengeIntent(Context, String, byte[], String, String): Intent",
             "Utils.createSignChallengeIntent(Context, String, byte[], String, String, String): Intent",
+            "Utils.createSignChallengeResultIntent(byte[]): Intent",
+            "Utils.createSignChallengeResultIntent(byte[], Map<String, TypedField>): Intent",
+            "Utils.createSignChallengeResultIntent(byte[], Map<String, TypedField>, String): Intent",
+            "Utils.createSignChallengeResultIntent(byte[], Map<String, TypedField>, String, String): Intent",
             "Utils.decodeEntry(String): Entry",
             "Utils.decodeFields(String): Map<String, TypedField>",
             // Advisory and diagnostic, the `validateEntry` precedent: it changes what no parser
