@@ -1,0 +1,394 @@
+# LIM — every JVM-visible member of `dev.eryalabs.lim`, as it stands at this commit.
+#
+# One line per public or protected constructor, method and field of every class compiled into the
+# package — synthetics, bridges, `componentN`, `copy`, `copy$default`, the Parcelize members and
+# `CREATOR` included — rendered
+#
+#     <modifiers> <owner>.<name>(<erased parameter types>): <return type>
+#
+# with dotted names rather than the slashed JVM spelling: the line denotes the descriptor, it is
+# not written as one. Sorted by `<owner>.<name>(<params>)`, which is also the key `ApiBaselineTest`
+# classifies a difference by — a member present on both sides with different modifiers or a
+# different return type is reported *changed*, not as one addition plus one removal.
+#
+# WHY IT EXISTS. An already-compiled consumer resolves a member by name, descriptor *and*
+# modifiers. `PublicApiAuditTest`'s SIGNATURES snapshot renders neither the modifiers nor the
+# compiler's own `$default` bridges, so two of the breaks that cost a consumer a NoSuchMethodError
+# move no line in it: an instance method becoming static, and a default argument being dropped —
+# the main descriptor survives that one, while `f$default`, the method every already-compiled
+# Kotlin caller of the shorter form actually invokes, quietly does not. This file is what notices.
+# The two snapshots are independent on purpose: a change that moves both is a real API change, a
+# change that moves only this one is precisely what SIGNATURES cannot see.
+#
+# WHAT IT IS NOT. It is not a comparison against the published 1.0.0 artifact. That artifact is
+# out of reach from the environment this file is generated in, so what is recorded here is the
+# surface *at this commit*: evidence for the version decision, which it settles none of. The three
+# binary-compatibility items under "Blocked on human" — `shareEntry`'s `)V` -> `)Z`, `@JvmStatic`
+# on `Utils`, and the nullability widening — still need a human.
+#
+# WHAT IT IS PINNED TO BESIDES THE API. `$default`, `access$` and bridge members are emitted by
+# the Kotlin compiler, not written by anyone, so a routine toolchain bump can move lines here with
+# no API change at all. Generated with:
+#
+#     Kotlin 2.0.21, AGP 8.13.2, jvmTarget 11
+#
+# If a diff here surprises you, check that first. `ApiBaselineTest` asserts all three numbers
+# above against `gradle/libs.versions.toml` and `LIM/build.gradle.kts`, so they cannot go stale
+# without a failure.
+#
+# WHAT IT DOES NOT RENDER, so that nobody reads more into a green run than it says.
+#   - Kotlin nullability, and generic type arguments: `Map<String, TypedField>` narrowing to
+#     `Map<String, String>` is a source break that changes no descriptor, and SIGNATURES already
+#     renders type arguments to catch exactly that.
+#   - Anything class-level. A published class going `internal`, becoming `final`, or dropping an
+#     interface from its supertype list moves no line here — its members keep their own access
+#     bits — and each of those is an IllegalAccessError or an AbstractMethodError for an
+#     already-compiled consumer. SIGNATURES cannot see them either; between the two files, class
+#     headers are unpinned.
+#   - Private and package-private members, which no consumer can link against; and anonymous
+#     classes, which no consumer can name.
+#   - Any future *subpackage*: one package directory is enumerated, exactly as the audit does.
+#
+# TO UPDATE. Run `./gradlew :LIM:testDebugUnitTest --tests '*ApiBaselineTest'`. On a mismatch the
+# test writes a regenerated body to `LIM/build/api/lim.api.actual` and names it in the failure.
+# Replace the lines below with that body, keep this header, and read the verdict words before you
+# do: *added* is permitted by stop rule 10, *removed* and *changed* are what it forbids.
+public synthetic dev.eryalabs.lim.Entry$Companion.<init>(kotlin.jvm.internal.DefaultConstructorMarker): void
+public dev.eryalabs.lim.Entry$Companion.create(android.os.Parcel): dev.eryalabs.lim.Entry
+public synthetic bridge dev.eryalabs.lim.Entry$Companion.create(android.os.Parcel): java.lang.Object
+public dev.eryalabs.lim.Entry$Companion.newArray(int): dev.eryalabs.lim.Entry[]
+public synthetic bridge dev.eryalabs.lim.Entry$Companion.newArray(int): java.lang.Object[]
+public dev.eryalabs.lim.Entry$Companion.write(dev.eryalabs.lim.Entry, android.os.Parcel, int): void
+public synthetic bridge dev.eryalabs.lim.Entry$Companion.write(java.lang.Object, android.os.Parcel, int): void
+public dev.eryalabs.lim.Entry$Creator.<init>(): void
+public final dev.eryalabs.lim.Entry$Creator.createFromParcel(android.os.Parcel): dev.eryalabs.lim.Entry
+public synthetic bridge dev.eryalabs.lim.Entry$Creator.createFromParcel(android.os.Parcel): java.lang.Object
+public final dev.eryalabs.lim.Entry$Creator.newArray(int): dev.eryalabs.lim.Entry[]
+public synthetic bridge dev.eryalabs.lim.Entry$Creator.newArray(int): java.lang.Object[]
+public dev.eryalabs.lim.Entry.<init>(java.lang.String, java.util.Map, java.lang.String): void
+public static final dev.eryalabs.lim.Entry.CREATOR: android.os.Parcelable$Creator
+public static final dev.eryalabs.lim.Entry.Companion: dev.eryalabs.lim.Entry$Companion
+public final dev.eryalabs.lim.Entry.component1(): java.lang.String
+public final dev.eryalabs.lim.Entry.component2(): java.util.Map
+public final dev.eryalabs.lim.Entry.component3(): java.lang.String
+public static synthetic dev.eryalabs.lim.Entry.copy$default(dev.eryalabs.lim.Entry, java.lang.String, java.util.Map, java.lang.String, int, java.lang.Object): dev.eryalabs.lim.Entry
+public final dev.eryalabs.lim.Entry.copy(java.lang.String, java.util.Map, java.lang.String): dev.eryalabs.lim.Entry
+public final dev.eryalabs.lim.Entry.describeContents(): int
+public dev.eryalabs.lim.Entry.equals(java.lang.Object): boolean
+public final dev.eryalabs.lim.Entry.getFields(): java.util.Map
+public final dev.eryalabs.lim.Entry.getId(): java.lang.String
+public final dev.eryalabs.lim.Entry.getPublicKey(): java.lang.String
+public dev.eryalabs.lim.Entry.hashCode(): int
+public dev.eryalabs.lim.Entry.toString(): java.lang.String
+public final dev.eryalabs.lim.Entry.writeToParcel(android.os.Parcel, int): void
+public static final dev.eryalabs.lim.FieldType.BOOLEAN: java.lang.String
+public static final dev.eryalabs.lim.FieldType.DATE: java.lang.String
+public static final dev.eryalabs.lim.FieldType.DECIMAL: java.lang.String
+public static final dev.eryalabs.lim.FieldType.EMAIL: java.lang.String
+public static final dev.eryalabs.lim.FieldType.INSTANCE: dev.eryalabs.lim.FieldType
+public static final dev.eryalabs.lim.FieldType.INTEGER: java.lang.String
+public static final dev.eryalabs.lim.FieldType.PHONE: java.lang.String
+public static final dev.eryalabs.lim.FieldType.STRING: java.lang.String
+public static final dev.eryalabs.lim.FieldType.URL: java.lang.String
+public final dev.eryalabs.lim.FieldType.getKNOWN(): java.util.Set
+public final dev.eryalabs.lim.FieldType.normalize(java.lang.String): java.lang.String
+public dev.eryalabs.lim.QueryRequest.<init>(java.lang.String, java.lang.String, java.lang.Integer): void
+public synthetic dev.eryalabs.lim.QueryRequest.<init>(java.lang.String, java.lang.String, java.lang.Integer, int, kotlin.jvm.internal.DefaultConstructorMarker): void
+public final dev.eryalabs.lim.QueryRequest.component1(): java.lang.String
+public final dev.eryalabs.lim.QueryRequest.component2(): java.lang.String
+public final dev.eryalabs.lim.QueryRequest.component3(): java.lang.Integer
+public static synthetic dev.eryalabs.lim.QueryRequest.copy$default(dev.eryalabs.lim.QueryRequest, java.lang.String, java.lang.String, java.lang.Integer, int, java.lang.Object): dev.eryalabs.lim.QueryRequest
+public final dev.eryalabs.lim.QueryRequest.copy(java.lang.String, java.lang.String, java.lang.Integer): dev.eryalabs.lim.QueryRequest
+public dev.eryalabs.lim.QueryRequest.equals(java.lang.Object): boolean
+public final dev.eryalabs.lim.QueryRequest.getProtocolVersion(): java.lang.Integer
+public final dev.eryalabs.lim.QueryRequest.getPublicKey(): java.lang.String
+public final dev.eryalabs.lim.QueryRequest.getRequestCode(): java.lang.String
+public dev.eryalabs.lim.QueryRequest.hashCode(): int
+public dev.eryalabs.lim.QueryRequest.toString(): java.lang.String
+public dev.eryalabs.lim.QueryResult.<init>(java.util.Map, java.lang.String, java.lang.String, java.lang.Integer): void
+public synthetic dev.eryalabs.lim.QueryResult.<init>(java.util.Map, java.lang.String, java.lang.String, java.lang.Integer, int, kotlin.jvm.internal.DefaultConstructorMarker): void
+public final dev.eryalabs.lim.QueryResult.component1(): java.util.Map
+public final dev.eryalabs.lim.QueryResult.component2(): java.lang.String
+public final dev.eryalabs.lim.QueryResult.component3(): java.lang.String
+public final dev.eryalabs.lim.QueryResult.component4(): java.lang.Integer
+public static synthetic dev.eryalabs.lim.QueryResult.copy$default(dev.eryalabs.lim.QueryResult, java.util.Map, java.lang.String, java.lang.String, java.lang.Integer, int, java.lang.Object): dev.eryalabs.lim.QueryResult
+public final dev.eryalabs.lim.QueryResult.copy(java.util.Map, java.lang.String, java.lang.String, java.lang.Integer): dev.eryalabs.lim.QueryResult
+public dev.eryalabs.lim.QueryResult.equals(java.lang.Object): boolean
+public final dev.eryalabs.lim.QueryResult.getFields(): java.util.Map
+public final dev.eryalabs.lim.QueryResult.getPublicKey(): java.lang.String
+public final dev.eryalabs.lim.QueryResult.getRequestCode(): java.lang.String
+public final dev.eryalabs.lim.QueryResult.getVaultProtocolVersion(): java.lang.Integer
+public dev.eryalabs.lim.QueryResult.hashCode(): int
+public dev.eryalabs.lim.QueryResult.toString(): java.lang.String
+public dev.eryalabs.lim.RecoveryAuthorization.<init>(java.lang.String, java.lang.String, java.lang.String, long, long): void
+public final dev.eryalabs.lim.RecoveryAuthorization.component1(): java.lang.String
+public final dev.eryalabs.lim.RecoveryAuthorization.component2(): java.lang.String
+public final dev.eryalabs.lim.RecoveryAuthorization.component3(): java.lang.String
+public final dev.eryalabs.lim.RecoveryAuthorization.component4(): long
+public final dev.eryalabs.lim.RecoveryAuthorization.component5(): long
+public static synthetic dev.eryalabs.lim.RecoveryAuthorization.copy$default(dev.eryalabs.lim.RecoveryAuthorization, java.lang.String, java.lang.String, java.lang.String, long, long, int, java.lang.Object): dev.eryalabs.lim.RecoveryAuthorization
+public final dev.eryalabs.lim.RecoveryAuthorization.copy(java.lang.String, java.lang.String, java.lang.String, long, long): dev.eryalabs.lim.RecoveryAuthorization
+public dev.eryalabs.lim.RecoveryAuthorization.equals(java.lang.Object): boolean
+public final dev.eryalabs.lim.RecoveryAuthorization.getAuthorizationId(): java.lang.String
+public final dev.eryalabs.lim.RecoveryAuthorization.getIssuedAtMillis(): long
+public final dev.eryalabs.lim.RecoveryAuthorization.getRecoveryPublicKey(): java.lang.String
+public final dev.eryalabs.lim.RecoveryAuthorization.getSequence(): long
+public final dev.eryalabs.lim.RecoveryAuthorization.getSubjectPublicKey(): java.lang.String
+public dev.eryalabs.lim.RecoveryAuthorization.hashCode(): int
+public dev.eryalabs.lim.RecoveryAuthorization.toString(): java.lang.String
+public static final dev.eryalabs.lim.RedactionKt.PUBLIC_KEY_PREVIEW_CHARS: int
+public static final dev.eryalabs.lim.RedactionKt.previewedPublicKey(java.lang.String): java.lang.String
+public static final dev.eryalabs.lim.RedactionKt.redactedValue(java.lang.String): java.lang.String
+public dev.eryalabs.lim.Revocation.<init>(java.lang.String, java.lang.String, long, long): void
+public final dev.eryalabs.lim.Revocation.component1(): java.lang.String
+public final dev.eryalabs.lim.Revocation.component2(): java.lang.String
+public final dev.eryalabs.lim.Revocation.component3(): long
+public final dev.eryalabs.lim.Revocation.component4(): long
+public static synthetic dev.eryalabs.lim.Revocation.copy$default(dev.eryalabs.lim.Revocation, java.lang.String, java.lang.String, long, long, int, java.lang.Object): dev.eryalabs.lim.Revocation
+public final dev.eryalabs.lim.Revocation.copy(java.lang.String, java.lang.String, long, long): dev.eryalabs.lim.Revocation
+public dev.eryalabs.lim.Revocation.equals(java.lang.Object): boolean
+public final dev.eryalabs.lim.Revocation.getIssuedAtMillis(): long
+public final dev.eryalabs.lim.Revocation.getRevokedAuthorizationId(): java.lang.String
+public final dev.eryalabs.lim.Revocation.getSequence(): long
+public final dev.eryalabs.lim.Revocation.getSubjectPublicKey(): java.lang.String
+public dev.eryalabs.lim.Revocation.hashCode(): int
+public dev.eryalabs.lim.Revocation.toString(): java.lang.String
+public dev.eryalabs.lim.RotationStatement.<init>(java.lang.String, java.lang.String, java.lang.String, long, long): void
+public final dev.eryalabs.lim.RotationStatement.component1(): java.lang.String
+public final dev.eryalabs.lim.RotationStatement.component2(): java.lang.String
+public final dev.eryalabs.lim.RotationStatement.component3(): java.lang.String
+public final dev.eryalabs.lim.RotationStatement.component4(): long
+public final dev.eryalabs.lim.RotationStatement.component5(): long
+public static synthetic dev.eryalabs.lim.RotationStatement.copy$default(dev.eryalabs.lim.RotationStatement, java.lang.String, java.lang.String, java.lang.String, long, long, int, java.lang.Object): dev.eryalabs.lim.RotationStatement
+public final dev.eryalabs.lim.RotationStatement.copy(java.lang.String, java.lang.String, java.lang.String, long, long): dev.eryalabs.lim.RotationStatement
+public dev.eryalabs.lim.RotationStatement.equals(java.lang.Object): boolean
+public final dev.eryalabs.lim.RotationStatement.getExpiresAtMillis(): long
+public final dev.eryalabs.lim.RotationStatement.getIssuedAtMillis(): long
+public final dev.eryalabs.lim.RotationStatement.getNewPublicKey(): java.lang.String
+public final dev.eryalabs.lim.RotationStatement.getOldPublicKey(): java.lang.String
+public final dev.eryalabs.lim.RotationStatement.getStatementId(): java.lang.String
+public dev.eryalabs.lim.RotationStatement.hashCode(): int
+public dev.eryalabs.lim.RotationStatement.toString(): java.lang.String
+public dev.eryalabs.lim.ShareRequest.<init>(dev.eryalabs.lim.Entry, java.lang.String, java.lang.Integer): void
+public synthetic dev.eryalabs.lim.ShareRequest.<init>(dev.eryalabs.lim.Entry, java.lang.String, java.lang.Integer, int, kotlin.jvm.internal.DefaultConstructorMarker): void
+public final dev.eryalabs.lim.ShareRequest.component1(): dev.eryalabs.lim.Entry
+public final dev.eryalabs.lim.ShareRequest.component2(): java.lang.String
+public final dev.eryalabs.lim.ShareRequest.component3(): java.lang.Integer
+public static synthetic dev.eryalabs.lim.ShareRequest.copy$default(dev.eryalabs.lim.ShareRequest, dev.eryalabs.lim.Entry, java.lang.String, java.lang.Integer, int, java.lang.Object): dev.eryalabs.lim.ShareRequest
+public final dev.eryalabs.lim.ShareRequest.copy(dev.eryalabs.lim.Entry, java.lang.String, java.lang.Integer): dev.eryalabs.lim.ShareRequest
+public dev.eryalabs.lim.ShareRequest.equals(java.lang.Object): boolean
+public final dev.eryalabs.lim.ShareRequest.getEntry(): dev.eryalabs.lim.Entry
+public final dev.eryalabs.lim.ShareRequest.getProtocolVersion(): java.lang.Integer
+public final dev.eryalabs.lim.ShareRequest.getRequestCode(): java.lang.String
+public dev.eryalabs.lim.ShareRequest.hashCode(): int
+public dev.eryalabs.lim.ShareRequest.toString(): java.lang.String
+public dev.eryalabs.lim.ShareResult.<init>(java.lang.String, java.util.Map, java.lang.String, java.lang.Integer): void
+public synthetic dev.eryalabs.lim.ShareResult.<init>(java.lang.String, java.util.Map, java.lang.String, java.lang.Integer, int, kotlin.jvm.internal.DefaultConstructorMarker): void
+public final dev.eryalabs.lim.ShareResult.component1(): java.lang.String
+public final dev.eryalabs.lim.ShareResult.component2(): java.util.Map
+public final dev.eryalabs.lim.ShareResult.component3(): java.lang.String
+public final dev.eryalabs.lim.ShareResult.component4(): java.lang.Integer
+public static synthetic dev.eryalabs.lim.ShareResult.copy$default(dev.eryalabs.lim.ShareResult, java.lang.String, java.util.Map, java.lang.String, java.lang.Integer, int, java.lang.Object): dev.eryalabs.lim.ShareResult
+public final dev.eryalabs.lim.ShareResult.copy(java.lang.String, java.util.Map, java.lang.String, java.lang.Integer): dev.eryalabs.lim.ShareResult
+public dev.eryalabs.lim.ShareResult.equals(java.lang.Object): boolean
+public final dev.eryalabs.lim.ShareResult.getFields(): java.util.Map
+public final dev.eryalabs.lim.ShareResult.getPublicKey(): java.lang.String
+public final dev.eryalabs.lim.ShareResult.getRequestCode(): java.lang.String
+public final dev.eryalabs.lim.ShareResult.getVaultProtocolVersion(): java.lang.Integer
+public dev.eryalabs.lim.ShareResult.hashCode(): int
+public dev.eryalabs.lim.ShareResult.toString(): java.lang.String
+public dev.eryalabs.lim.SignChallengeRequest.<init>(java.lang.String, byte[], java.lang.String, java.lang.String, java.lang.Integer): void
+public synthetic dev.eryalabs.lim.SignChallengeRequest.<init>(java.lang.String, byte[], java.lang.String, java.lang.String, java.lang.Integer, int, kotlin.jvm.internal.DefaultConstructorMarker): void
+public final dev.eryalabs.lim.SignChallengeRequest.component1(): java.lang.String
+public final dev.eryalabs.lim.SignChallengeRequest.component2(): byte[]
+public final dev.eryalabs.lim.SignChallengeRequest.component3(): java.lang.String
+public final dev.eryalabs.lim.SignChallengeRequest.component4(): java.lang.String
+public final dev.eryalabs.lim.SignChallengeRequest.component5(): java.lang.Integer
+public static synthetic dev.eryalabs.lim.SignChallengeRequest.copy$default(dev.eryalabs.lim.SignChallengeRequest, java.lang.String, byte[], java.lang.String, java.lang.String, java.lang.Integer, int, java.lang.Object): dev.eryalabs.lim.SignChallengeRequest
+public final dev.eryalabs.lim.SignChallengeRequest.copy(java.lang.String, byte[], java.lang.String, java.lang.String, java.lang.Integer): dev.eryalabs.lim.SignChallengeRequest
+public dev.eryalabs.lim.SignChallengeRequest.equals(java.lang.Object): boolean
+public final dev.eryalabs.lim.SignChallengeRequest.getNonce(): byte[]
+public final dev.eryalabs.lim.SignChallengeRequest.getNonceFormat(): java.lang.String
+public final dev.eryalabs.lim.SignChallengeRequest.getProtocolVersion(): java.lang.Integer
+public final dev.eryalabs.lim.SignChallengeRequest.getPublicKey(): java.lang.String
+public final dev.eryalabs.lim.SignChallengeRequest.getRequestCode(): java.lang.String
+public dev.eryalabs.lim.SignChallengeRequest.hashCode(): int
+public dev.eryalabs.lim.SignChallengeRequest.toString(): java.lang.String
+public dev.eryalabs.lim.SignChallengeResult.<init>(byte[], java.lang.String, java.util.Map, java.lang.String, java.lang.Integer): void
+public synthetic dev.eryalabs.lim.SignChallengeResult.<init>(byte[], java.lang.String, java.util.Map, java.lang.String, java.lang.Integer, int, kotlin.jvm.internal.DefaultConstructorMarker): void
+public final dev.eryalabs.lim.SignChallengeResult.component1(): byte[]
+public final dev.eryalabs.lim.SignChallengeResult.component2(): java.lang.String
+public final dev.eryalabs.lim.SignChallengeResult.component3(): java.util.Map
+public final dev.eryalabs.lim.SignChallengeResult.component4(): java.lang.String
+public final dev.eryalabs.lim.SignChallengeResult.component5(): java.lang.Integer
+public static synthetic dev.eryalabs.lim.SignChallengeResult.copy$default(dev.eryalabs.lim.SignChallengeResult, byte[], java.lang.String, java.util.Map, java.lang.String, java.lang.Integer, int, java.lang.Object): dev.eryalabs.lim.SignChallengeResult
+public final dev.eryalabs.lim.SignChallengeResult.copy(byte[], java.lang.String, java.util.Map, java.lang.String, java.lang.Integer): dev.eryalabs.lim.SignChallengeResult
+public dev.eryalabs.lim.SignChallengeResult.equals(java.lang.Object): boolean
+public final dev.eryalabs.lim.SignChallengeResult.getAlgorithm(): java.lang.String
+public final dev.eryalabs.lim.SignChallengeResult.getFields(): java.util.Map
+public final dev.eryalabs.lim.SignChallengeResult.getRequestCode(): java.lang.String
+public final dev.eryalabs.lim.SignChallengeResult.getSignature(): byte[]
+public final dev.eryalabs.lim.SignChallengeResult.getVaultProtocolVersion(): java.lang.Integer
+public dev.eryalabs.lim.SignChallengeResult.hashCode(): int
+public final dev.eryalabs.lim.SignChallengeResult.isVerified(java.lang.String, byte[]): boolean
+public dev.eryalabs.lim.SignChallengeResult.toString(): java.lang.String
+public dev.eryalabs.lim.SignedStatement$Recover.<init>(dev.eryalabs.lim.RecoveryAuthorization, byte[]): void
+public final dev.eryalabs.lim.SignedStatement$Recover.component1(): dev.eryalabs.lim.RecoveryAuthorization
+public final dev.eryalabs.lim.SignedStatement$Recover.component2(): byte[]
+public static synthetic dev.eryalabs.lim.SignedStatement$Recover.copy$default(dev.eryalabs.lim.SignedStatement$Recover, dev.eryalabs.lim.RecoveryAuthorization, byte[], int, java.lang.Object): dev.eryalabs.lim.SignedStatement$Recover
+public final dev.eryalabs.lim.SignedStatement$Recover.copy(dev.eryalabs.lim.RecoveryAuthorization, byte[]): dev.eryalabs.lim.SignedStatement$Recover
+public dev.eryalabs.lim.SignedStatement$Recover.equals(java.lang.Object): boolean
+public final dev.eryalabs.lim.SignedStatement$Recover.getAuthorization(): dev.eryalabs.lim.RecoveryAuthorization
+public dev.eryalabs.lim.SignedStatement$Recover.getSignature(): byte[]
+public dev.eryalabs.lim.SignedStatement$Recover.hashCode(): int
+public dev.eryalabs.lim.SignedStatement$Recover.toString(): java.lang.String
+public dev.eryalabs.lim.SignedStatement$Revoke.<init>(dev.eryalabs.lim.Revocation, byte[]): void
+public final dev.eryalabs.lim.SignedStatement$Revoke.component1(): dev.eryalabs.lim.Revocation
+public final dev.eryalabs.lim.SignedStatement$Revoke.component2(): byte[]
+public static synthetic dev.eryalabs.lim.SignedStatement$Revoke.copy$default(dev.eryalabs.lim.SignedStatement$Revoke, dev.eryalabs.lim.Revocation, byte[], int, java.lang.Object): dev.eryalabs.lim.SignedStatement$Revoke
+public final dev.eryalabs.lim.SignedStatement$Revoke.copy(dev.eryalabs.lim.Revocation, byte[]): dev.eryalabs.lim.SignedStatement$Revoke
+public dev.eryalabs.lim.SignedStatement$Revoke.equals(java.lang.Object): boolean
+public final dev.eryalabs.lim.SignedStatement$Revoke.getRevocation(): dev.eryalabs.lim.Revocation
+public dev.eryalabs.lim.SignedStatement$Revoke.getSignature(): byte[]
+public dev.eryalabs.lim.SignedStatement$Revoke.hashCode(): int
+public dev.eryalabs.lim.SignedStatement$Revoke.toString(): java.lang.String
+public dev.eryalabs.lim.SignedStatement$Rotate.<init>(dev.eryalabs.lim.RotationStatement, byte[]): void
+public final dev.eryalabs.lim.SignedStatement$Rotate.component1(): dev.eryalabs.lim.RotationStatement
+public final dev.eryalabs.lim.SignedStatement$Rotate.component2(): byte[]
+public static synthetic dev.eryalabs.lim.SignedStatement$Rotate.copy$default(dev.eryalabs.lim.SignedStatement$Rotate, dev.eryalabs.lim.RotationStatement, byte[], int, java.lang.Object): dev.eryalabs.lim.SignedStatement$Rotate
+public final dev.eryalabs.lim.SignedStatement$Rotate.copy(dev.eryalabs.lim.RotationStatement, byte[]): dev.eryalabs.lim.SignedStatement$Rotate
+public dev.eryalabs.lim.SignedStatement$Rotate.equals(java.lang.Object): boolean
+public dev.eryalabs.lim.SignedStatement$Rotate.getSignature(): byte[]
+public final dev.eryalabs.lim.SignedStatement$Rotate.getStatement(): dev.eryalabs.lim.RotationStatement
+public dev.eryalabs.lim.SignedStatement$Rotate.hashCode(): int
+public dev.eryalabs.lim.SignedStatement$Rotate.toString(): java.lang.String
+public synthetic dev.eryalabs.lim.SignedStatement.<init>(kotlin.jvm.internal.DefaultConstructorMarker): void
+public abstract dev.eryalabs.lim.SignedStatement.getSignature(): byte[]
+public static final dev.eryalabs.lim.StatementVerdict.EXPIRED: dev.eryalabs.lim.StatementVerdict
+public static final dev.eryalabs.lim.StatementVerdict.NEW_KEY_UNUSABLE: dev.eryalabs.lim.StatementVerdict
+public static final dev.eryalabs.lim.StatementVerdict.NOT_YET_VALID: dev.eryalabs.lim.StatementVerdict
+public static final dev.eryalabs.lim.StatementVerdict.SAME_KEY: dev.eryalabs.lim.StatementVerdict
+public static final dev.eryalabs.lim.StatementVerdict.SIGNATURE_INVALID: dev.eryalabs.lim.StatementVerdict
+public static final dev.eryalabs.lim.StatementVerdict.VALID: dev.eryalabs.lim.StatementVerdict
+public static final dev.eryalabs.lim.StatementVerdict.WRONG_SUBJECT: dev.eryalabs.lim.StatementVerdict
+public static dev.eryalabs.lim.StatementVerdict.getEntries(): kotlin.enums.EnumEntries
+public static dev.eryalabs.lim.StatementVerdict.valueOf(java.lang.String): dev.eryalabs.lim.StatementVerdict
+public static dev.eryalabs.lim.StatementVerdict.values(): dev.eryalabs.lim.StatementVerdict[]
+public dev.eryalabs.lim.TypedField$Creator.<init>(): void
+public final dev.eryalabs.lim.TypedField$Creator.createFromParcel(android.os.Parcel): dev.eryalabs.lim.TypedField
+public synthetic bridge dev.eryalabs.lim.TypedField$Creator.createFromParcel(android.os.Parcel): java.lang.Object
+public final dev.eryalabs.lim.TypedField$Creator.newArray(int): dev.eryalabs.lim.TypedField[]
+public synthetic bridge dev.eryalabs.lim.TypedField$Creator.newArray(int): java.lang.Object[]
+public dev.eryalabs.lim.TypedField.<init>(java.lang.String, java.lang.String): void
+public synthetic dev.eryalabs.lim.TypedField.<init>(java.lang.String, java.lang.String, int, kotlin.jvm.internal.DefaultConstructorMarker): void
+public static final dev.eryalabs.lim.TypedField.CREATOR: android.os.Parcelable$Creator
+public final dev.eryalabs.lim.TypedField.component1(): java.lang.String
+public final dev.eryalabs.lim.TypedField.component2(): java.lang.String
+public static synthetic dev.eryalabs.lim.TypedField.copy$default(dev.eryalabs.lim.TypedField, java.lang.String, java.lang.String, int, java.lang.Object): dev.eryalabs.lim.TypedField
+public final dev.eryalabs.lim.TypedField.copy(java.lang.String, java.lang.String): dev.eryalabs.lim.TypedField
+public final dev.eryalabs.lim.TypedField.describeContents(): int
+public dev.eryalabs.lim.TypedField.equals(java.lang.Object): boolean
+public final dev.eryalabs.lim.TypedField.getType(): java.lang.String
+public final dev.eryalabs.lim.TypedField.getValue(): java.lang.String
+public dev.eryalabs.lim.TypedField.hashCode(): int
+public dev.eryalabs.lim.TypedField.toString(): java.lang.String
+public final dev.eryalabs.lim.TypedField.writeToParcel(android.os.Parcel, int): void
+public static final dev.eryalabs.lim.Utils.DEFAULT_ENDEAVOR_PACKAGE: java.lang.String
+public static final dev.eryalabs.lim.Utils.EXTRA_ALGORITHM: java.lang.String
+public static final dev.eryalabs.lim.Utils.EXTRA_ENTRY_JSON: java.lang.String
+public static final dev.eryalabs.lim.Utils.EXTRA_FIELDS_JSON: java.lang.String
+public static final dev.eryalabs.lim.Utils.EXTRA_NONCE: java.lang.String
+public static final dev.eryalabs.lim.Utils.EXTRA_NONCE_FORMAT: java.lang.String
+public static final dev.eryalabs.lim.Utils.EXTRA_PROTOCOL_VERSION: java.lang.String
+public static final dev.eryalabs.lim.Utils.EXTRA_PUBLIC_KEY: java.lang.String
+public static final dev.eryalabs.lim.Utils.EXTRA_QUERY_RESULT_FIELDS: java.lang.String
+public static final dev.eryalabs.lim.Utils.EXTRA_SHARE_REQUEST_CODE: java.lang.String
+public static final dev.eryalabs.lim.Utils.EXTRA_SIGNATURE: java.lang.String
+public static final dev.eryalabs.lim.Utils.INSTANCE: dev.eryalabs.lim.Utils
+public static final dev.eryalabs.lim.Utils.NONCE_FORMAT_TIMESTAMPED: java.lang.String
+public static final dev.eryalabs.lim.Utils.PROTOCOL_VERSION: int
+public static final dev.eryalabs.lim.Utils.STATEMENT_DOMAIN_V1: java.lang.String
+public static final dev.eryalabs.lim.Utils.STATEMENT_ENVELOPE_V1: java.lang.String
+public static final dev.eryalabs.lim.Utils.STATEMENT_RECOVER_V1: java.lang.String
+public static final dev.eryalabs.lim.Utils.STATEMENT_REVOKE_V1: java.lang.String
+public static final dev.eryalabs.lim.Utils.STATEMENT_ROTATE_V1: java.lang.String
+public static synthetic dev.eryalabs.lim.Utils.createQueryIntent$default(dev.eryalabs.lim.Utils, android.content.Context, java.lang.String, java.lang.String, java.lang.String, int, java.lang.Object): android.content.Intent
+public final dev.eryalabs.lim.Utils.createQueryIntent(android.content.Context, java.lang.String, java.lang.String): android.content.Intent
+public final dev.eryalabs.lim.Utils.createQueryIntent(android.content.Context, java.lang.String, java.lang.String, java.lang.String): android.content.Intent
+public static synthetic dev.eryalabs.lim.Utils.createQueryResultIntent$default(dev.eryalabs.lim.Utils, dev.eryalabs.lim.QueryRequest, java.lang.String, java.util.Map, int, java.lang.Object): android.content.Intent
+public static synthetic dev.eryalabs.lim.Utils.createQueryResultIntent$default(dev.eryalabs.lim.Utils, java.lang.String, java.util.Map, java.lang.String, int, java.lang.Object): android.content.Intent
+public final dev.eryalabs.lim.Utils.createQueryResultIntent(dev.eryalabs.lim.QueryRequest, java.lang.String): android.content.Intent
+public final dev.eryalabs.lim.Utils.createQueryResultIntent(dev.eryalabs.lim.QueryRequest, java.lang.String, java.util.Map): android.content.Intent
+public final dev.eryalabs.lim.Utils.createQueryResultIntent(java.lang.String): android.content.Intent
+public final dev.eryalabs.lim.Utils.createQueryResultIntent(java.lang.String, java.util.Map): android.content.Intent
+public final dev.eryalabs.lim.Utils.createQueryResultIntent(java.lang.String, java.util.Map, java.lang.String): android.content.Intent
+public static synthetic dev.eryalabs.lim.Utils.createShareIntent$default(dev.eryalabs.lim.Utils, android.content.Context, dev.eryalabs.lim.Entry, java.lang.String, int, java.lang.Object): android.content.Intent
+public static synthetic dev.eryalabs.lim.Utils.createShareIntent$default(dev.eryalabs.lim.Utils, android.content.Context, dev.eryalabs.lim.Entry, java.lang.String, java.lang.String, int, java.lang.Object): android.content.Intent
+public final dev.eryalabs.lim.Utils.createShareIntent(android.content.Context, dev.eryalabs.lim.Entry): android.content.Intent
+public final dev.eryalabs.lim.Utils.createShareIntent(android.content.Context, dev.eryalabs.lim.Entry, java.lang.String): android.content.Intent
+public final dev.eryalabs.lim.Utils.createShareIntent(android.content.Context, dev.eryalabs.lim.Entry, java.lang.String, java.lang.String): android.content.Intent
+public static synthetic dev.eryalabs.lim.Utils.createShareResultIntent$default(dev.eryalabs.lim.Utils, dev.eryalabs.lim.ShareRequest, java.lang.String, java.util.Map, int, java.lang.Object): android.content.Intent
+public static synthetic dev.eryalabs.lim.Utils.createShareResultIntent$default(dev.eryalabs.lim.Utils, java.lang.String, java.util.Map, java.lang.String, int, java.lang.Object): android.content.Intent
+public final dev.eryalabs.lim.Utils.createShareResultIntent(dev.eryalabs.lim.ShareRequest, java.lang.String): android.content.Intent
+public final dev.eryalabs.lim.Utils.createShareResultIntent(dev.eryalabs.lim.ShareRequest, java.lang.String, java.util.Map): android.content.Intent
+public final dev.eryalabs.lim.Utils.createShareResultIntent(java.lang.String): android.content.Intent
+public final dev.eryalabs.lim.Utils.createShareResultIntent(java.lang.String, java.util.Map): android.content.Intent
+public final dev.eryalabs.lim.Utils.createShareResultIntent(java.lang.String, java.util.Map, java.lang.String): android.content.Intent
+public static synthetic dev.eryalabs.lim.Utils.createSignChallengeIntent$default(dev.eryalabs.lim.Utils, android.content.Context, java.lang.String, byte[], java.lang.String, java.lang.String, java.lang.String, int, java.lang.Object): android.content.Intent
+public final dev.eryalabs.lim.Utils.createSignChallengeIntent(android.content.Context, java.lang.String, byte[], java.lang.String): android.content.Intent
+public final dev.eryalabs.lim.Utils.createSignChallengeIntent(android.content.Context, java.lang.String, byte[], java.lang.String, java.lang.String): android.content.Intent
+public final dev.eryalabs.lim.Utils.createSignChallengeIntent(android.content.Context, java.lang.String, byte[], java.lang.String, java.lang.String, java.lang.String): android.content.Intent
+public static synthetic dev.eryalabs.lim.Utils.createSignChallengeResultIntent$default(dev.eryalabs.lim.Utils, byte[], java.util.Map, java.lang.String, java.lang.String, int, java.lang.Object): android.content.Intent
+public static synthetic dev.eryalabs.lim.Utils.createSignChallengeResultIntent$default(dev.eryalabs.lim.Utils, dev.eryalabs.lim.SignChallengeRequest, byte[], java.util.Map, java.lang.String, int, java.lang.Object): android.content.Intent
+public final dev.eryalabs.lim.Utils.createSignChallengeResultIntent(byte[]): android.content.Intent
+public final dev.eryalabs.lim.Utils.createSignChallengeResultIntent(byte[], java.util.Map): android.content.Intent
+public final dev.eryalabs.lim.Utils.createSignChallengeResultIntent(byte[], java.util.Map, java.lang.String): android.content.Intent
+public final dev.eryalabs.lim.Utils.createSignChallengeResultIntent(byte[], java.util.Map, java.lang.String, java.lang.String): android.content.Intent
+public final dev.eryalabs.lim.Utils.createSignChallengeResultIntent(dev.eryalabs.lim.SignChallengeRequest, byte[]): android.content.Intent
+public final dev.eryalabs.lim.Utils.createSignChallengeResultIntent(dev.eryalabs.lim.SignChallengeRequest, byte[], java.util.Map): android.content.Intent
+public final dev.eryalabs.lim.Utils.createSignChallengeResultIntent(dev.eryalabs.lim.SignChallengeRequest, byte[], java.util.Map, java.lang.String): android.content.Intent
+public final dev.eryalabs.lim.Utils.decodeEntry(java.lang.String): dev.eryalabs.lim.Entry
+public final dev.eryalabs.lim.Utils.decodeFields(java.lang.String): java.util.Map
+public final dev.eryalabs.lim.Utils.describeIntent(android.content.Intent): java.lang.String
+public final dev.eryalabs.lim.Utils.encodeFields(java.util.Map): java.lang.String
+public final dev.eryalabs.lim.Utils.encodeRecoveryAuthorization(dev.eryalabs.lim.RecoveryAuthorization, byte[]): java.lang.String
+public final dev.eryalabs.lim.Utils.encodeRevocation(dev.eryalabs.lim.Revocation, byte[]): java.lang.String
+public final dev.eryalabs.lim.Utils.encodeRotationStatement(dev.eryalabs.lim.RotationStatement, byte[]): java.lang.String
+public static synthetic dev.eryalabs.lim.Utils.generateNonce$default(dev.eryalabs.lim.Utils, java.security.SecureRandom, long, int, java.lang.Object): byte[]
+public final dev.eryalabs.lim.Utils.generateNonce(): byte[]
+public final dev.eryalabs.lim.Utils.generateNonce(java.security.SecureRandom): byte[]
+public final dev.eryalabs.lim.Utils.generateNonce(java.security.SecureRandom, long): byte[]
+public static synthetic dev.eryalabs.lim.Utils.isNonceFresh$default(dev.eryalabs.lim.Utils, byte[], long, long, int, java.lang.Object): boolean
+public final dev.eryalabs.lim.Utils.isNonceFresh(byte[], long): boolean
+public final dev.eryalabs.lim.Utils.isNonceFresh(byte[], long, long): boolean
+public final dev.eryalabs.lim.Utils.isRevoked(dev.eryalabs.lim.RecoveryAuthorization, java.util.List): boolean
+public final dev.eryalabs.lim.Utils.isStatementPreImage(byte[]): boolean
+public final dev.eryalabs.lim.Utils.liveAuthorizations(java.util.List, java.util.List): java.util.List
+public final dev.eryalabs.lim.Utils.matchesRequestCode(android.content.Intent, java.lang.String): boolean
+public final dev.eryalabs.lim.Utils.nonceTimestamp(byte[]): java.lang.Long
+public final dev.eryalabs.lim.Utils.parseQueryRequest(android.content.Intent): dev.eryalabs.lim.QueryRequest
+public final dev.eryalabs.lim.Utils.parseQueryResult(android.content.Intent): dev.eryalabs.lim.QueryResult
+public final dev.eryalabs.lim.Utils.parseShareRequest(android.content.Intent): dev.eryalabs.lim.ShareRequest
+public final dev.eryalabs.lim.Utils.parseShareResult(android.content.Intent): dev.eryalabs.lim.ShareResult
+public final dev.eryalabs.lim.Utils.parseSignChallengeRequest(android.content.Intent): dev.eryalabs.lim.SignChallengeRequest
+public final dev.eryalabs.lim.Utils.parseSignChallengeResult(android.content.Intent): dev.eryalabs.lim.SignChallengeResult
+public final dev.eryalabs.lim.Utils.parseSignedStatement(java.lang.String): dev.eryalabs.lim.SignedStatement
+public final dev.eryalabs.lim.Utils.recoveryAuthorizationBytes(dev.eryalabs.lim.RecoveryAuthorization): byte[]
+public final dev.eryalabs.lim.Utils.revocationBytes(dev.eryalabs.lim.Revocation): byte[]
+public final dev.eryalabs.lim.Utils.rotationStatementBytes(dev.eryalabs.lim.RotationStatement): byte[]
+public static synthetic dev.eryalabs.lim.Utils.shareDataAction$default(dev.eryalabs.lim.Utils, java.lang.String, int, java.lang.Object): java.lang.String
+public final dev.eryalabs.lim.Utils.shareDataAction(): java.lang.String
+public final dev.eryalabs.lim.Utils.shareDataAction(java.lang.String): java.lang.String
+public static synthetic dev.eryalabs.lim.Utils.shareEntry$default(dev.eryalabs.lim.Utils, android.content.Context, dev.eryalabs.lim.Entry, java.lang.String, int, java.lang.Object): boolean
+public final dev.eryalabs.lim.Utils.shareEntry(android.content.Context, dev.eryalabs.lim.Entry): boolean
+public final dev.eryalabs.lim.Utils.shareEntry(android.content.Context, dev.eryalabs.lim.Entry, java.lang.String): boolean
+public static synthetic dev.eryalabs.lim.Utils.signChallengeAction$default(dev.eryalabs.lim.Utils, java.lang.String, int, java.lang.Object): java.lang.String
+public final dev.eryalabs.lim.Utils.signChallengeAction(): java.lang.String
+public final dev.eryalabs.lim.Utils.signChallengeAction(java.lang.String): java.lang.String
+public final dev.eryalabs.lim.Utils.validateEntry(dev.eryalabs.lim.Entry): java.util.List
+public final dev.eryalabs.lim.Utils.verifyRecoveryAuthorization(dev.eryalabs.lim.RecoveryAuthorization, byte[], java.lang.String): dev.eryalabs.lim.StatementVerdict
+public final dev.eryalabs.lim.Utils.verifyRevocation(dev.eryalabs.lim.Revocation, byte[], java.lang.String): dev.eryalabs.lim.StatementVerdict
+public static synthetic dev.eryalabs.lim.Utils.verifyRotationStatement$default(dev.eryalabs.lim.Utils, dev.eryalabs.lim.RotationStatement, byte[], java.lang.String, long, int, java.lang.Object): dev.eryalabs.lim.StatementVerdict
+public final dev.eryalabs.lim.Utils.verifyRotationStatement(dev.eryalabs.lim.RotationStatement, byte[], java.lang.String): dev.eryalabs.lim.StatementVerdict
+public final dev.eryalabs.lim.Utils.verifyRotationStatement(dev.eryalabs.lim.RotationStatement, byte[], java.lang.String, long): dev.eryalabs.lim.StatementVerdict
+public final dev.eryalabs.lim.Utils.verifySignature(java.lang.String, byte[], byte[]): boolean
