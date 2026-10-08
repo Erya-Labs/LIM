@@ -66,6 +66,66 @@ dependencies {
 }
 
 // ---------------------------------------------------------------------------------------
+// The documents the unit-test suite reads off disk, declared as inputs of the test task.
+//
+// Gradle decides whether a task is UP-TO-DATE from its *declared* inputs. The main and test
+// sources are inputs because they are compiled, which is why nobody noticed this: a document
+// is opened at test time with `File.readText`, and Gradle cannot see that. So a commit whose
+// only change was one of the files below came back `Task :LIM:testDebugUnitTest UP-TO-DATE`
+// and executed nothing — a green gate over an unexecuted test. Measured, not inferred: with
+// `CHANGELOG.md` moved out of the tree the gate was BUILD SUCCESSFUL, while `--rerun-tasks`
+// on the same tree failed 7 `ChangelogTest` tests; and breaking one member name in a
+// `CHANGELOG.md` bullet was green with no `--rerun` while reddening 4 of them with one.
+// Three of the four release-readiness artifacts are documents, so Definition-of-done item 1
+// proved nothing at all for exactly the commits that change them.
+//
+// `BuildInputsTest` holds this list honest in both directions: every path here must exist on
+// disk, every path here must appear below under its own `withPropertyName`, and every
+// repository file a test source names must be in it — so the *next* test that reads a new
+// document fails loudly instead of quietly never running.
+//
+// Two things this block deliberately does not do:
+//
+//  * It does not name anything under `src/`. This list is about documents, and a source
+//    directory in it would say otherwise. Note that "sources are compiled, so editing one
+//    already invalidates the task" is NOT true of a comment edit that leaves the class files
+//    byte-identical, which was measured — see the scope note on `BuildInputsTest`. That
+//    residual hole is a separate decision about the cache, not part of this one.
+//  * It is not `outputs.upToDateWhen { false }`. That would make every edit anywhere re-run
+//    the whole suite for ever while pinning nothing — it cannot tell a changed document from
+//    a changed `LICENSE`, so it buys the appearance of this fix at the price of the cache.
+//
+// The paths are resolved against the repository root rather than this module directory, which
+// sits one level below the files it has to name; `withPathSensitivity(RELATIVE)` then keeps
+// the absolute location out of the cache key, so the key is the same on another machine.
+// ---------------------------------------------------------------------------------------
+tasks.withType<Test>().configureEach {
+    val repository = rootProject.layout.projectDirectory
+
+    inputs.files(repository.file("CHANGELOG.md"))
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+        .withPropertyName("verifiedDocument:CHANGELOG.md")
+    inputs.files(repository.file("README.md"))
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+        .withPropertyName("verifiedDocument:README.md")
+    inputs.files(repository.file("docs/INTEGRATION.md"))
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+        .withPropertyName("verifiedDocument:docs/INTEGRATION.md")
+    inputs.files(repository.file("LIM/api/lim.api"))
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+        .withPropertyName("verifiedDocument:LIM/api/lim.api")
+    inputs.files(repository.file("gradle/libs.versions.toml"))
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+        .withPropertyName("verifiedDocument:gradle/libs.versions.toml")
+    inputs.files(repository.file("settings.gradle.kts"))
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+        .withPropertyName("verifiedDocument:settings.gradle.kts")
+    inputs.files(repository.file("LIM/build.gradle.kts"))
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+        .withPropertyName("verifiedDocument:LIM/build.gradle.kts")
+}
+
+// ---------------------------------------------------------------------------------------
 // Maven Central, via the Sonatype Central Portal.
 //
 // Chosen over JitPack because JitPack can only ever serve `com.github.Erya-Labs:LIM`, while
