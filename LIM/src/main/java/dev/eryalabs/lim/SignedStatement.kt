@@ -38,6 +38,12 @@ sealed class SignedStatement {
      *
      * Named for the kind tag it travels under ([Utils.STATEMENT_ROTATE_V1]), like its two
      * siblings, so the case a reader is looking at names the bytes on the wire.
+     *
+     * @property statement The rotation the envelope carried, read back out of the signed
+     *                     pre-image itself rather than from fields listed alongside it — which is
+     *                     why re-encoding it with [Utils.rotationStatementBytes] reproduces the
+     *                     bytes the relay delivered, and why a verifier can be handed this object
+     *                     instead of the transmitted bytes.
      */
     data class Rotate(
         val statement: RotationStatement,
@@ -67,6 +73,10 @@ sealed class SignedStatement {
     /**
      * A [RecoveryAuthorization] and its signature — a standing credential for a device the user
      * already owns, live until a [Revocation] cancels it.
+     *
+     * @property authorization The authorization the envelope carried, read back out of the signed
+     *                         pre-image, so [Utils.recoveryAuthorizationBytes] of it reproduces
+     *                         the transmitted bytes exactly.
      */
     data class Recover(
         val authorization: RecoveryAuthorization,
@@ -89,6 +99,10 @@ sealed class SignedStatement {
     /**
      * A [Revocation] and its signature — the only kill switch a recovery authorization has, so
      * the one whose delivery is load-bearing rather than housekeeping.
+     *
+     * @property revocation The revocation the envelope carried, read back out of the signed
+     *                      pre-image, so [Utils.revocationBytes] of it reproduces the transmitted
+     *                      bytes exactly.
      */
     data class Revoke(
         val revocation: Revocation,

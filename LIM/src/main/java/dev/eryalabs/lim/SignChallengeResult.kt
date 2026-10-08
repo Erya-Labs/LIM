@@ -46,6 +46,15 @@ data class SignChallengeResult(
      * a public key or nonce read back out of the result intent, which would let the sender
      * choose both sides of the proof. Freshness is a separate question: check the nonce with
      * [Utils.isNonceFresh] as well, or a signature captured today can be replayed tomorrow.
+     *
+     * @param publicKeyBase64 The Base64 RSA public key you already store for this profile — the
+     *                        account identifier. Never [Utils.EXTRA_PUBLIC_KEY] off this result's
+     *                        own intent: that is the sender's claim about whose key it is, and
+     *                        verifying against it proves only that the sender holds the key the
+     *                        sender named.
+     * @param nonce           The exact challenge bytes you sent, kept from your own
+     *                        [Utils.createSignChallengeIntent] call. Freshness is not checked
+     *                        here — this answers "is the signature genuine", not "is it recent".
      */
     fun isVerified(publicKeyBase64: String, nonce: ByteArray): Boolean =
         Utils.verifySignature(publicKeyBase64, nonce, signature)

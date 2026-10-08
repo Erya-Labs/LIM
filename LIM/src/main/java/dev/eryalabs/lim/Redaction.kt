@@ -74,6 +74,13 @@ public const val PUBLIC_KEY_PREVIEW_CHARS: Int = 64
  * Deliberately *not* published alongside it: `redactedValue`. It renders a field *value's*
  * length, which is one app's own data rather than a shared identifier, and nothing outside this
  * library needs to reproduce it character-for-character.
+ *
+ * @param publicKey The Base64 key to render. Nullable on purpose, and `null` renders as the word
+ *                  `"null"` rather than throwing: a key read off an [Entry] Gson built can be
+ *                  genuinely `null` despite its declared type, and the call that reaches here is
+ *                  usually a log line inside a failure. A key no longer than
+ *                  [PUBLIC_KEY_PREVIEW_CHARS] is returned whole, so a short identifier is not
+ *                  silently decorated.
  */
 public fun previewedPublicKey(publicKey: String?): String = when {
     publicKey == null -> "null"

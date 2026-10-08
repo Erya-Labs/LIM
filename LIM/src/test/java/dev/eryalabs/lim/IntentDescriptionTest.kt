@@ -58,10 +58,32 @@ class IntentDescriptionTest {
     )
 
     /**
-     * A result intent as the vault builds one. LIM ships no result *builder* — the vault composes
-     * the result — so these are assembled from [Utils]'s own `EXTRA_*` constants rather than from
-     * hand-spelled names, the way `ClientIntegrationExampleTest`'s in-test vault does. The three
-     * request flows below go through the production builders.
+     * A result intent assembled extra by extra, from [Utils]'s own `EXTRA_*` constants rather than
+     * from hand-spelled names. The three request flows below go through the production builders.
+     *
+     * **Not because there is no result builder.** There are six — [Utils.createShareResultIntent]
+     * and its siblings, which `ClientIntegrationExampleTest`'s in-test vault answers all three
+     * scenes with. They are bypassed here because this file's subject is what [Utils.describeIntent]
+     * says about two shapes **no result builder** can make: a blank
+     * [Utils.EXTRA_SHARE_REQUEST_CODE], which [Utils.createShareResultIntent] and its siblings
+     * omit rather than write, and a blank or absent [Utils.EXTRA_PROTOCOL_VERSION], which all six
+     * write and always as a number. Going through a result builder could reach neither, and this
+     * is the only place `blank` and `absent` are told apart *from each other* — which is the whole
+     * reason those two states are named separately at all.
+     *
+     * Two qualifications, because even that is narrower than it reads. The *request* builders do
+     * not share the first discipline — `createShareIntent(context, entry, requestCode = "   ")`
+     * writes the blank verbatim — so it is a claim about the result half only. And one result
+     * builder can mint one blank extra: [Utils.createSignChallengeResultIntent] writes an empty
+     * [Utils.EXTRA_SIGNATURE] for an empty array, which its own KDoc calls out as the single case
+     * where these builders produce an envelope their own parser rejects.
+     *
+     * Most shapes here *are* reachable through a builder and are still assembled by hand, because
+     * going through one would say less. The field-key separation is the main one — a payload under
+     * [Utils.EXTRA_FIELDS_JSON] and none under [Utils.EXTRA_QUERY_RESULT_FIELDS] is exactly what
+     * [Utils.createShareResultIntent] writes — and so is the framing decoy below, which is what
+     * [Utils.createSignChallengeResultIntent] writes verbatim for a hostile `algorithm`. Writing
+     * them directly keeps each fixture about the reader rather than about the builder.
      */
     private fun resultIntent(vararg extras: Pair<String, String>) = Intent().apply {
         extras.forEach { (key, value) -> putExtra(key, value) }

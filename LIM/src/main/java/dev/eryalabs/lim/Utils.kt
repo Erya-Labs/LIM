@@ -63,6 +63,21 @@ import java.security.spec.X509EncodedKeySpec
  */
 object Utils {
 
+    /**
+     * Endeavor's package name — the reference vault, and the `targetPackage` default of every
+     * *request* builder here. The six result builders take no package and write none: a result is
+     * `setResult`'s payload, delivered to whoever started the activity.
+     *
+     * It is a default rather than a hardcoding: LIM is a protocol, not an app pairing, so any
+     * vault that speaks it can be addressed by passing its own package instead. Note what the
+     * value is scoped to besides `setPackage`: both action strings are built from it
+     * ([shareDataAction], [signChallengeAction]), so a client and a vault that disagree about the
+     * package disagree about the action too and no intent resolves.
+     *
+     * **Reaching it at all is subject to Android 11+ package visibility**, which is the caller's
+     * manifest to declare and not this library's — see [shareEntry], whose `false` cannot
+     * distinguish "no vault installed" from "not allowed to look".
+     */
     const val DEFAULT_ENDEAVOR_PACKAGE = "com.github.adaydreamaway.endeavor"
 
     /**
@@ -85,12 +100,94 @@ object Utils {
     const val EXTRA_PROTOCOL_VERSION = "extra_protocol_version"
 
     // ── Intent extras ────────────────────────────────────────────────────
+
+    /**
+     * The JSON-encoded [Entry] a client pushes on a share, written by [createShareIntent] and
+     * read by [parseShareRequest]. Decode it with [decodeEntry] and nothing else: Gson builds an
+     * [Entry] through `Unsafe`, so a raw `fromJson` on this payload yields an object whose
+     * declared-non-null properties can be `null`.
+     *
+     * Its *presence* is also how a vault routes: the share and query flows travel under one
+     * action, and an intent carrying this extra is a share — which is why [parseQueryRequest]
+     * refuses one that does.
+     */
     const val EXTRA_ENTRY_JSON          = "extra_entry_json"
+
+    /**
+     * The client-chosen correlation token, carried on every request that takes one and echoed
+     * back by the vault in every result. Compare it with [matchesRequestCode] rather than by
+     * hand — a blank must never match, and "nothing equals nothing" is the mistake that pairs a
+     * client with the answer to somebody else's request.
+     *
+     * Opaque and free-form: nothing here parses it, and it is compared with exact string
+     * equality. It is also one of the four values [describeIntent] prints close to verbatim rather
+     * than reducing — and the one this protocol defines no vocabulary for at all, which is why
+     * printing it is the judgement call that function records — so do not put personal data in it.
+     */
     const val EXTRA_SHARE_REQUEST_CODE  = "extra_share_request_code"
+
+    /**
+     * JSON-encoded `Map<String, TypedField>` disclosed by the vault on a successful *query*,
+     * written by [createQueryResultIntent] and read by [parseQueryResult].
+     *
+     * **Deliberately not [EXTRA_FIELDS_JSON].** The two field payloads sit at different points in
+     * the protocol and are not interchangeable: reading either from either flow would let an
+     * unsigned query answer be presented as a disclosure that came with a signature. No parser
+     * here reads this key outside the query flow.
+     */
     const val EXTRA_QUERY_RESULT_FIELDS = "extra_query_result_fields"
+
+    /**
+     * The Base64 X.509 RSA public key a flow is about — **the account identifier the whole design
+     * rests on**, carried in four of this protocol's six flows: it names the profile on a query
+     * request and on a sign-challenge request, and the vault answers with it on a share result and
+     * a query result. (A share request carries no such extra; the key travels inside its [Entry].)
+     *
+     * **A sign-challenge result deliberately does not carry it**, and that is the one asymmetry to
+     * know: [createSignChallengeResultIntent] never writes this key, [parseSignChallengeResult]
+     * never reads it, and [SignChallengeResult] has no property for it. The proof in that flow is
+     * the signature, checked against the key the client *already stores*
+     * ([SignChallengeResult.isVerified]), so a key echoed back by the sender would be the sender
+     * choosing both sides of it.
+     *
+     * Its meaning depends on direction, and that distinction is the one worth keeping. On a
+     * request it is the key the *caller* chose to ask about; on a result it is the key the *vault*
+     * holds. Keep the one a result carried — never the one you sent — which is why the
+     * request-answering overloads of the result builders take a key explicitly instead of echoing
+     * the request's.
+     */
     const val EXTRA_PUBLIC_KEY          = "extra_public_key"
+
+    /**
+     * The challenge bytes a sign-challenge request carries, Base64-encoded. Written by
+     * [createSignChallengeIntent] and decoded by [parseSignChallengeRequest]; mint the value with
+     * [generateNonce] so [isNonceFresh] can expire it.
+     *
+     * **A vault must call [isStatementPreImage] on these bytes before signing them and refuse a
+     * match.** This extra is arbitrary caller-supplied input signed with a profile's key, so
+     * without that check it is a route to obtaining a signed rotation under a consent dialog that
+     * said "prove your identity".
+     */
     const val EXTRA_NONCE               = "extra_nonce"
+
+    /**
+     * The vault's signature over the request's nonce, Base64-encoded, written by
+     * [createSignChallengeResultIntent] and read by [parseSignChallengeResult]. An absent, blank
+     * or empty value makes the whole result unparseable — there would be nothing that could ever
+     * be authenticated. Check it with [SignChallengeResult.isVerified] against the key and nonce
+     * *you* kept; parsing it proves nothing.
+     */
     const val EXTRA_SIGNATURE           = "extra_signature"
+
+    /**
+     * What the vault says it signed with, optional and **informational only**.
+     *
+     * Nothing in this library honours it: [verifySignature] hardcodes `SHA256withRSA`, so a
+     * declaration of `"MD5withRSA"` changes no outcome anywhere, and neither does a correct one.
+     * Taking the verification algorithm from the sender is algorithm confusion, and which
+     * algorithms to accept is a standing decision for a human — which is also why this library
+     * publishes no algorithm constant to put here.
+     */
     const val EXTRA_ALGORITHM           = "extra_algorithm"
 
     /**
@@ -108,12 +205,25 @@ object Utils {
 
     // ── Intent action helpers ────────────────────────────────────────────
 
-    /** Returns the share-data action string scoped to [targetPackage]. */
+    /**
+     * Returns the share-data action string scoped to [targetPackage].
+     *
+     * @param targetPackage Package name of the vault app; defaults to [DEFAULT_ENDEAVOR_PACKAGE].
+     *                      The action is this value with a fixed suffix, so a client and a vault
+     *                      that disagree about the package resolve nothing. Note that the query
+     *                      flow travels under this same action — a query and a share are told
+     *                      apart by their payload, not by their action.
+     */
     @JvmOverloads
     fun shareDataAction(targetPackage: String = DEFAULT_ENDEAVOR_PACKAGE) =
         "$targetPackage.$ACTION_SHARE_DATA"
 
-    /** Returns the sign-challenge action string scoped to [targetPackage]. */
+    /**
+     * Returns the sign-challenge action string scoped to [targetPackage].
+     *
+     * @param targetPackage Package name of the vault app; defaults to [DEFAULT_ENDEAVOR_PACKAGE].
+     *                      Unlike [shareDataAction]'s, this action carries one flow only.
+     */
     @JvmOverloads
     fun signChallengeAction(targetPackage: String = DEFAULT_ENDEAVOR_PACKAGE) =
         "$targetPackage.$ACTION_SIGN_CHALLENGE"
@@ -135,6 +245,23 @@ object Utils {
      * writes it — sign-up, then query, then login, against one profile, with the refusal case
      * alongside. It is a test rather than a snippet so it cannot go stale.
      *
+     * **`docs/INTEGRATION.md` is the same four moves as prose**, and is the place to start if you
+     * are reading this library for the first time: every Kotlin block on that page is lifted
+     * verbatim out of a region of a test that runs, held there by `GuideSnippetTest`, so it cannot
+     * drift from the library either.
+     *
+     * @param context       **Read by nothing in this function today** — the intent is addressed by
+     *                      package rather than by component, so no [Context] is needed to build
+     *                      one, and none is retained or put on the intent. It stays in the
+     *                      signature because removing it would break every app compiled against
+     *                      1.0.0. Pass the [android.app.Activity] you will launch from anyway:
+     *                      that is what `startActivityForResult` needs, and passing anything else
+     *                      is a sign the call site cannot receive the result.
+     * @param entry         The profile to push. Encoded to JSON under [EXTRA_ENTRY_JSON] as given,
+     *                      with no validation: see [validateEntry] for what looks wrong with one
+     *                      before you send it — advice to show a developer rather than a gate, and
+     *                      neither necessary nor sufficient for the vault to accept it — and
+     *                      [Entry] for which of its three slots are yours to fill. Not modified.
      * @param targetPackage Package name of the vault app; defaults to [DEFAULT_ENDEAVOR_PACKAGE].
      *
      * **Beware the third positional argument.** This overload and the [requestCode][createShareIntent]
@@ -172,8 +299,13 @@ object Utils {
      *
      * See `ClientIntegrationExampleTest` for the whole sequence as a test: this call, the vault's
      * answer, and the [matchesRequestCode] check that keeps it from being read as the answer to a
-     * different request.
+     * different request. `docs/INTEGRATION.md` is the prose walkthrough of the same loop.
      *
+     * @param context     As the sibling overload: read by nothing here, kept in the signature, and
+     *                    still best spelled as the [Activity][android.app.Activity] you will
+     *                    launch from. Nothing is retained.
+     * @param entry       The profile to push, encoded as given and unvalidated — see
+     *                    [validateEntry], which advises rather than gates. Not modified.
      * @param requestCode Correlation token echoed back in the result intent.
      * @param targetPackage Package name of the vault app; defaults to [DEFAULT_ENDEAVOR_PACKAGE].
      *
@@ -210,6 +342,16 @@ object Utils {
      * This library ships no `<queries>` of its own — that is a manifest change, and manifest
      * changes here are a human decision.
      *
+     * @param context       Used twice, which is why it may not be any old [Context]: once for
+     *                      `packageManager` to resolve a vault, once for `startActivity`. This
+     *                      intent sets `FLAG_ACTIVITY_NEW_TASK`, so an application context does
+     *                      work here — unlike [createShareIntent]'s, which must be launched from
+     *                      an [android.app.Activity] to get a result back. Nothing is retained.
+     * @param entry         The profile to push, encoded as given and unvalidated — see
+     *                      [validateEntry]. Not modified.
+     * @param targetPackage Package name of the vault app; defaults to [DEFAULT_ENDEAVOR_PACKAGE].
+     *                      This is the package whose visibility your manifest has to declare, per
+     *                      the paragraph above.
      * @return `true` when the intent was dispatched; `false` when no vault was reachable —
      *         none installed, none visible to you (see above), or one that disappeared between
      *         the lookup and the launch. A `false` return is the only signal a client gets that
@@ -260,7 +402,22 @@ object Utils {
      *
      * See `ClientIntegrationExampleTest` for the sequence this call sits in, written as a test —
      * including the refusal, where a declined query and a disclosure of nothing parse to the same
-     * [QueryResult] and only the result code tells them apart.
+     * [QueryResult] and only the result code tells them apart. `docs/INTEGRATION.md` covers the
+     * same ground as prose, including that refusal.
+     *
+     * @param context       Read by nothing here, as in [createShareIntent], and kept in the
+     *                      signature for the same reason. Pass the
+     *                      [Activity][android.app.Activity] you will launch from: this intent is
+     *                      built for `startActivityForResult` and sets no `NEW_TASK` flag.
+     *                      Nothing is retained.
+     * @param publicKey     The Base64 public key to look up, written to [EXTRA_PUBLIC_KEY]. This
+     *                      is the key *you* already store for the profile; the vault answers with
+     *                      the key it holds, and that is the one to keep. Not validated here — a
+     *                      key naming no profile comes back as a vault that disclosed nothing.
+     * @param requestCode   Correlation token echoed back in the result intent; check it with
+     *                      [matchesRequestCode].
+     * @param targetPackage Package name of the vault app; defaults to [DEFAULT_ENDEAVOR_PACKAGE].
+     *                      A query travels under [shareDataAction], not an action of its own.
      */
     @JvmOverloads
     fun createQueryIntent(
@@ -370,8 +527,18 @@ object Utils {
      * This is a freshness check and nothing more. It says the challenge has not expired; it
      * does not say anyone proved possession of a key — only [verifySignature] does that.
      *
-     * @param now Milliseconds since the epoch to measure against; injected so tests can pin
-     *            the clock.
+     * @param nonce        The challenge bytes to date, in [generateNonce]'s layout — the
+     *                     timestamp is read out of the nonce itself, so nothing has to be stored
+     *                     alongside it. Anything shorter than the full 40 bytes is `false`,
+     *                     including an empty array; trailing bytes beyond 40 are ignored. A nonce
+     *                     that was *not* produced by [generateNonce] has no timestamp to find and
+     *                     its first eight bytes are read as one anyway, so this question is only
+     *                     meaningful for a nonce you minted.
+     * @param maxAgeMillis The window, in milliseconds. Inclusive: an age of exactly this is still
+     *                     fresh, one millisecond more is not. A negative value can never be
+     *                     satisfied, which is the fail-closed direction.
+     * @param now          Milliseconds since the epoch to measure against; injected so tests can
+     *                     pin the clock.
      */
     @JvmOverloads
     fun isNonceFresh(
@@ -405,6 +572,13 @@ object Utils {
      * freshness window. Only trust the value when the sender declared
      * [NONCE_FORMAT_TIMESTAMPED] under [EXTRA_NONCE_FORMAT]: any 40 bytes have a first
      * eight, and an undeclared nonce's header is just random bytes read as a time.
+     *
+     * @param nonce The challenge bytes to read the header out of. `null` for anything shorter
+     *              than the full 40-byte layout, including an empty array; trailing bytes beyond
+     *              it are ignored. The value comes back as signed two's complement, so a nonce
+     *              whose first byte has its top bit set yields a negative "time" — which is a
+     *              possible value rather than an error, and one more reason to require the
+     *              sender's declaration before trusting it.
      */
     fun nonceTimestamp(nonce: ByteArray): Long? {
         if (nonce.size < NONCE_SIZE) return null
@@ -429,7 +603,12 @@ object Utils {
      * See `ClientIntegrationExampleTest` for that order played out as a test — mint the nonce,
      * keep it, verify against it and against the key you already store — along with the replay it
      * refuses and the vault-side refusal of a nonce that is really a statement pre-image.
+     * `docs/INTEGRATION.md` walks the same login through as prose.
      *
+     * @param context     Read by nothing here, as in [createShareIntent], and kept in the
+     *                    signature for the same reason. Pass the [Activity][android.app.Activity]
+     *                    you will launch from: this intent is built for `startActivityForResult`
+     *                    and sets no `NEW_TASK` flag. Nothing is retained.
      * @param publicKey   Base64-encoded RSA public key identifying the profile to authenticate.
      * @param nonce       Challenge bytes you generated. Use [generateNonce], which embeds the
      *                    timestamp [isNonceFresh] needs to reject a replayed challenge.
@@ -626,6 +805,11 @@ object Utils {
      * carries is Base64 or an opaque printable id, none of which contains a surrogate at all,
      * and the alternative — refusing to encode, or throwing — would be worse in a function that
      * a verifier calls on input it did not choose.
+     *
+     * @param statement The rotation to encode. All five of its components go into the bytes, so
+     *                  all five are covered by whatever signature is made over them; none is
+     *                  validated, normalised or defaulted here, because a verifier reconstructing
+     *                  these bytes must get exactly what the signer put in. Not modified.
      */
     fun rotationStatementBytes(statement: RotationStatement): ByteArray {
         val out = openStatement(STATEMENT_ROTATE_V1)
@@ -655,6 +839,10 @@ object Utils {
      * The same UTF-8 surrogate equivalence [rotationStatementBytes] documents applies here, for
      * the same reason and with the same irrelevance to a protocol whose components are Base64
      * keys and opaque printable ids.
+     *
+     * @param authorization The authorization to encode. All five components go into the bytes and
+     *                      none is validated or normalised, exactly as in
+     *                      [rotationStatementBytes]. Not modified.
      */
     fun recoveryAuthorizationBytes(authorization: RecoveryAuthorization): ByteArray {
         val out = openStatement(STATEMENT_RECOVER_V1)
@@ -677,6 +865,10 @@ object Utils {
      * Four components rather than five, because a revocation names no second key — it cancels an
      * authorization by id, and the id is the whole of what it points at. That is also why
      * [verifyRevocation] can return fewer verdicts than the other two verifiers.
+     *
+     * @param revocation The revocation to encode. All four components go into the bytes —
+     *                   including [Revocation.sequence], which is what [isRevoked] compares and
+     *                   therefore must be signed rather than carried alongside. Not modified.
      */
     fun revocationBytes(revocation: Revocation): ByteArray {
         val out = openStatement(STATEMENT_REVOKE_V1)
@@ -710,6 +902,12 @@ object Utils {
      * A `true` says these bytes are *framed* as a statement, and nothing more — not that they
      * parse, not that they are well-formed, and certainly not that anyone signed them. It is a
      * refusal predicate, not a validator.
+     *
+     * @param bytes The bytes a device has been asked to sign — in practice
+     *              [SignChallengeRequest.nonce], straight off an intent another app sent.
+     *              Nullable because this is called on unchecked input and must answer rather than
+     *              throw: `null`, empty and anything shorter than the prefix are all `false`.
+     *              Read in place and not copied.
      */
     fun isStatementPreImage(bytes: ByteArray?): Boolean {
         if (bytes == null || bytes.size < STATEMENT_DOMAIN_BYTES.size) return false
@@ -1130,6 +1328,15 @@ object Utils {
      *
      * See `MigrationEndToEndTest` for the whole flow this line exists for, written as an
      * integrator would write it — a test rather than prose, so the example cannot go stale.
+     *
+     * @param statement The rotation to carry. Its canonical pre-image travels verbatim, so what a
+     *                  verifier reconstructs from the parsed statement is what this line carried.
+     *                  Not modified.
+     * @param signature The raw signature over [rotationStatementBytes] of [statement]. Nothing
+     *                  here checks that it is one — this is an encoder, and the only thing that
+     *                  settles it is [verifyRotationStatement] against the key the service
+     *                  already stores. Must be non-empty: an empty array encodes to an empty
+     *                  section, which [parseSignedStatement] refuses. Read in place, not copied.
      */
     fun encodeRotationStatement(statement: RotationStatement, signature: ByteArray): String =
         envelope(STATEMENT_ROTATE_V1, rotationStatementBytes(statement), signature)
@@ -1137,6 +1344,11 @@ object Utils {
     /**
      * Encode a [RecoveryAuthorization] and its signature, same framing as
      * [encodeRotationStatement] and the same guarantees.
+     *
+     * @param authorization The authorization to carry; its canonical pre-image travels verbatim.
+     *                      Not modified.
+     * @param signature     The raw signature over [recoveryAuthorizationBytes] of it, unchecked
+     *                      here and required to be non-empty — see the sibling.
      */
     fun encodeRecoveryAuthorization(
         authorization: RecoveryAuthorization,
@@ -1150,6 +1362,11 @@ object Utils {
      * The kind whose delivery matters most: an authorization is live until a service is shown the
      * revocation that cancels it, so a revocation that cannot be transmitted is one that does not
      * exist.
+     *
+     * @param revocation The revocation to carry; its canonical pre-image travels verbatim. Not
+     *                   modified.
+     * @param signature  The raw signature over [revocationBytes] of it, unchecked here and
+     *                   required to be non-empty — see [encodeRotationStatement].
      */
     fun encodeRevocation(revocation: Revocation, signature: ByteArray): String =
         envelope(STATEMENT_REVOKE_V1, revocationBytes(revocation), signature)
@@ -1410,6 +1627,12 @@ object Utils {
      * **This function does not authenticate anything, and a non-null return is not a success
      * signal.** It reports what the intent said; [SignChallengeResult.isVerified] is the only
      * thing that reports whether the sender holds the private key.
+     *
+     * @param intent The result intent from `onActivityResult`, or `null`. Nullable because this
+     *               is a trust boundary: the payload arrives unchecked from another app, so an
+     *               absent one is an answer rather than a precondition and every *value* on it is
+     *               hostile input. Read, never retained. Read it once before sharing it across
+     *               threads — see this object's KDoc for why.
      */
     fun parseSignChallengeResult(intent: Intent?): SignChallengeResult? {
         if (intent == null) return null
@@ -1436,6 +1659,12 @@ object Utils {
      * Note the field payload arrives under [EXTRA_QUERY_RESULT_FIELDS] here, not the
      * [EXTRA_FIELDS_JSON] key the sign-challenge flow uses. The two keys are separate points
      * in the protocol and are deliberately not interchangeable.
+     *
+     * @param intent The result intent from `onActivityResult`, or `null` — nullable for the
+     *               reason [parseSignChallengeResult]'s is, and with the same contract: an
+     *               unchecked IPC payload goes straight in. Read, never retained. A non-null
+     *               return says the vault answered; whether it answered *your* query is
+     *               [matchesRequestCode]'s question, and nothing in a query result is signed.
      */
     fun parseQueryResult(intent: Intent?): QueryResult? {
         if (intent == null) return null
@@ -1470,6 +1699,12 @@ object Utils {
      * [EXTRA_QUERY_RESULT_FIELDS] is deliberately not read here. The two field payloads sit
      * under different keys at different points in the protocol, and the flows' keys are not
      * interchangeable — the same separation [parseQueryResult] pins from its side.
+     *
+     * @param intent The result intent from `onActivityResult`, or `null` — nullable for the
+     *               reason [parseSignChallengeResult]'s is, and read rather than retained. The
+     *               value to keep off a non-null return is [ShareResult.publicKey]: that is the
+     *               key the vault minted, and the handle this profile is queried and
+     *               authenticated by from now on.
      */
     fun parseShareResult(intent: Intent?): ShareResult? {
         if (intent == null) return null
@@ -1672,7 +1907,8 @@ object Utils {
      * echoing the request's own contents would let the client decide what its answer says.
      *
      * `ClientIntegrationExampleTest` is the runnable example, and it shows both halves: its
-     * fixture vault answers the sign-up scene with this function.
+     * fixture vault answers the sign-up scene with this function. `docs/INTEGRATION.md` is the
+     * client-side half of the same scene as prose.
      *
      * @param request   The request this result answers, as [parseShareRequest] returned it. Only
      *                  [ShareRequest.requestCode] is read; a `null` or blank one attaches nothing,
@@ -1698,7 +1934,8 @@ object Utils {
      * names must be the one the vault holds, which is why [publicKey] is still required here.
      *
      * `ClientIntegrationExampleTest` is the runnable example, and it shows both halves: its
-     * fixture vault answers the query scene with this function.
+     * fixture vault answers the query scene with this function. `docs/INTEGRATION.md` is the
+     * client-side half of the same scene as prose.
      *
      * @param request   The request this result answers, as [parseQueryRequest] returned it. Only
      *                  [QueryRequest.requestCode] is read.
@@ -1727,6 +1964,7 @@ object Utils {
      * `ClientIntegrationExampleTest` is the runnable example, and it shows both halves: its
      * fixture vault answers the login scene with this function, signing the request's nonce
      * itself — and refusing first when [isStatementPreImage] says those bytes are a statement.
+     * `docs/INTEGRATION.md` is the client-side half of the same scene as prose.
      *
      * @param request   The request this result answers, as [parseSignChallengeRequest] returned
      *                  it. Only [SignChallengeRequest.requestCode] is read.
@@ -1765,6 +2003,12 @@ object Utils {
      * The share action doubles as the query action; the payload is what tells them apart.
      * An intent carrying an entry payload is a share even if a public key rides alongside —
      * the mirror of [parseQueryRequest]'s rule, so no intent parses as both.
+     *
+     * @param intent The incoming request intent, or `null`. **The most hostile input a vault
+     *               handles** — any app can fire one at an exported activity — so it is nullable
+     *               on purpose and every *value* on it comes back as a refusal rather than an
+     *               exception. The action is not read: if you route on it, route before calling
+     *               this. Read, never retained.
      */
     fun parseShareRequest(intent: Intent?): ShareRequest? {
         if (intent == null) return null
@@ -1785,6 +2029,11 @@ object Utils {
      * is how the vault routes today, pinned here so both directions agree: no intent parses
      * as both a share and a query. Blank extras read as absent, so a blank public key is a
      * refusal, not a request naming nobody.
+     *
+     * @param intent The incoming request intent, or `null` — nullable and fail-closed for the
+     *               reason [parseShareRequest]'s is, and read rather than retained. A non-null
+     *               return is not an entitlement: it says someone asked about a key, and what to
+     *               disclose is the vault's consent decision.
      */
     fun parseQueryRequest(intent: Intent?): QueryRequest? {
         if (intent == null) return null
@@ -1810,6 +2059,13 @@ object Utils {
      * request is a claim, not an entitlement: whether to sign is the vault's consent
      * decision, and [SignChallengeRequest.nonceFormat] is only what the client *declared*
      * about its nonce, not something any parser verified.
+     *
+     * @param intent The incoming request intent, or `null` — nullable and fail-closed for the
+     *               reason [parseShareRequest]'s is, and read rather than retained. **Before
+     *               signing what comes back, call [isStatementPreImage] on
+     *               [SignChallengeRequest.nonce] and refuse a match**: this parser deliberately
+     *               does not, because the bytes are legitimate input to look at and the refusal
+     *               is the signing device's policy rather than the decoder's.
      */
     fun parseSignChallengeRequest(intent: Intent?): SignChallengeRequest? {
         if (intent == null) return null
@@ -2056,10 +2312,11 @@ object Utils {
 
     /**
      * Every extra this protocol defines, in the order [describeIntent] lists them: the entry
-     * payload, then the public key — the most widely shared extra here, carried by the query
-     * request and by all three results as well as by a sign-challenge request — then the rest of
-     * the sign-challenge flow's values, then the two field payloads, then the correlation token
-     * and the version declaration.
+     * payload, then the public key — carried by the query and sign-challenge requests and by the
+     * share and query results, though *not* by a sign-challenge result, which proves possession
+     * with a signature instead (see [EXTRA_PUBLIC_KEY]) — then the rest of the sign-challenge
+     * flow's values, then the two field payloads, then the correlation token and the version
+     * declaration.
      *
      * All of them are listed on every line, including the absent ones. A diagnostic that only
      * mentioned what was present could not answer the question it exists for, which is almost
@@ -2138,6 +2395,12 @@ object Utils {
      * extra is read defensively here, but the flow set is the six parsers' own fail-closed
      * behaviour, pinned by `DecoderFuzzTest`'s arms over the shared corpus. A parser that began
      * reading an extra without that discipline would break this promise from a distance.
+     *
+     * @param intent The intent to describe — a request, a result, or `null`, which describes
+     *               itself as `intent=null` rather than throwing. It is read exactly as the
+     *               parsers read it, including by *calling* all six of them, so passing one whose
+     *               extras have never been unparcelled does that work here. Read, never
+     *               retained, and nothing on it is modified.
      */
     fun describeIntent(intent: Intent?): String {
         if (intent == null) return "LIM intent: intent=null, flows=[]"
@@ -2331,6 +2594,12 @@ object Utils {
      * Encode a map of [TypedField]s to the canonical JSON form used on the wire.
      *
      * Use this when building the [EXTRA_FIELDS_JSON] payload to send back to a client app.
+     *
+     * @param fields The map to encode. Insertion order is preserved, an empty map encodes to
+     *               `"{}"` — which reads back as an empty map, and is why the result builders
+     *               write the payload even when there is nothing to disclose — and the real
+     *               values go on the wire: this is serialisation, not the redaction
+     *               [TypedField.toString] performs. Not modified.
      */
     fun encodeFields(fields: Map<String, TypedField>): String = Gson().toJson(fields)
 
@@ -2342,6 +2611,15 @@ object Utils {
      * This JSON crosses an IPC boundary from another app, so it is untrusted: it may omit
      * `value` or `type`, or contain a null entry, none of which [encodeFields] would ever
      * produce. Such fields are repaired here rather than handed on — see [repaired].
+     *
+     * @param json The payload, straight off an intent extra, or `null`. Nullable because an
+     *             absent extra is the ordinary case rather than a programming error; `null`,
+     *             blank and unparseable all yield an empty map. So an empty map means "nothing
+     *             usable was in the payload" and **nothing finer**: "the vault disclosed nothing",
+     *             "the extra was absent" and "the JSON was damaged" are one answer here, and
+     *             [describeIntent] does not separate them either — it reports `0 fields` for an
+     *             empty payload and for a malformed one alike, deliberately, because neither this
+     *             function nor that one can tell which it was holding.
      */
     fun decodeFields(json: String?): Map<String, TypedField> {
         if (json.isNullOrBlank()) return emptyMap()
@@ -2383,6 +2661,13 @@ object Utils {
      * A returned [Entry] is fully populated and safe to dereference: its `fields` map
      * contains no null entries and every [TypedField] in it has a non-null `value` and
      * `type`.
+     *
+     * @param json The [EXTRA_ENTRY_JSON] payload, straight off an intent extra, or `null`.
+     *             Nullable because an absent extra is the ordinary case rather than a programming
+     *             error, and because this is the trust boundary: `null`, blank, non-JSON, a JSON
+     *             array, and an object with a `fields` member of the wrong shape are all `null`
+     *             returns and never exceptions. **Do not use `Gson().fromJson` on this string
+     *             instead** — that is the hole this function exists to close.
      */
     fun decodeEntry(json: String?): Entry? {
         if (json.isNullOrBlank()) return null
