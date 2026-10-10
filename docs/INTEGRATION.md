@@ -53,16 +53,79 @@ dependencies {
 }
 ```
 
-**This is the one block on the page whose mechanics no test here checks**, because nothing in this
-repository can execute a consumer project's build. Every *name* in it is pinned — the project path
-comes from `settings.gradle.kts`, the artifact from the module name, the Gson coordinate from the
-module's own dependency block — so it cannot silently fall out of step with the library. How your
-build consumes a local AAR is still your build's business.
+**No test here checks this block's mechanics**, because nothing in this repository can execute a
+consumer project's build — and it is not the only block on the page in that position. The keep rules
+in the next section are in it too, for a reason that section states, and so is the `<queries>`
+element further down. Every *name* in this one is pinned — the project path comes from
+`settings.gradle.kts`, the artifact from the module name, the Gson coordinate from the module's own
+dependency block — so it cannot silently fall out of step with the library. How your build consumes
+a local AAR is still your build's business.
 
 Do not add this module to your own build with `include(...)`: it resolves its plugins and test
 dependencies through *this* repository's version catalog, which yours does not have.
 
 Swap all of it for the coordinate above once the release is cut.
+
+---
+
+## If you minify your app
+
+Five of this library's fields are read by name rather than by code: they **are** the five JSON keys
+the two apps exchange. R8 renames and removes what it believes nothing reads, so a release build with
+`isMinifyEnabled = true` needs keep rules for them. This library carries its own in
+`consumer-rules.pro`, which AGP packages into the AAR for consumers who resolve it as a dependency.
+
+**If you vendored the AAR into `libs/` — the only install path this guide can offer today — copy the
+rules into your own ProGuard file.** Whether AGP hands a *file* dependency's packaged `proguard.txt`
+to R8 is not a question this repository can answer, because nothing here builds a consumer project;
+rather than guess either way, copy them. A rule that arrives twice costs nothing, and the failure if
+none arrives is silent.
+
+Nor does any test here show that these rules *work*. This library builds with
+`isMinifyEnabled = false` — correct for a library, because R8 runs in your build and never in ours —
+so no gate in this repository has ever run R8 over these classes. What *is* checked is that the block
+below holds every directive line that file ships, in the same order — the comments around them are
+each document's own:
+
+```proguard
+# The five JSON keys the two apps exchange are these five fields, each named by its own
+# @SerializedName. `-keep` rather than `-keepclassmembernames`: a names-only rule forbids
+# renaming but still permits removal, and a field R8 removed has no key at all.
+-keep class dev.eryalabs.lim.Entry {
+    java.lang.String id;
+    java.util.Map fields;
+    java.lang.String publicKey;
+}
+-keep class dev.eryalabs.lim.TypedField {
+    java.lang.String value;
+    java.lang.String type;
+}
+
+# Gson reads @SerializedName reflectively, so an erased annotation is an ignored one. The
+# Map<String, TypedField> type argument exists at runtime only in the generic signature of an
+# anonymous TypeToken, which R8's full mode would otherwise strip along with the subclass.
+-keepattributes Signature
+-keepattributes *Annotation*
+-keep class * extends com.google.gson.reflect.TypeToken
+
+# Both types are Parcelable too, and @Parcelize generates a CREATOR field the platform looks up
+# by name. AGP's default proguard-android-optimize.txt keeps every CREATOR — this does not
+# assume you kept that file in your own proguardFiles.
+-keepclassmembers class dev.eryalabs.lim.Entry {
+    public static final android.os.Parcelable$Creator CREATOR;
+}
+-keepclassmembers class dev.eryalabs.lim.TypedField {
+    public static final android.os.Parcelable$Creator CREATOR;
+}
+```
+
+Know the failure by sight, because neither app logs a reason for it: **sign-up opens no consent
+dialog at all.** The minified payload is keyed `"a"`, `"b"`, `"c"`; the vault reads `id` and
+`publicKey` as absent, `Utils.decodeEntry` answers `null`, and the request is dropped on arrival.
+
+Nothing here switches obfuscation off, and you should not add `-dontobfuscate` on this library's
+account. These rules name exactly what has to survive it and leave every other decision about your
+app to you.
 
 ---
 

@@ -42,7 +42,7 @@ import java.lang.reflect.Modifier
  * "every field these rules keep is a field on the wire, under its own name" is reflection rather
  * than belief. A `@SerializedName` renaming a key, or a field-naming policy arriving, reddens it.
  *
- * **Eight rules.**
+ * **Nine rules.**
  *
  *  1. Every non-blank, non-comment line belongs to a directive whose keyword is on a named
  *     allow-list. This is a **vocabulary check, not R8's parser**: it says every directive's
@@ -74,16 +74,27 @@ import java.lang.reflect.Modifier
  *     without rule 7 deleting `-keepattributes Signature` — the line `decodeFields` depends on —
  *     would leave the directive count above its floor with every field still covered, and nothing
  *     red. That was computed before the rule existed; the `CREATOR` pair was added to it after a
- *     review deleted both of those directives and watched all fifteen tests stay green.
+ *     review deleted both of those directives and watched all fifteen tests stay green. Rule 9 now
+ *     catches a line deleted from *this file alone*, because the guide would still print it — but
+ *     not one deleted from both sides, which is the case rule 7 is still the only answer to.
  *  8. Every member spec is balanced: every `{` closed, nothing left open. Two lines, and the one
  *     check here that is **parser-shaped rather than vocabulary-shaped** — unlike rule 1, this is
  *     about something R8 would actually reject. It covers the failure mode that is both unverifiable
  *     from this repository and expensive where it lands: the file is parsed on a *consumer's*
  *     machine, by their R8, so a stray brace breaks their release build rather than anything of
  *     ours.
+ *  9. **The copy of these rules printed in `docs/INTEGRATION.md` holds this file's own directive
+ *     lines — set-equal both ways, and in the same sequence.** AGP packages this file into the AAR,
+ *     but the guide's only working install path is vendoring the AAR into `libs/`, and whether a
+ *     *file* dependency's packaged `proguard.txt` reaches R8 is not answerable from here — so the
+ *     guide tells the integrator to copy the rules, and the copy is part of what this library ships.
  *
- * **What the rules deliberately do not pin.** Directive *order*, because order is not meaningful to
- * R8 and an assertion over it would be a false pin. The wording of any comment, because the file is
+ * **What the rules deliberately do not pin.** Any *particular* directive order: reorder this file
+ * **and the guide's copy of it together** and nothing reddens, because order is not meaningful to R8
+ * and an assertion over it would be a false pin. Reordering one of the two documents alone *does*
+ * redden, on rule 9's sequence check — the two claims are different, and the second is what stops a
+ * member spec migrating between two `-keep class` blocks in one document and not the other. The
+ * wording of any comment, because the file is
  * prose plus directives and only the directives are pinned. And the member specs of any class
  * outside [COVERED_CLASSES] — the signed-statement classes hand-encode their pre-images field by
  * field, never travel through Gson (`RotationStatement.kt:33`) and are not `Parcelable`, so they
@@ -621,6 +632,10 @@ class ConsumerRulesTest {
      * `-keepattributes Signature` leaves the directive count above rule 6's floor with every field
      * still covered; deleting both `CREATOR` directives did the same, and a review demonstrated it
      * by watching all fifteen tests stay green. Computed and measured, not assumed.
+     *
+     * Rule 9 has since narrowed the gap without closing it: a line taken out of this file alone now
+     * reddens the guide equality too, because `docs/INTEGRATION.md` still prints it. A line taken
+     * out of *both* is seen by this rule and nothing else.
      */
     @Test
     fun `the directives rule 3 cannot reach are each present by name`() {
@@ -629,8 +644,10 @@ class ConsumerRulesTest {
             "each of these directives must appear in $RULES_PATH verbatim. None of them is " +
                 "something rules 1-4 can see — three are not about members at all, and the two " +
                 "`CREATOR` specs name a *static* field, which rule 3 excludes because Gson does " +
-                "not serialise one — while rule 6's floor sits below the directive count. So " +
-                "deleting any of them would otherwise be green. `Signature` carries the " +
+                "not serialise one — while rule 6's floor sits below the directive count. Rule 9 " +
+                "would catch a deletion from this file alone, since the guide would still print " +
+                "the line, but not one taken out of both; without this rule that case is green. " +
+                "`Signature` carries the " +
                 "`Map<String, TypedField>` type argument of the anonymous TypeToken; " +
                 "`*Annotation*` is what makes the five `@SerializedName` keys survive; the " +
                 "TypeToken " +
@@ -660,6 +677,106 @@ class ConsumerRulesTest {
                 "project and a green suite in this one",
             emptyList<String>(),
             onDisk().unbalanced,
+        )
+    }
+
+    // ── Rule 9: the guide prints these rules, because one install path may not carry them ─
+
+    /**
+     * (9) `docs/INTEGRATION.md`'s one ` ```proguard ` block holds these directive lines, both ways.
+     *
+     * **Why the guide has to print them at all.** AGP packages this file into the AAR, so a consumer
+     * who resolves the library as a *dependency* gets these rules whether they read a word of the
+     * guide. No release has been cut, so that is not the install path anybody is on: the guide's
+     * only working one is vendoring the AAR into `libs/` (`docs/INTEGRATION.md`, "Until then: build
+     * from source"). Whether AGP hands a **file** dependency's packaged `proguard.txt` to R8 is not
+     * answerable from this repository — nothing here builds a consumer project — so the guide tells
+     * the integrator to copy the rules into their own file rather than asserting either answer. That
+     * makes the printed copy part of the shipped rule set, and a printed copy that drifts is worse
+     * than none: it is the integrator's only sight of what has to survive their R8.
+     *
+     * **Set equality, in both directions, printed in one failure.** A line in the file and not in
+     * the guide is a rule an integrator on the vendoring path will not have; a line in the guide and
+     * not in the file is a rule this library does not actually ship, which sends somebody to debug
+     * the wrong thing. Neither direction subsumes the other, and the two are collected into **one**
+     * list of labelled complaints rather than asserted one after the other on purpose: a
+     * one-character drift is a miss in *both* directions at once, and two assertions would print the
+     * first and stop, naming the line that went missing while withholding the line that replaced
+     * it — which is the actionable half.
+     *
+     * **And the sequence, because a set is not enough.** Two sets can be equal while the *order* is
+     * not, and order is what attaches a member spec to a class: move `java.util.Map fields;` out of
+     * the `Entry` block and into the `TypedField` one in the guide alone and the set is unchanged to
+     * the byte, while the block an integrator copies leaves `Entry.fields` free for R8 to remove and
+     * names a `fields` member on `TypedField` that matches nothing — the exact silent failure the
+     * section tells its reader to watch for, printed by the guide and blessed by the test. A review
+     * found that hole in the set-only first draft. So the lines are compared **as a sequence** too,
+     * which also pins the duplicate lines a set collapses: the three `}` and the two identical
+     * `CREATOR` specs. The set differences are asserted *first*, because they are what names the
+     * line and the direction; the sequence is what the reordering case falls to.
+     *
+     * **What this does and does not pin.** Comments are stripped per line — by
+     * [directiveLinesIn], the same `#`-to-end-of-line rule [parse] applies — so the block's prose
+     * and this file's are independent, and the guide is **not** claimed to be byte-equal to the
+     * file. Blank lines go too, so the paragraph breaks between groups of directives are each
+     * document's own. Leading whitespace is trimmed, so a member spec's indentation is not pinned
+     * across a Markdown fence. Nothing here says the guide's copy would *work*: no gate in this
+     * repository runs R8, which is this whole file's standing caveat.
+     *
+     * **The locator fails loudly.** Exactly one ` ```proguard ` block is required, because a locator
+     * that found none would leave the comparison running against nothing and reporting every line of
+     * this file as missing from the guide — technically red, but red for the wrong reason, naming
+     * fourteen lines when the finding is "there is no block". The floor below is what stops the
+     * mirror case from going quiet. `GuideSnippetTest` excuses that fence by name and cites this
+     * test, so the two halves cannot be separated without one of them reddening.
+     */
+    @Test
+    fun `the integration guide prints the rules this file ships`() {
+        val guide = locate(GUIDE_PATH)
+        val blocks = fencedBlocks(guide.readLines(), RULES_FENCE_LANGUAGE)
+        assertEquals(
+            "$GUIDE_PATH must hold exactly one ```$RULES_FENCE_LANGUAGE block — the keep rules an " +
+                "integrator copies when they vendor the AAR. Finding none would make the equality " +
+                "below compare the file against nothing, and finding two would leave one of them " +
+                "unchecked. Found ${blocks.size}",
+            1,
+            blocks.size,
+        )
+        val printed = directiveLinesIn(blocks.single())
+        val shipped = directiveLinesIn(locate(RULES_PATH).readLines())
+        println(
+            "$RULES_PATH: ${shipped.size} directive lines, ${shipped.toSet().size} distinct " +
+                "(floor $MINIMUM_PRINTED_LINES); ${printed.size} printed in $GUIDE_PATH",
+        )
+        assertTrue(
+            "$RULES_PATH must hold at least $MINIMUM_PRINTED_LINES distinct non-comment lines for " +
+                "the comparisons below to mean anything; a comment-stripper that blanked the file " +
+                "would otherwise make two empty sequences equal. Found ${shipped.toSet().size}",
+            shipped.toSet().size >= MINIMUM_PRINTED_LINES,
+        )
+        assertEquals(
+            "the keep rules $GUIDE_PATH prints have drifted from the ones $RULES_PATH ships. A " +
+                "line only in the file is a rule an integrator who vendored the AAR and copied the " +
+                "block will not have; a line only in the guide is a rule this library does not " +
+                "ship, which sends somebody to keep a class on its account that it never asked " +
+                "for. The file is the source of truth: copy it across rather than editing it to " +
+                "match the guide",
+            emptyList<String>(),
+            (shipped.toSet() - printed.toSet()).sorted().map { "only in $RULES_PATH: `$it`" } +
+                (printed.toSet() - shipped.toSet()).sorted().map { "only in $GUIDE_PATH: `$it`" },
+        )
+        assertEquals(
+            "the two sides hold the same *set* of directive lines but not the same sequence of " +
+                "them, so the difference above had nothing to report. Two causes reach this, and " +
+                "the lists below say which: either a member spec has moved between two `-keep " +
+                "class` blocks and is attached to the wrong class in one document — a spec that " +
+                "matches nothing in R8, leaving the field it was meant to keep free to be removed " +
+                "— or a line a set collapses is missing from one side or duplicated on it, which " +
+                "for a `}` means the block an integrator pastes is unbalanced and their R8 refuses " +
+                "the file outright. Rule 8 cannot see that second one: it reads $RULES_PATH and " +
+                "never the guide. $RULES_PATH is the source of truth either way",
+            shipped,
+            printed,
         )
     }
 
@@ -987,6 +1104,50 @@ class ConsumerRulesTest {
     private fun onDisk(): Report =
         cached ?: parse(locate(RULES_PATH).readText()).also { cached = it }
 
+    /**
+     * The non-blank, non-comment lines of [lines], trimmed and **in order** — rule 9's unit of
+     * comparison, which reads it both as a set and as a sequence.
+     *
+     * `#` runs to the end of its line anywhere in a ProGuard file, which is [parse]'s rule too, and
+     * applying it to the guide's block as well is what lets the two files carry different prose
+     * around the same directives. Trimmed, so the four-space indentation of a member spec is not
+     * pinned across a Markdown fence. A `List` rather than a `Set` on purpose: order is what
+     * attaches a member spec to the class whose braces it sits in, so collapsing it would wave
+     * through a spec that had moved between two `-keep class` blocks.
+     */
+    private fun directiveLinesIn(lines: List<String>): List<String> =
+        lines.map { it.substringBefore(COMMENT_MARKER).trim() }
+            .filter { it.isNotEmpty() }
+
+    /**
+     * The body of every fenced block in [lines] whose info string is exactly [language].
+     *
+     * Fences are required at column 0 with a bare language word, which is [FENCE_OPEN] and the same
+     * shape `GuideSnippetTest` holds the whole guide to — so a fence this scan cannot see is a
+     * failure over there rather than a block silently skipped here. An unclosed fence fails the run
+     * rather than swallowing the rest of the document.
+     */
+    private fun fencedBlocks(lines: List<String>, language: String): List<List<String>> {
+        val blocks = mutableListOf<List<String>>()
+        var index = 0
+        while (index < lines.size) {
+            val open = FENCE_OPEN.find(lines[index])
+            if (open == null) {
+                index++
+                continue
+            }
+            var cursor = index + 1
+            while (cursor < lines.size && !FENCE_CLOSE.matches(lines[cursor])) cursor++
+            check(cursor < lines.size) {
+                "a fenced block opened at line ${index + 1} is never closed, so this scan cannot " +
+                    "say what the document contains"
+            }
+            if (open.groupValues[1] == language) blocks += lines.subList(index + 1, cursor)
+            index = cursor + 1
+        }
+        return blocks
+    }
+
     private class GsonSite(val where: String, val code: String)
 
     /** Every `Gson()` construction in the main sources, with comments masked. */
@@ -1086,6 +1247,12 @@ class ConsumerRulesTest {
         private const val RULES_PATH = "LIM/consumer-rules.pro"
         private const val MAIN_SOURCE_ROOT = "src/main/java"
 
+        /** The integration guide, which prints these rules for the vendoring path. See rule 9. */
+        private const val GUIDE_PATH = "docs/INTEGRATION.md"
+
+        /** The fence the guide's copy of these rules carries, and the key its excuse is spelled with. */
+        private const val RULES_FENCE_LANGUAGE = "proguard"
+
         private const val COMMENT_MARKER = "#"
         private const val DIRECTIVE_MARKER = "-"
         private const val LINE_COMMENT = "//"
@@ -1167,6 +1334,15 @@ class ConsumerRulesTest {
         private const val MINIMUM_DIRECTIVES = 4
 
         /**
+         * Rule 9's floor: distinct non-comment lines in the rules file, 14 when this was written.
+         *
+         * Below the measured count, for [MINIMUM_DIRECTIVES]'s reason — deleting a line from either
+         * side should report the set equality that was aimed at it, naming the line and the
+         * direction, rather than burying it under a floor failure.
+         */
+        private const val MINIMUM_PRINTED_LINES = 10
+
+        /**
          * The four `Gson()` call sites these rules were written against, by content.
          *
          * Content rather than line number, so an edit above them is not a false alarm. All four are
@@ -1187,6 +1363,10 @@ class ConsumerRulesTest {
 
         /** The supertype of an `extends` or `implements` clause. */
         private val SUPERTYPE_SPEC = Regex("""\b(?:extends|implements)\s+([A-Za-z0-9_.*]+)""")
+
+        /** Rule 9's Markdown fences: column 0, backticks, a bare language word. */
+        private val FENCE_OPEN = Regex("""^```(\w*)\s*$""")
+        private val FENCE_CLOSE = Regex("""^```\s*$""")
 
         private val MEMBER_SEPARATOR = Regex(";")
         private val WHITESPACE = Regex("""\s+""")

@@ -34,10 +34,12 @@ import java.io.File
  *     rather than silently skipped.
  *
  * **The marker rule binds ` ```kotlin ` and nothing else**, which is why the Setup section's
- * dependency declaration is fenced ` ```gradle ` and the vault-visibility section's manifest
- * element is fenced ` ```xml `. Fencing Gradle Kotlin DSL as Kotlin would put it under rule 1,
- * which has no region to offer it, and rules 1 and 6 would deadlock on the one block the guide
- * cannot do without; the same is true of an XML element no test here can execute.
+ * dependency declaration is fenced ` ```gradle `, the vault-visibility section's manifest element is
+ * fenced ` ```xml ` and the minification section's keep rules are fenced ` ```proguard `. Fencing
+ * Gradle Kotlin DSL as Kotlin would put it under rule 1, which has no region to offer it, and rules
+ * 1 and 6 would deadlock on the one block the guide cannot do without; the same is true of an XML
+ * element and of a ProGuard rule set, neither of which any test here can execute. [NOT_A_SNIPPET] is
+ * the exhaustive list, and the one to read rather than this sentence.
  *
  * **What this test deliberately does not pin: the prose.** Rewriting any sentence outside a fenced
  * block changes nothing here, and that is the honest statement of its scope — it pins code, not
@@ -1284,6 +1286,7 @@ class GuideSnippetTest {
         /** Pinned by name so the guide cannot ship half-written. */
         private val REQUIRED_SECTIONS = listOf(
             "Setup",
+            "If you minify your app",
             "Before you start: is there a vault?",
             "Sign-up (share)",
             "Query",
@@ -1335,6 +1338,19 @@ class GuideSnippetTest {
                     "the artifact the assemble task writes, and the Gson coordinate a bare AAR " +
                     "does not carry",
                 coveredBy = "GuideSnippetTest: the build-from-source path names what the build declares",
+            ),
+            "proguard under If you minify your app" to Excuse(
+                reason = "the keep rules a consumer copies into their own ProGuard file when they " +
+                    "vendor the AAR. Nothing in this repository runs R8 over this library — the " +
+                    "module builds with `isMinifyEnabled = false`, which is correct for a library " +
+                    "because R8 runs in the consumer's build — so whether these rules do their job " +
+                    "is not measurable from here, and that section is one of the places this " +
+                    "project says so in as many words. What is pinned is the block's own content: " +
+                    "the cited test holds its directive lines set-equal to " +
+                    "`LIM/consumer-rules.pro`, the file this library actually ships, in both " +
+                    "directions and in the same order, so the guide cannot print a rule set the " +
+                    "AAR does not carry",
+                coveredBy = "ConsumerRulesTest: the integration guide prints the rules this file ships",
             ),
             "xml under Before you start: is there a vault?" to Excuse(
                 reason = "the `<queries>` element a consumer adds to their *own* manifest, so that " +
