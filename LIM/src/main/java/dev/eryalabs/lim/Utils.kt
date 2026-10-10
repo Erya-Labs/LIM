@@ -250,6 +250,28 @@ object Utils {
      * verbatim out of a region of a test that runs, held there by `GuideSnippetTest`, so it cannot
      * drift from the library either.
      *
+     * **Example**, verbatim from `docs/INTEGRATION.md`'s *Sign-up (share)* section:
+     *
+     * <!-- example: INTEGRATION.md#signup-request -->
+     * ```kotlin
+     * // The fields your service needs, each with the type you expect. You supply no values —
+     * // the user fills those in the vault's own form. `publicKey` is a slot the vault fills,
+     * // so send a placeholder: a blank one is encoded here and then refused on arrival.
+     * val entry = Entry(
+     *     id = "signup-form",
+     *     fields = linkedMapOf(
+     *         "name" to TypedField(value = "", type = FieldType.STRING),
+     *         "email" to TypedField(value = "", type = FieldType.EMAIL),
+     *     ),
+     *     publicKey = "no-key-yet",
+     * )
+     * // Pass `requestCode` **by name**. The positional three-argument call resolves to the
+     * // `targetPackage` overload instead, addressing the intent at a package named
+     * // "signup-1", and nothing ever answers it.
+     * val request = Utils.createShareIntent(context, entry, requestCode = SIGN_UP_REQUEST)
+     * // startActivityForResult(request, VAULT_RESULT)
+     * ```
+     *
      * @param context       **Read by nothing in this function today** — the intent is addressed by
      *                      package rather than by component, so no [Context] is needed to build
      *                      one, and none is retained or put on the intent. It stays in the
@@ -300,6 +322,29 @@ object Utils {
      * See `ClientIntegrationExampleTest` for the whole sequence as a test: this call, the vault's
      * answer, and the [matchesRequestCode] check that keeps it from being read as the answer to a
      * different request. `docs/INTEGRATION.md` is the prose walkthrough of the same loop.
+     *
+     * **Example**, verbatim from `docs/INTEGRATION.md`'s *Sign-up (share)* section — the same
+     * block the sibling overload carries, because it is the call that resolves to **this** one:
+     *
+     * <!-- example: INTEGRATION.md#signup-request -->
+     * ```kotlin
+     * // The fields your service needs, each with the type you expect. You supply no values —
+     * // the user fills those in the vault's own form. `publicKey` is a slot the vault fills,
+     * // so send a placeholder: a blank one is encoded here and then refused on arrival.
+     * val entry = Entry(
+     *     id = "signup-form",
+     *     fields = linkedMapOf(
+     *         "name" to TypedField(value = "", type = FieldType.STRING),
+     *         "email" to TypedField(value = "", type = FieldType.EMAIL),
+     *     ),
+     *     publicKey = "no-key-yet",
+     * )
+     * // Pass `requestCode` **by name**. The positional three-argument call resolves to the
+     * // `targetPackage` overload instead, addressing the intent at a package named
+     * // "signup-1", and nothing ever answers it.
+     * val request = Utils.createShareIntent(context, entry, requestCode = SIGN_UP_REQUEST)
+     * // startActivityForResult(request, VAULT_RESULT)
+     * ```
      *
      * @param context     As the sibling overload: read by nothing here, kept in the signature, and
      *                    still best spelled as the [Activity][android.app.Activity] you will
@@ -405,6 +450,17 @@ object Utils {
      * [QueryResult] and only the result code tells them apart. `docs/INTEGRATION.md` covers the
      * same ground as prose, including that refusal.
      *
+     * **Example**, verbatim from `docs/INTEGRATION.md`'s *Query* section:
+     *
+     * <!-- example: INTEGRATION.md#query-request -->
+     * ```kotlin
+     * // A query asks about one profile, by the key you stored at sign-up. The vault decides
+     * // what it discloses. The request code is yours: it is what tells answers apart when
+     * // more than one request is in flight.
+     * val request = Utils.createQueryIntent(context, accountKey, QUERY_REQUEST)
+     * // startActivityForResult(request, VAULT_RESULT)
+     * ```
+     *
      * @param context       Read by nothing here, as in [createShareIntent], and kept in the
      *                      signature for the same reason. Pass the
      *                      [Activity][android.app.Activity] you will launch from: this intent is
@@ -486,6 +542,24 @@ object Utils {
      * no verifier can tell the two signatures apart afterwards. A nonce from this function never
      * matches: a random 40-byte challenge cannot begin with [STATEMENT_DOMAIN_V1].
      *
+     * **Example**, verbatim from `docs/INTEGRATION.md`'s *Login (sign-challenge)* section:
+     *
+     * <!-- example: INTEGRATION.md#login-request -->
+     * ```kotlin
+     * // Mint the challenge and keep it. It carries its own timestamp, so there is no
+     * // server-side state to expire; declaring the format is what lets a vault read that
+     * // timestamp and apply a freshness policy of its own.
+     * val nonce = Utils.generateNonce()
+     * val request = Utils.createSignChallengeIntent(
+     *     context,
+     *     storedPublicKey,
+     *     nonce,
+     *     LOGIN_REQUEST,
+     *     nonceFormat = Utils.NONCE_FORMAT_TIMESTAMPED,
+     * )
+     * // startActivityForResult(request, VAULT_RESULT)
+     * ```
+     *
      * @param random Source of randomness; injected so tests can pin it. Defaults to a fresh
      *               [SecureRandom] — do not pass a plain `Random`.
      * @param now    Milliseconds since the epoch to stamp into the nonce; injected so tests
@@ -526,6 +600,21 @@ object Utils {
      *
      * This is a freshness check and nothing more. It says the challenge has not expired; it
      * does not say anyone proved possession of a key — only [verifySignature] does that.
+     *
+     * **Example**, verbatim from `docs/INTEGRATION.md`'s *Login (sign-challenge)* section —
+     * freshness is one clause of four, and the other three are the separate questions:
+     *
+     * <!-- example: INTEGRATION.md#login-result -->
+     * ```kotlin
+     * // In onActivityResult. Verify against the key your account table already holds and the
+     * // nonce you generated — never against either one read back out of the result, or the
+     * // sender gets to choose both sides of the proof.
+     * val result = Utils.parseSignChallengeResult(data)
+     * val loggedIn = resultCode == Activity.RESULT_OK &&
+     *     Utils.matchesRequestCode(data, LOGIN_REQUEST) &&
+     *     Utils.isNonceFresh(nonce, maxAgeMillis = 60_000L) &&
+     *     result?.isVerified(storedPublicKey, nonce) == true
+     * ```
      *
      * @param nonce        The challenge bytes to date, in [generateNonce]'s layout — the
      *                     timestamp is read out of the nonce itself, so nothing has to be stored
@@ -604,6 +693,24 @@ object Utils {
      * keep it, verify against it and against the key you already store — along with the replay it
      * refuses and the vault-side refusal of a nonce that is really a statement pre-image.
      * `docs/INTEGRATION.md` walks the same login through as prose.
+     *
+     * **Example**, verbatim from `docs/INTEGRATION.md`'s *Login (sign-challenge)* section:
+     *
+     * <!-- example: INTEGRATION.md#login-request -->
+     * ```kotlin
+     * // Mint the challenge and keep it. It carries its own timestamp, so there is no
+     * // server-side state to expire; declaring the format is what lets a vault read that
+     * // timestamp and apply a freshness policy of its own.
+     * val nonce = Utils.generateNonce()
+     * val request = Utils.createSignChallengeIntent(
+     *     context,
+     *     storedPublicKey,
+     *     nonce,
+     *     LOGIN_REQUEST,
+     *     nonceFormat = Utils.NONCE_FORMAT_TIMESTAMPED,
+     * )
+     * // startActivityForResult(request, VAULT_RESULT)
+     * ```
      *
      * @param context     Read by nothing here, as in [createShareIntent], and kept in the
      *                    signature for the same reason. Pass the [Activity][android.app.Activity]
@@ -1628,6 +1735,19 @@ object Utils {
      * signal.** It reports what the intent said; [SignChallengeResult.isVerified] is the only
      * thing that reports whether the sender holds the private key.
      *
+     * **Example**, verbatim from `docs/INTEGRATION.md`'s *Rules you must not break* section —
+     * the rule being that a parse is not an authentication:
+     *
+     * <!-- example: INTEGRATION.md#rules-not-authenticated -->
+     * ```kotlin
+     * // Parsing says the bytes were well formed. It says nothing about who made them:
+     * // anything on the device can put a signature-shaped extra in an intent, and it parses
+     * // exactly as well as a genuine answer does. `isVerified`, against your own stored key
+     * // and your own nonce, is the only success signal this library offers.
+     * fun authenticated(data: Intent?, storedKey: String, challenge: ByteArray): Boolean =
+     *     Utils.parseSignChallengeResult(data)?.isVerified(storedKey, challenge) == true
+     * ```
+     *
      * @param intent The result intent from `onActivityResult`, or `null`. Nullable because this
      *               is a trust boundary: the payload arrives unchecked from another app, so an
      *               absent one is an answer rather than a precondition and every *value* on it is
@@ -1659,6 +1779,20 @@ object Utils {
      * Note the field payload arrives under [EXTRA_QUERY_RESULT_FIELDS] here, not the
      * [EXTRA_FIELDS_JSON] key the sign-challenge flow uses. The two keys are separate points
      * in the protocol and are deliberately not interchangeable.
+     *
+     * **Example**, verbatim from `docs/INTEGRATION.md`'s *Query* section:
+     *
+     * <!-- example: INTEGRATION.md#query-result -->
+     * ```kotlin
+     * // In onActivityResult. Check the correlation first — this answer may belong to a
+     * // different request you still have outstanding.
+     * val mine = Utils.matchesRequestCode(data, QUERY_REQUEST)
+     * val disclosure =
+     *     if (mine && resultCode == Activity.RESULT_OK) Utils.parseQueryResult(data) else null
+     * val email = disclosure?.fields?.get("email")?.value
+     * // A disclosure is not a login. Nothing in a query answer is signed, so this says "the
+     * // vault told us this", never "the holder of the key is here".
+     * ```
      *
      * @param intent The result intent from `onActivityResult`, or `null` — nullable for the
      *               reason [parseSignChallengeResult]'s is, and with the same contract: an
@@ -1699,6 +1833,17 @@ object Utils {
      * [EXTRA_QUERY_RESULT_FIELDS] is deliberately not read here. The two field payloads sit
      * under different keys at different points in the protocol, and the flows' keys are not
      * interchangeable — the same separation [parseQueryResult] pins from its side.
+     *
+     * **Example**, verbatim from `docs/INTEGRATION.md`'s *Sign-up (share)* section:
+     *
+     * <!-- example: INTEGRATION.md#signup-result -->
+     * ```kotlin
+     * // In onActivityResult, once `resultCode` is RESULT_OK.
+     * val result = Utils.parseShareResult(data)
+     * // The handle to keep is the key the *result* carried. The vault mints the keypair, so
+     * // whatever you put in the slot on the way out was never an identifier.
+     * val accountKey = result?.publicKey
+     * ```
      *
      * @param intent The result intent from `onActivityResult`, or `null` — nullable for the
      *               reason [parseSignChallengeResult]'s is, and read rather than retained. The
@@ -2102,6 +2247,22 @@ object Utils {
      * This is correlation, not authentication. The token travels in an extra any app can write,
      * so a match says "this is the result I was waiting for", never "this result is genuine" —
      * only [SignChallengeResult.isVerified] says the latter.
+     *
+     * **Example**, verbatim from `docs/INTEGRATION.md`'s *When the user says no* section —
+     * correlation is the one thing a declining vault still sends:
+     *
+     * <!-- example: INTEGRATION.md#declined -->
+     * ```kotlin
+     * // Branch on the result code, never on the parse. A refused query parses into a
+     * // perfectly good QueryResult with no fields — exactly what a vault that consented and
+     * // disclosed nothing returns — so the parse cannot tell you which of the two happened.
+     * val declined = resultCode != Activity.RESULT_OK
+     * // Correlation survives a refusal: the echoed request code is the one thing a declining
+     * // vault still sends, so you know which request the user said no to.
+     * val whichRequest = Utils.matchesRequestCode(data, QUERY_REQUEST)
+     * // There is no structured reason to show the user. A refusal is deliberately
+     * // uninformative; tell them nothing was sent and let them ask again.
+     * ```
      *
      * @param intent   The result intent to test; a null one never matches, so an unchecked
      *                 `onActivityResult` payload can be passed straight in.

@@ -47,6 +47,21 @@ data class SignChallengeResult(
      * choose both sides of the proof. Freshness is a separate question: check the nonce with
      * [Utils.isNonceFresh] as well, or a signature captured today can be replayed tomorrow.
      *
+     * **Example**, verbatim from `docs/INTEGRATION.md`'s *Login (sign-challenge)* section —
+     * this call is the last of the four clauses, and the only one that proves anything:
+     *
+     * <!-- example: INTEGRATION.md#login-result -->
+     * ```kotlin
+     * // In onActivityResult. Verify against the key your account table already holds and the
+     * // nonce you generated — never against either one read back out of the result, or the
+     * // sender gets to choose both sides of the proof.
+     * val result = Utils.parseSignChallengeResult(data)
+     * val loggedIn = resultCode == Activity.RESULT_OK &&
+     *     Utils.matchesRequestCode(data, LOGIN_REQUEST) &&
+     *     Utils.isNonceFresh(nonce, maxAgeMillis = 60_000L) &&
+     *     result?.isVerified(storedPublicKey, nonce) == true
+     * ```
+     *
      * @param publicKeyBase64 The Base64 RSA public key you already store for this profile — the
      *                        account identifier. Never [Utils.EXTRA_PUBLIC_KEY] off this result's
      *                        own intent: that is the sender's claim about whose key it is, and
