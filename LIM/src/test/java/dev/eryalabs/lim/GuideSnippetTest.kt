@@ -1293,6 +1293,7 @@ class GuideSnippetTest {
             "Login (sign-challenge)",
             "When the user says no",
             "Rules you must not break",
+            "Testing your integration without a vault",
         )
 
         /**

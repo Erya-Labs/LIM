@@ -7,6 +7,7 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.IntentFilter
 import android.util.Base64
+import android.util.Log
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -380,6 +381,111 @@ class GuideExamplesTest {
         assertNull("and yet it names no account this service holds", accounts[respelled])
     }
 
+    // ── Testing your integration without a vault ──────────────────────────
+
+    /**
+     * The second hour of the afternoon. The first is the request; this is the test that proves the
+     * `onActivityResult` half works, on a build machine with no vault installed on it.
+     *
+     * The machinery is already here and was already published: [Utils.createShareResultIntent] is
+     * one of the three result builders [FixtureVault] above calls on the way out, so an integrator's
+     * own test can mint the answer their handler will be handed. What the two regions cannot assert
+     * about themselves, and this function therefore asserts outside them:
+     *
+     *  - the built answer is a *real* answer rather than an intent that happens to parse — the key
+     *    comes back out as it went in and the echoed request code correlates, neither of which an
+     *    empty envelope could do;
+     *  - the diagnosis line the second block tells an integrator to log carries no value the user
+     *    disclosed *under the key that carries one*. The field value asserted absent is spelled to
+     *    collide with nothing any renderer in [Utils.describeIntent] emits: a short value like
+     *    `"1"` is a substring of `1 field`, of a byte count and of the protocol version, and
+     *    asserting its absence would manufacture a leak that is not there. The limit on that
+     *    claim, which the snippet states rather than hides, is the four tokens the line prints
+     *    close to verbatim — a peer that files personal data under one of those is printed as it
+     *    wrote it, and `Utils.describeIntent`'s own KDoc is where that trade-off is argued.
+     *
+     * `ResultBuilderTest` pins the builder extra by extra and `IntentDescriptionTest` pins the
+     * description; this file's subject is only the published prose, so it repeats neither.
+     */
+    @Test
+    fun `an integrator tests their own handler, and describes an answer that will not parse`() {
+        // region snippet:testing-your-handler
+        // Factor the `onActivityResult` half into something a unit test can call. This library's
+        // own result builders mint the answer, so the test needs no vault, no device and no
+        // keystore — but it does need Robolectric: `Intent` is an unimplemented stub in a plain
+        // JVM unit test, and constructing one there throws rather than failing an assertion.
+        fun onVaultAnswer(resultCode: Int, data: Intent?): String? {
+            if (resultCode != Activity.RESULT_OK) return null
+            if (!Utils.matchesRequestCode(data, SIGN_UP_REQUEST)) return null
+            return Utils.parseShareResult(data)?.publicKey
+        }
+
+        // The answer a consenting vault sends after a sign-up.
+        val answer = Utils.createShareResultIntent(
+            publicKey = FAKE_PUBLIC_KEY,
+            fields = linkedMapOf(
+                "email" to TypedField(value = FAKE_EMAIL, type = FieldType.EMAIL),
+            ),
+            requestCode = SIGN_UP_REQUEST,
+        )
+        val accountKey = onVaultAnswer(Activity.RESULT_OK, answer)
+        // endregion snippet:testing-your-handler
+
+        assertEquals(
+            "the handler keeps the key the builder was given",
+            FAKE_PUBLIC_KEY,
+            accountKey,
+        )
+        assertTrue(
+            "…and the built answer is a real answer, not an intent that merely parses: it " +
+                "correlates with the request code it echoed, which an empty envelope cannot do",
+            Utils.matchesRequestCode(answer, SIGN_UP_REQUEST),
+        )
+        assertNull(
+            "control: the same handler keeps nothing when the vault refused",
+            onVaultAnswer(Activity.RESULT_CANCELED, answer),
+        )
+
+        // region snippet:testing-diagnosis
+        // When a parse returns null and it is not obvious why, describe the intent rather than
+        // guess. One line: the action, the package, the state of every extra the protocol
+        // defines, and last the flows this library's own parsers accept it as.
+        val proof = Utils.parseSignChallengeResult(answer)
+        if (proof == null) {
+            Log.w("MyApp", Utils.describeIntent(answer))
+            // `shareResult` is in that `flows=[…]` set and `signChallengeResult` is not: this is
+            // a share answer, nothing signed it, and the login parser was never going to read
+            // it. Route on the parser that returned the null — never on this wording, which is
+            // prose for a human and is not wire format.
+        }
+        // Safe to log, with one limit worth knowing. The keys that carry a user's data are
+        // reduced — a field payload to a count, a nonce and a signature to byte lengths — and the
+        // public key is truncated rather than hidden, because it is the handle this design hands
+        // out freely. But the four protocol tokens the line quotes are printed as the sender
+        // wrote them, so a peer that files personal data under one of those puts it on your line.
+        // That is the peer's bug; `describeIntent`'s own KDoc says so and caps the width.
+        // endregion snippet:testing-diagnosis
+
+        assertNull("precondition: a share answer is not a login answer", proof)
+        val described = Utils.describeIntent(answer)
+        assertTrue(
+            "the diagnosis names the flow that would have parsed it: $described",
+            described.contains("shareResult"),
+        )
+        assertFalse(
+            "and does not name the one that did not: $described",
+            described.contains("signChallengeResult"),
+        )
+        assertFalse(
+            "the line an integrator is told to log must carry no value disclosed under the key " +
+                "that carries one — the field payload is reduced to a count. The value looked " +
+                "for here is spelled to collide with nothing any renderer in `describeIntent` " +
+                "emits, so a hit would be a leak rather than a collision with `1 field`, a byte " +
+                "count or the protocol version: $described",
+            described.contains(FAKE_EMAIL),
+        )
+    }
+
     // ── Shared setup, all of it outside the regions ───────────────────────
 
     /** The entry a client pushes on sign-up: field keys and types, no values, no key of its own. */
@@ -566,6 +672,25 @@ class GuideExamplesTest {
         private const val LOGIN_REQUEST = "login-1"
 
         private const val SIGN_ALGORITHM = "SHA256withRSA"
+
+        /**
+         * The stand-in key an integrator's own test puts in a built answer.
+         *
+         * Not a real one, and it does not have to be: the handler under test stores whatever the
+         * result carried and verifies nothing, which is the point of the section. A *login* test
+         * needs a genuine keypair, and `ClientIntegrationExampleTest` is the file for that.
+         */
+        private const val FAKE_PUBLIC_KEY = "a-fake-public-key-from-a-test"
+
+        /**
+         * A disclosed value distinctive enough that finding it in a diagnosis line is evidence.
+         *
+         * `describeIntent` renders a field payload as a count, so this must never appear in it.
+         * Asserting that of a short value would prove nothing — `"1"` is a substring of `1 field`,
+         * of a byte count and of the protocol version — so it is spelled to collide with nothing
+         * any renderer in that function emits.
+         */
+        private const val FAKE_EMAIL = "qwyx-zarquon-73f1@example.invalid"
 
         private lateinit var vaultKeyPair: KeyPair
         private lateinit var otherKeyPair: KeyPair

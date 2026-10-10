@@ -373,6 +373,86 @@ names can never be moved or recovered.
 
 ---
 
+## Testing your integration without a vault
+
+The first hour of an integration is the request. The second is a test that proves the
+`onActivityResult` half works — and on a build machine there is no vault installed to answer it.
+
+You do not need one. The three result builders a vault calls on the way out —
+`createShareResultIntent`, `createQueryResultIntent` and `createSignChallengeResultIntent` — are
+published here too, so your own test can mint the answer your handler will be handed.
+`GuideExamplesTest`'s own fixture vault — the thing that answers the round trips above — is built
+on exactly these three.
+
+<!-- snippet: GuideExamplesTest.kt#testing-your-handler -->
+```kotlin
+// Factor the `onActivityResult` half into something a unit test can call. This library's
+// own result builders mint the answer, so the test needs no vault, no device and no
+// keystore — but it does need Robolectric: `Intent` is an unimplemented stub in a plain
+// JVM unit test, and constructing one there throws rather than failing an assertion.
+fun onVaultAnswer(resultCode: Int, data: Intent?): String? {
+    if (resultCode != Activity.RESULT_OK) return null
+    if (!Utils.matchesRequestCode(data, SIGN_UP_REQUEST)) return null
+    return Utils.parseShareResult(data)?.publicKey
+}
+
+// The answer a consenting vault sends after a sign-up.
+val answer = Utils.createShareResultIntent(
+    publicKey = FAKE_PUBLIC_KEY,
+    fields = linkedMapOf(
+        "email" to TypedField(value = FAKE_EMAIL, type = FieldType.EMAIL),
+    ),
+    requestCode = SIGN_UP_REQUEST,
+)
+val accountKey = onVaultAnswer(Activity.RESULT_OK, answer)
+```
+
+**Robolectric is the one prerequisite**, and it is a test-only dependency of your app rather than a
+runtime dependency of this library. `Intent`, `Context` and `android.util.Base64` are unimplemented
+stubs in a plain JVM unit test, so a test that builds an intent throws on the first line instead of
+failing an assertion. This repository's own suite runs on Robolectric for exactly that reason.
+
+**This is a recipe, and the shape of the call is not what makes it correct.** A hand-built
+`Intent().putExtra(...)` carrying the same extras would behave identically here, and no test in
+this repository would notice the difference. What ties the recipe to the protocol is that
+`createShareResultIntent` is the function `ResultBuilderTest` pins extra by extra and the one the
+reference vault calls to answer a real sign-up — so an answer built this way cannot drift from the
+answer a vault sends. That is the claim; the section makes no larger one.
+
+A login test is the one case that still needs real cryptography: a signature has to be made with a
+private key before `isVerified` can be true of it. `ClientIntegrationExampleTest` is the file to
+read for that, and it generates its own keypair.
+
+When a parse comes back `null`, `describeIntent` is the next step rather than a guess:
+
+<!-- snippet: GuideExamplesTest.kt#testing-diagnosis -->
+```kotlin
+// When a parse returns null and it is not obvious why, describe the intent rather than
+// guess. One line: the action, the package, the state of every extra the protocol
+// defines, and last the flows this library's own parsers accept it as.
+val proof = Utils.parseSignChallengeResult(answer)
+if (proof == null) {
+    Log.w("MyApp", Utils.describeIntent(answer))
+    // `shareResult` is in that `flows=[…]` set and `signChallengeResult` is not: this is
+    // a share answer, nothing signed it, and the login parser was never going to read
+    // it. Route on the parser that returned the null — never on this wording, which is
+    // prose for a human and is not wire format.
+}
+// Safe to log, with one limit worth knowing. The keys that carry a user's data are
+// reduced — a field payload to a count, a nonce and a signature to byte lengths — and the
+// public key is truncated rather than hidden, because it is the handle this design hands
+// out freely. But the four protocol tokens the line quotes are printed as the sender
+// wrote them, so a peer that files personal data under one of those puts it on your line.
+// That is the peer's bug; `describeIntent`'s own KDoc says so and caps the width.
+```
+
+The usual answers are all on that line: an extra reads `blank` rather than `absent`, the field
+payload sits under the key the other flow's parser reads, or `package` reads `"signup-1"` because a
+request code was passed positionally to `createShareIntent`. An empty `flows=[]` means no parser
+here would accept the intent as anything at all.
+
+---
+
 ## Where to look next
 
 - `ClientIntegrationExampleTest` — sign-up, query, login and refusal as one runnable sequence,

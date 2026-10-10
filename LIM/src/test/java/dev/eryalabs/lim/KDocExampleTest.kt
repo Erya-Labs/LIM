@@ -8,7 +8,7 @@ import org.junit.Test
 import java.io.File
 
 /**
- * The guide has eleven runnable Kotlin blocks and the IDE popup had none. **Measured before this file
+ * The guide has thirteen runnable Kotlin blocks and the IDE popup had none. **Measured before this file
  * existed: `grep -c '^\s*\* *```'` over every one of the sixteen published sources returned 0 for
  * each of them.** An integrator spends the afternoon in an IDE, not in
  * `docs/INTEGRATION.md`, so every executable example this repository owns was unreachable from the
@@ -1666,7 +1666,7 @@ class KDocExampleTest {
 
         /**
          * The two floors, each set **at** the measured count rather than below it: 12 example
-         * blocks over 2 published sources, and 11 snippet-marked guide blocks.
+         * blocks over 2 published sources, and 13 snippet-marked guide blocks.
          *
          * At rather than below, because both counts are the subject here, and losing either is
          * worth a failure while adding to it is not. These are the *losing*-direction guards and
@@ -1675,7 +1675,7 @@ class KDocExampleTest {
          * count balanced and reddens only the floor below.
          */
         private const val MINIMUM_EXAMPLES = 12
-        private const val MINIMUM_GUIDE_BLOCKS = 11
+        private const val MINIMUM_GUIDE_BLOCKS = 13
 
         /**
          * A fence, with leading whitespace tolerated because the comment prefix has already been
