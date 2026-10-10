@@ -363,7 +363,7 @@ object Utils {
      * three-argument overload would be `(Context, Entry, String)`, byte-for-byte the JVM
      * signature the `targetPackage` overload already occupies, so the annotation is a platform
      * declaration clash and will not compile — verified both with and without the sibling
-     * annotated. Dropping either function to resolve it is stop rule 10, so the arity stays and
+     * annotated. Dropping either function to resolve it would remove published API, so the arity stays and
      * the hazard is documented.
      */
     fun createShareIntent(
@@ -1619,8 +1619,8 @@ object Utils {
 
     /**
      * Read a canonical pre-image back into its components — the inverse of the encoder that
-     * [rotationStatementBytes] and its siblings share, and the reason T14 length-prefixed the
-     * layout rather than delimiting it.
+     * [rotationStatementBytes] and its siblings share, and the reason that encoder
+     * length-prefixes the layout rather than delimiting it.
      *
      * Total and never throws, because every byte of [preImage] came off a relay: a length prefix
      * claiming more bytes than are present, a truncated fixed-width field, a kind tag that is not
@@ -2473,7 +2473,7 @@ object Utils {
      * diagnostic.
      *
      * Deliberately **not** [PUBLIC_KEY_PREVIEW_CHARS] and not derived from it, despite both being
-     * truncation widths. That one is T19's published rule for a shared identifier, owned by this
+     * truncation widths. That one is the published rule for a shared identifier, owned by this
      * repository on behalf of the vault, and a key preview has to stay long enough to be
      * distinguishable; this one is a private detail of one diagnostic line and may be tuned
      * without telling anyone. The two numbers differ today (80 against 64) and are free to drift.
