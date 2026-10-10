@@ -1,6 +1,7 @@
 package dev.eryalabs.lim
 
 import android.os.Parcelable
+import com.google.gson.annotations.SerializedName
 import kotlinx.parcelize.Parcelize
 
 /**
@@ -31,8 +32,8 @@ import kotlinx.parcelize.Parcelize
  */
 @Parcelize
 data class TypedField(
-    val value: String,
-    val type: String = FieldType.STRING,
+    @SerializedName("value") val value: String,
+    @SerializedName("type") val type: String = FieldType.STRING,
 ) : Parcelable {
 
     /**

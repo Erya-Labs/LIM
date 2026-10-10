@@ -2,6 +2,7 @@ package dev.eryalabs.lim
 
 import android.os.Parcel
 import android.os.Parcelable
+import com.google.gson.annotations.SerializedName
 import kotlinx.parcelize.Parceler
 import kotlinx.parcelize.Parcelize
 
@@ -57,9 +58,9 @@ import kotlinx.parcelize.Parcelize
  */
 @Parcelize
 data class Entry(
-    val id: String,
-    val fields: Map<String, TypedField>,
-    val publicKey: String,
+    @SerializedName("id") val id: String,
+    @SerializedName("fields") val fields: Map<String, TypedField>,
+    @SerializedName("publicKey") val publicKey: String,
 ) : Parcelable {
 
     /**

@@ -78,6 +78,40 @@ class IntentBuilderTest {
     }
 
     /**
+     * **The encoded payload, as an exact literal — the encode-side wire format.**
+     *
+     * The test above reads `extra_entry_json` and hands it straight back to
+     * `Gson().fromJson(json, Entry::class.java)`. That is a round trip through the same class and
+     * so it is **name-blind by construction**: rename a property and both halves move together
+     * with every assertion still green. `EntryCodecTest`'s literals pin the names on the decode
+     * side, against the library a unit test loads — not against the bytes a consumer's app puts on
+     * the wire. So until this assertion existed, `"id"`, `"fields"`, `"publicKey"`, `"value"` and
+     * `"type"` appeared in no encoder, no constant and no pinned encoded string anywhere in this
+     * repository, and this is the file STOP RULE 10 calls the wire format.
+     *
+     * Three things are pinned here that nothing else pins, and all three are protocol:
+     *
+     *  - **The five key spellings**, on the side that writes them.
+     *  - **Property declaration order.** Gson writes fields in declaration order, so the order of
+     *    `Entry`'s and `TypedField`'s properties is part of the encoded payload. Reordering them
+     *    is a source-level edit that looks like tidying and moves the bytes.
+     *  - **Field insertion order**, which `linkedMapOf` fixes and [Utils.encodeFields] promises.
+     *
+     * It is deliberately an equality against one string rather than a parse-and-check: a parse
+     * would re-admit the blindness the round-trip test has.
+     */
+    @Test
+    fun `the encoded share payload is exactly this JSON`() {
+        val json = Utils.createShareIntent(context, entry).getStringExtra("extra_entry_json")
+        println("encoded EXTRA_ENTRY_JSON: $json")
+        assertEquals(
+            """{"id":"profile-1","fields":{"name":{"value":"Ada","type":"String"},""" +
+                """"age":{"value":"36","type":"Integer"}},"publicKey":"PUBLIC-KEY-BASE64"}""",
+            json,
+        )
+    }
+
+    /**
      * Pins the reasoning in [Utils.createShareIntent]'s comment: CLEAR_TOP delivers to an
      * existing vault instance via onNewIntent, while NEW_TASK would put the vault in a
      * separate task and silently break `startActivityForResult` delivery. Adding NEW_TASK

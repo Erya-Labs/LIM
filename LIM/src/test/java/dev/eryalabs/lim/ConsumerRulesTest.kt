@@ -18,11 +18,20 @@ import java.lang.reflect.Modifier
  * `LIM/build/intermediates/merged_consumer_proguard_file/release/.../proguard.txt`, also 0 bytes.
  * The published AAR therefore told every minifying consumer's R8 to keep nothing in this library.
  *
- * **Why that is a wire-format defect and not a packaging nicety.** Gson reflects over the fields of
- * [Entry] (`id`, `fields`, `publicKey`) and [TypedField] (`value`, `type`), and those five JVM field
- * names **are** the five JSON keys the two apps exchange. A minifying consumer sends
- * `{"a":…,"b":…,"c":…}`; the vault reads `id` and `publicKey` as absent, [Utils.decodeEntry] answers
- * `null`, the sign-up is dropped, no consent dialog opens, and neither app logs a reason.
+ * **Why that is a wire-format defect and not a packaging nicety.** Gson serialises the fields of
+ * [Entry] (`id`, `fields`, `publicKey`) and [TypedField] (`value`, `type`), and those five keys
+ * **are** the payload the two apps exchange. A minifying consumer sends `{"a":…,"b":…,"c":…}`; the
+ * vault reads `id` and `publicKey` as absent, [Utils.decodeEntry] answers `null`, the sign-up is
+ * dropped, no consent dialog opens, and neither app logs a reason.
+ *
+ * **What names those keys, and why these rules survived it.** When this file was written the keys
+ * *were* the JVM field names, with nothing between them. They are now named by `@SerializedName`,
+ * one per property, each spelling the field's own name — `WireKeyAnnotationTest` is the file that
+ * holds that true and explains the decoupling. The keep rules are still required, and for a reason
+ * the annotation cannot cover: an annotation only helps if it *survives* a consumer's R8
+ * (`-keepattributes *Annotation*`, which stopped being forward-looking when those five arrived),
+ * and a field R8 *removed* has no key at all however it is annotated — which is why rule 3 below
+ * refuses `-keepclassmembernames` as insufficient.
  *
  * **What is measured here and what is reasoning, labelled rather than left to a reader.** No gate in
  * this repository runs R8 over these classes: `isMinifyEnabled = false` in `LIM/build.gradle.kts`,
@@ -30,8 +39,8 @@ import java.lang.reflect.Modifier
  * these fields" is **configuration reasoning, not a measurement**, and the rules file says so in its
  * own header too. What *is* measured is the half that can be — rule 3's first assertion compares
  * `Entry::class.java.declaredFields` against the keys `Gson().toJson` actually emits, so the claim
- * "the wire keys are the JVM field names" is reflection rather than belief, and a `@SerializedName`
- * or a field-naming policy arriving between them reddens it.
+ * "every field these rules keep is a field on the wire, under its own name" is reflection rather
+ * than belief. A `@SerializedName` renaming a key, or a field-naming policy arriving, reddens it.
  *
  * **Eight rules.**
  *
@@ -459,8 +468,11 @@ class ConsumerRulesTest {
     /**
      * (3) The fields Gson reflects over, from reflection, each covered by a sufficient form.
      *
-     * The first assertion is the **measurement** the rest of this file rests on: the JSON keys are
-     * the JVM field names, with no `@SerializedName` and no naming policy between them. The second
+     * The first assertion is the **measurement** the rest of this file rests on: the keys Gson
+     * emits are exactly the field names this file's directives keep. That was once true because
+     * nothing stood between the two; it is now true because each of the five `@SerializedName`
+     * annotations spells its own field's name, and this assertion is what would notice either of
+     * those arrangements breaking. The second
      * and third are the rule — and the third is why rule 3 is about semantics rather than spelling:
      * `-keepclassmembernames` forbids renaming but still permits *removal*, and a field only ever
      * written reflectively looks unused to R8, so a names-only spelling is reported as insufficient
@@ -475,10 +487,11 @@ class ConsumerRulesTest {
         )
         assertEquals(
             "the keys `Gson().toJson` emits for an Entry must be exactly its declared field " +
-                "names. This is the measurement the whole rules file rests on: if a " +
-                "`@SerializedName` or a field-naming policy ever stands between the two, the wire " +
-                "keys stop being the JVM field names and these keep rules stop being about the " +
-                "wire format",
+                "names. This is the measurement the whole rules file rests on: the directives " +
+                "below name fields, so a key that is no longer its field's name is a key no " +
+                "keep rule protects. Each of these is named by a `@SerializedName` spelling the " +
+                "field's own name; change one of those strings, or add a field-naming policy, " +
+                "and these keep rules stop being about the wire format",
             serialisedFieldsOf(ENTRY).map { it.name }.sorted(),
             Gson().toJsonTree(entry).asJsonObject.keySet().sorted(),
         )
@@ -490,7 +503,9 @@ class ConsumerRulesTest {
 
         assertEquals(
             "every field Gson reflects over must have a keep rule in $RULES_PATH naming it, or a " +
-                "consumer's R8 renames it and the JSON key moves with it. The field set here " +
+                "consumer's R8 *removes* it and there is no field left to carry a key at all — " +
+                "which is the live hazard now that `@SerializedName` pins each key to a string, " +
+                "and the reason the next assertion refuses a names-only form. The field set here " +
                 "comes from reflection, never from a list of names, so a field added to one of " +
                 "these classes is red on the run that compiles it",
             emptyList<String>(),
@@ -617,7 +632,8 @@ class ConsumerRulesTest {
                 "not serialise one — while rule 6's floor sits below the directive count. So " +
                 "deleting any of them would otherwise be green. `Signature` carries the " +
                 "`Map<String, TypedField>` type argument of the anonymous TypeToken; " +
-                "`*Annotation*` is what makes a future `@SerializedName` survive; the TypeToken " +
+                "`*Annotation*` is what makes the five `@SerializedName` keys survive; the " +
+                "TypeToken " +
                 "keep is what stops R8's full mode stripping that subclass and taking the " +
                 "signature with it; and the two `CREATOR` rules keep the field the platform looks " +
                 "up reflectively to unparcel a published `Parcelable`. Found: $spelled",
@@ -1054,8 +1070,11 @@ class ConsumerRulesTest {
     private companion object {
 
         /**
-         * The classes whose fields Gson reflects over, and therefore whose field names are the
-         * wire's JSON keys.
+         * The classes whose fields Gson serialises — the two that carry the wire's five JSON keys.
+         *
+         * Their field names coincide with those keys, but no longer *because* Gson reflects over
+         * them: five `@SerializedName` strings say so, and rule 3's first assertion is what holds
+         * the coincidence true. See [WireKeyAnnotationTest] for the annotation side of it.
          *
          * The *classes* are listed; their *fields* are never listed, and come from reflection. See
          * [serialisedFieldsOf] and rule 3.
