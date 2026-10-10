@@ -1,4 +1,5 @@
-# LIM — every JVM-visible member of `dev.eryalabs.lim`, as it stands at this commit.
+# LIM — every JVM-visible member of `dev.eryalabs.lim`, and every class above them, as it stands
+# at this commit.
 #
 # One line per public or protected constructor, method and field of every class compiled into the
 # package — synthetics, bridges, `componentN`, `copy`, `copy$default`, the Parcelize members and
@@ -6,17 +7,34 @@
 #
 #     <modifiers> <owner>.<name>(<erased parameter types>): <return type>
 #
+# and one line per public or protected class, rendered
+#
+#     <modifiers> class <fully.qualified.Name>: <superclass>, <interfaces, sorted>
+#
 # with dotted names rather than the slashed JVM spelling: the line denotes the descriptor, it is
-# not written as one. Sorted by `<owner>.<name>(<params>)`, which is also the key `ApiBaselineTest`
-# classifies a difference by — a member present on both sides with different modifiers or a
-# different return type is reported *changed*, not as one addition plus one removal.
+# not written as one. Sorted by the key `ApiBaselineTest` classifies a difference by —
+# `class <fqn>` for a class and `<owner>.<name>(<params>)` for a member, so the class lines come
+# first and a declaration present on both sides with different modifiers, a different return type
+# or a different supertype list is reported *changed*, not as one addition plus one removal.
 #
 # WHY IT EXISTS. An already-compiled consumer resolves a member by name, descriptor *and*
-# modifiers. `PublicApiAuditTest`'s SIGNATURES snapshot renders neither the modifiers nor the
-# compiler's own `$default` bridges, so two of the breaks that cost a consumer a NoSuchMethodError
-# move no line in it: an instance method becoming static, and a default argument being dropped —
-# the main descriptor survives that one, while `f$default`, the method every already-compiled
-# Kotlin caller of the shorter form actually invokes, quietly does not. This file is what notices.
+# modifiers, and resolves its own `instanceof`, its own interface calls and its own field access
+# against the class above it. `PublicApiAuditTest`'s SIGNATURES snapshot renders neither the
+# modifiers nor the compiler's own `$default` bridges, so two of the breaks that cost a consumer a
+# NoSuchMethodError move no line in it: an instance method becoming static, and a default argument
+# being dropped — the main descriptor survives that one, while `f$default`, the method every
+# already-compiled Kotlin caller of the shorter form actually invokes, quietly does not. It is
+# blind to the class above them as well, and so was this file until the class lines existed. Which
+# class-level breaks that actually covers is worth stating exactly, since the whole point of two
+# snapshots is which one catches what:
+#   - Invisible to everything else, and the reason these lines exist. A class going final or
+#     abstract, and a supertype disappearing when that supertype declares no member — `Revocation`
+#     dropping java.io.Serializable, `SignedStatement$Rotate` ceasing to extend `SignedStatement`.
+#     Inherited members are not declared members, so no member line moves, here or in SIGNATURES.
+#   - Already visible, but badly. `Entry` dropping `: Parcelable` also deletes `describeContents`,
+#     `writeToParcel` and the whole `Entry$Creator` block; `StatementVerdict` ceasing to be an enum
+#     also deletes `values`, `valueOf` and `getEntries`. Both files already redden on those, as a
+#     scatter of removals. The class line turns that into one *changed* line naming the cause.
 # The two snapshots are independent on purpose: a change that moves both is a real API change, a
 # change that moves only this one is precisely what SIGNATURES cannot see.
 #
@@ -39,20 +57,46 @@
 # WHAT IT DOES NOT RENDER, so that nobody reads more into a green run than it says.
 #   - Kotlin nullability, and generic type arguments: `Map<String, TypedField>` narrowing to
 #     `Map<String, String>` is a source break that changes no descriptor, and SIGNATURES already
-#     renders type arguments to catch exactly that.
-#   - Anything class-level. A published class going `internal`, becoming `final`, or dropping an
-#     interface from its supertype list moves no line here — its members keep their own access
-#     bits — and each of those is an IllegalAccessError or an AbstractMethodError for an
-#     already-compiled consumer. SIGNATURES cannot see them either; between the two files, class
-#     headers are unpinned.
-#   - Private and package-private members, which no consumer can link against; and anonymous
-#     classes, which no consumer can name.
+#     renders type arguments to catch exactly that. A class line's supertypes are erased for the
+#     same reason — `Parceler<Entry>` is recorded as `kotlinx.parcelize.Parceler`.
+#   - Kotlin *visibility*, which is the one class-level break still unpinned anywhere. An
+#     `internal class` compiles to a public JVM class with no mangling and no access bit, so a
+#     published type going `internal` — a source break for every consumer — is invisible to the
+#     reflection this file is built on, and SIGNATURES cannot see it either. Closing that needs
+#     `@Metadata` parsing or `kotlin-reflect`; adding a dependency is a human's decision, so the
+#     gap is recorded rather than filled. What *is* pinned above the members: the JVM modifiers,
+#     the `interface`/`enum`/`annotation` kind, and the erased supertype list.
+#   - Private and package-private members, which no consumer can link against; package-private
+#     classes, for the same reason, though this package has none and that filter excludes nothing
+#     today; and anonymous classes, which no consumer can name.
 #   - Any future *subpackage*: one package directory is enumerated, exactly as the audit does.
 #
 # TO UPDATE. Run `./gradlew :LIM:testDebugUnitTest --tests '*ApiBaselineTest'`. On a mismatch the
 # test writes a regenerated body to `LIM/build/api/lim.api.actual` and names it in the failure.
 # Replace the lines below with that body, keep this header, and read the verdict words before you
 # do: *added* is permitted by stop rule 10, *removed* and *changed* are what it forbids.
+public final class dev.eryalabs.lim.Entry: java.lang.Object, android.os.Parcelable
+public static final class dev.eryalabs.lim.Entry$Companion: java.lang.Object, kotlinx.parcelize.Parceler
+public static final class dev.eryalabs.lim.Entry$Creator: java.lang.Object, android.os.Parcelable$Creator
+public final class dev.eryalabs.lim.FieldType: java.lang.Object
+public final class dev.eryalabs.lim.QueryRequest: java.lang.Object
+public final class dev.eryalabs.lim.QueryResult: java.lang.Object
+public final class dev.eryalabs.lim.RecoveryAuthorization: java.lang.Object
+public final class dev.eryalabs.lim.RedactionKt: java.lang.Object
+public final class dev.eryalabs.lim.Revocation: java.lang.Object
+public final class dev.eryalabs.lim.RotationStatement: java.lang.Object
+public final class dev.eryalabs.lim.ShareRequest: java.lang.Object
+public final class dev.eryalabs.lim.ShareResult: java.lang.Object
+public final class dev.eryalabs.lim.SignChallengeRequest: java.lang.Object
+public final class dev.eryalabs.lim.SignChallengeResult: java.lang.Object
+public abstract class dev.eryalabs.lim.SignedStatement: java.lang.Object
+public static final class dev.eryalabs.lim.SignedStatement$Recover: dev.eryalabs.lim.SignedStatement
+public static final class dev.eryalabs.lim.SignedStatement$Revoke: dev.eryalabs.lim.SignedStatement
+public static final class dev.eryalabs.lim.SignedStatement$Rotate: dev.eryalabs.lim.SignedStatement
+public final enum class dev.eryalabs.lim.StatementVerdict: java.lang.Enum
+public final class dev.eryalabs.lim.TypedField: java.lang.Object, android.os.Parcelable
+public static final class dev.eryalabs.lim.TypedField$Creator: java.lang.Object, android.os.Parcelable$Creator
+public final class dev.eryalabs.lim.Utils: java.lang.Object
 public synthetic dev.eryalabs.lim.Entry$Companion.<init>(kotlin.jvm.internal.DefaultConstructorMarker): void
 public dev.eryalabs.lim.Entry$Companion.create(android.os.Parcel): dev.eryalabs.lim.Entry
 public synthetic bridge dev.eryalabs.lim.Entry$Companion.create(android.os.Parcel): java.lang.Object

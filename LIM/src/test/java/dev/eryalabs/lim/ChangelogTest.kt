@@ -1,6 +1,7 @@
 package dev.eryalabs.lim
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -135,14 +136,32 @@ class ChangelogTest {
 
     /**
      * One rendered `lim.api` line's owner: `dev.eryalabs.lim.Utils.shareEntry(…): boolean` →
-     * `Utils`.
+     * `Utils`, and `public final class dev.eryalabs.lim.Entry: android.os.Parcelable` → `Entry`.
      *
-     * Matched on `<owner>.<member>` followed by `(` or `:` — the two characters that can begin a
-     * parameter list or a type — rather than by stripping modifier words, so that a *parameter* of
-     * type `dev.eryalabs.lim.Entry` cannot be mistaken for a declaration: it is followed by `,` or
-     * `)`, and a return type by end of line.
+     * A **member** line is matched on `<owner>.<member>` followed by `(` or `:` — the two
+     * characters that can begin a parameter list or a type — rather than by stripping modifier
+     * words, so that a *parameter* of type `dev.eryalabs.lim.Entry` cannot be mistaken for a
+     * declaration: it is followed by `,` or `)`, and a return type by end of line.
+     *
+     * A **class-header** line is matched by its `class` keyword, and the care in [CLASS_OWNER] is
+     * worth stating precisely rather than dramatically. A header names its supertypes, and a
+     * sealed subclass's supertype is a type in this very package:
+     * `public static final class dev.eryalabs.lim.SignedStatement$Rotate:
+     * dev.eryalabs.lim.SignedStatement` mentions two of them. The obvious parser — scan the line
+     * for the package prefix — gets the *right* answer on that line anyway, because `find` takes
+     * the first match and the rendering always puts the declaration first. That is a property of
+     * how `ApiBaselineTest` renders, not of the parser, and it is not what a census should rest
+     * on: the keyword is the only token on the line that says which name is being declared.
+     *
+     * What the anchor is actually load-bearing for is that [CLASS_OWNER] **declines a member
+     * line**, since [owner] consults it first. The naive prefix regex claims every line in the
+     * file, which would quietly retire [OWNER] and with it the `<owner>.<member>` boundary that
+     * keeps a *parameter* of type `dev.eryalabs.lim.Entry` from reading as a declaration.
+     * `a class line's owner is its declared type and never one of its supertypes` asserts the
+     * decline directly, which is the assertion that separates the two regexes.
      */
-    private fun owner(line: String): String? = OWNER.find(line)?.groupValues?.get(1)
+    private fun owner(line: String): String? =
+        CLASS_OWNER.find(line)?.groupValues?.get(1) ?: OWNER.find(line)?.groupValues?.get(1)
 
     private fun baselineLines(): List<String> = baselineFile()
         .readLines()
@@ -157,6 +176,14 @@ class ChangelogTest {
      * the stale direction, which resolves `SignedStatement.Rotate` as a class. The file facade
      * `RedactionKt` is dropped because it is not a type anybody can name — its two members are
      * census entries in their own right, via [redactionMembers].
+     *
+     * Both line shapes in the baseline name an owner and both are read, because the alternative
+     * is not "ignore the class lines": the assertion below is that **every** non-comment line
+     * names one, which is what stops a shape this parser has never seen from being skipped
+     * silently while the census quietly shrinks. The two shapes agree on the type list — a class
+     * with no visible member still has a header, and a member's owner still has one — so reading
+     * both changes no census name, and that is checked by the whole file staying green rather
+     * than asserted here.
      */
     private fun publishedTypes(): List<String> {
         val unreadable = baselineLines().filter { owner(it) == null }
@@ -814,6 +841,62 @@ class ChangelogTest {
         }
     }
 
+    /**
+     * [owner] reads a declaration out of both `lim.api` shapes, and [CLASS_OWNER] reads one out
+     * of the class shape only.
+     *
+     * The last assertion is the one that discriminates, and it is worth being plain about why the
+     * others do not. Every fixture here is a verbatim `lim.api` line; the second mentions
+     * `dev.eryalabs.lim.SignedStatement` as a supertype and the third names `Parceler` from
+     * outside the package — and a naive `Regex("""\bdev\.eryalabs\.lim\.([A-Za-z0-9_$]+)""")`
+     * substituted for [CLASS_OWNER] would still answer all three correctly, because `find`
+     * returns the first match and the declaration is always rendered first. So those three pin
+     * the *answers* and would survive the wrong parser.
+     *
+     * `assertNull` on the member line is what does not. The naive regex matches a member line too
+     * — `owner` consults [CLASS_OWNER] first, so it would return from there and [OWNER], the
+     * regex carrying the `<owner>.<member>` boundary, would never run again for any line in the
+     * file. That is the mistake the keyword anchor exists to prevent, so that is the assertion
+     * that has to be able to fail.
+     */
+    @Test
+    fun `a class line's owner is its declared type and never one of its supertypes`() {
+        val member = "public final dev.eryalabs.lim.Utils.shareEntry(android.content.Context, " +
+            "dev.eryalabs.lim.Entry, java.lang.String): boolean"
+        val sealedSubclass = "public static final class dev.eryalabs.lim.SignedStatement\$Rotate: " +
+            "dev.eryalabs.lim.SignedStatement"
+        val foreignSupertype = "public static final class dev.eryalabs.lim.Entry\$Companion: " +
+            "java.lang.Object, kotlinx.parcelize.Parceler"
+
+        assertEquals("a member line still reads as its owner", "Utils", owner(member))
+        assertEquals("SignedStatement\$Rotate", owner(sealedSubclass))
+        assertEquals("Entry\$Companion", owner(foreignSupertype))
+
+        // The discriminating one: the class parser must decline a member line outright, leaving
+        // it to `OWNER`. A prefix scan would claim it and return the same string by luck.
+        assertNull(
+            "the class-header parser must not claim a member line, or the member parser and its " +
+                "`<owner>.<member>` boundary stop being consulted at all",
+            CLASS_OWNER.find(member),
+        )
+        assertTrue(
+            "…while still claiming a class line, or it is declining everything",
+            CLASS_OWNER.find(sealedSubclass) != null,
+        )
+
+        // And through the census filter, named specifically rather than as a `'$' in it` sweep
+        // that only restates `publishedTypes`'s own filter: the two types these headers declare
+        // must be absent while the top-level types they belong to are present, which is the
+        // property a changelog bullet per Parcelable creator would violate.
+        val types = publishedTypes()
+        assertTrue("SignedStatement is published in its own right", "SignedStatement" in types)
+        assertTrue("so is Entry", "Entry" in types)
+        assertTrue(
+            "but a nested owner is not a census entry of its own: $types",
+            "SignedStatement\$Rotate" !in types && "Entry\$Companion" !in types,
+        )
+    }
+
     /** A citation the surface does not answer to is reported, whichever shape it arrives in. */
     @Test
     fun `an unknown citation is reported rather than waved through`() {
@@ -874,9 +957,17 @@ class ChangelogTest {
         private const val MINIMUM_CENSUS = 65
         private const val MINIMUM_SPANS = 90
 
-        /** `<owner>.<member>` at the head of a `lim.api` line; see [owner]. */
+        /** `<owner>.<member>` at the head of a `lim.api` member line; see [owner]. */
         private val OWNER =
             Regex("""\bdev\.eryalabs\.lim\.([A-Za-z0-9_$]+)\.(<init>|[A-Za-z0-9_$]+)\s*[(:]""")
+
+        /**
+         * The declared type of a `lim.api` class-header line, by its `class` keyword; see [owner].
+         *
+         * Anchored on the keyword rather than on the package prefix, because a header's supertype
+         * list can name types in this package too and only the declaration follows `class`.
+         */
+        private val CLASS_OWNER = Regex("""\bclass\s+dev\.eryalabs\.lim\.([A-Za-z0-9_$]+)""")
 
         private val COORDINATES =
             Regex("""coordinates\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\)""")
