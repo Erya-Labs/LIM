@@ -28,13 +28,15 @@ import java.io.File
  *     nothing else is — found by that property name rather than by line number, so moving the
  *     block does not break this and deleting a stanza does;
  *  3. every string literal in any Kotlin test source that names a repository file outside a source
- *     set — a path literal ending `.md`, `.api`, `.toml` or `.kts` — is in [VERIFIED_DOCUMENTS], or
- *     excused by name in [EXCUSES] with a reason and the test that covers it instead.
+ *     set — a path literal ending `.md`, `.api`, `.toml`, `.kts` or `.pro` — is in
+ *     [VERIFIED_DOCUMENTS], or excused by name in [EXCUSES] with a reason and the test that
+ *     covers it instead.
  *
- * **Rule 3 is the one that earns the file.** Rules 1 and 2 pin today's seven documents; rule 3 is
- * what makes the *next* test that reads a new document fail loudly instead of quietly never
- * running. Which is also why [EXCUSES] is asserted empty: excusing a document is precisely the way
- * to pass this test while leaving its premise intact.
+ * **Rule 3 is the one that earns the file.** Rules 1 and 2 pin the documents
+ * [VERIFIED_DOCUMENTS] already lists; rule 3 is what makes the *next* test that reads a new
+ * document fail loudly instead of quietly never running. Which is also why [EXCUSES] is asserted
+ * empty: excusing a document is precisely the way to pass this test while leaving its premise
+ * intact.
  *
  * **The trap inside rule 3, and why the comparison resolves instead of matching strings.** Of the
  * path literals on disk, two are spelled *module*-relative while the declaration is
@@ -63,12 +65,16 @@ import java.io.File
  * trade-off that is a decision, not a cleanup, and is deliberately left to one.
  *
  * **Two more edges of rule 3, stated so a green run is not read as more than it says.** It matches
- * a bare quoted path with one of four extensions, so a test that opened `LICENSE`, `jitpack.yml`,
- * `gradle.properties` or `LIM/proguard-rules.pro`, or that built its path by concatenation, would
- * be invisible to it and would re-create exactly the failure this file exists to stop. No test
- * does today — that was checked, not assumed — but the next one to do it gets no warning from
- * here. And the scan reads comments as well as code, so a path named in prose *with real quotes
- * around it* is reported like any other; the remedy is to reword the comment, never to excuse it.
+ * a bare quoted path with one of five extensions, so a test that opened `LICENSE`, `jitpack.yml`
+ * or `gradle.properties`, or that built its path by concatenation, would be invisible to it and
+ * would re-create exactly the failure this file exists to stop. (`LIM/proguard-rules.pro` was in
+ * that list until `ConsumerRulesTest` arrived and `pro` joined [PATH_LITERAL]; a `.pro` file a test
+ * opens is now in scope like any other document, which is what rule 3 is for.) No test reads an
+ * out-of-scope path today — that was checked, not assumed — but the next one to do it gets no
+ * warning from here. And the scan reads comments as well as code, so a path named in prose *with
+ * real quotes around it* is reported like any other; the remedy is to reword the comment, never to
+ * excuse it. That happened on the very commit that added `pro`: `ConsumerRulesTest`'s header
+ * quoted its own rules file in a sentence, rule 3 reported it, and the sentence was reworded.
  *
  * (A Kotlin KDoc nests its block comments, so writing a source directory as a `/`-`*` glob here
  * would open one. That is how this file first failed to compile.)
@@ -164,9 +170,10 @@ class BuildInputsTest {
     @Test
     fun `every verified document exists on disk`() {
         assertTrue(
-            "VERIFIED_DOCUMENTS must list at least the ${MINIMUM_DOCUMENTS} documents measured " +
-                "when this file was written; a list that shrank to nothing would make rules 2 " +
-                "and 3 pass over it. Found: $VERIFIED_DOCUMENTS",
+            "VERIFIED_DOCUMENTS must list at least the ${MINIMUM_DOCUMENTS} documents the suite " +
+                "is known to read; a list that shrank to nothing would make rules 2 and 3 pass " +
+                "over it. The floor is kept equal to the list's size, so adding a document means " +
+                "raising it by hand. Found: $VERIFIED_DOCUMENTS",
             VERIFIED_DOCUMENTS.size >= MINIMUM_DOCUMENTS,
         )
         assertEquals(
@@ -213,8 +220,8 @@ class BuildInputsTest {
             "the base every declared path is resolved against must be pinned too, and exactly: " +
                 "`${REPOSITORY_ROOT_LINE.trim()}`. Appending `.dir(\"docs\")` to it leaves every " +
                 "stanza agreeing with itself and every rule here green while Gradle fingerprints " +
-                "seven files that do not exist — the one limit of this rule that would otherwise " +
-                "fail *green* rather than red, which is the direction this whole file exists to " +
+                "a whole set of files that do not exist — the one limit of this rule that would " +
+                "otherwise fail *green* rather than red, which is the direction this file exists to " +
                 "refuse. Matched as a whole line, so extending the expression is a mismatch",
             1,
             repositoryBaseLinesIn(text),
@@ -425,8 +432,8 @@ class BuildInputsTest {
 
         // The two above both leave no `tasks.withType<Test>()` in the text at all, so a rule 2
         // that merely searched for the selector and then scanned the whole file would pass them.
-        // This one does not: the selector survives, its block is closed empty, and all seven
-        // stanzas now sit in a block that configures something else entirely — which is what the
+        // This one does not: the selector survives, its block is closed empty, and every
+        // stanza now sits in a block that configures something else entirely — which is what the
         // refactor this rule guards against actually looks like.
         val reHomedPastTheBlock = text.replace(
             "$TEST_TASK_SELECTOR.configureEach {",
@@ -499,7 +506,7 @@ class BuildInputsTest {
         )
 
         // The base, which is the one mutation of this rule that would otherwise fail green:
-        // every stanza still agrees with itself, and all seven paths resolve against a directory
+        // every stanza still agrees with itself, and every path resolves against a directory
         // that does not exist.
         val reBased = text.replace(REPOSITORY_ROOT_LINE, "$REPOSITORY_ROOT_LINE.dir(\"docs\")")
         assertTrue("the re-basing mutation must have applied", reBased != text)
@@ -721,7 +728,7 @@ class BuildInputsTest {
      * Only the ones **inside a [TEST_TASK_SELECTOR] block**, which is the part that makes rule 2 a
      * statement about Gradle rather than about a string. A property name is a label; what closes
      * the UP-TO-DATE hole is the label being attached to the task that reads the document. Moving
-     * these seven stanzas into `tasks.register("docs")`, or changing the selector's type argument,
+     * these stanzas into `tasks.register("docs")`, or changing the selector's type argument,
      * is a plausible refactor that reopens the hole completely while leaving every literal in the
      * file untouched — so a search of the whole text would stay green through it.
      *
@@ -754,8 +761,8 @@ class BuildInputsTest {
      *
      * A whole line rather than a substring, which is the whole point: `inputs.files(...)` and
      * `withPropertyName(...)` pin the *path*, and nothing pins what the path is resolved
-     * **against**. Extend the base to `…projectDirectory.dir("docs")` and all seven stanzas still
-     * agree with themselves, so every other rule here stays green while Gradle fingerprints seven
+     * **against**. Extend the base to `…projectDirectory.dir("docs")` and every stanza still
+     * agrees with itself, so every other rule here stays green while Gradle fingerprints a set of
      * files that do not exist. Substring matching would wave that through; line matching does not.
      */
     private fun repositoryBaseLinesIn(buildFile: String): Int =
@@ -861,6 +868,7 @@ class BuildInputsTest {
             "gradle/libs.versions.toml",
             "settings.gradle.kts",
             "LIM/build.gradle.kts",
+            "LIM/consumer-rules.pro",
         )
 
         /** The excuse map, and it is empty. See the test that says so. */
@@ -909,9 +917,14 @@ class BuildInputsTest {
          * What rule 3 is looking for is the literal a test *opens*, which is a path and only a
          * path. The first character must be a name character so that a bare extension is not a
          * path, and `.kt` is absent from the alternatives because a Kotlin source is compiled.
+         *
+         * `pro` is in the list because `ConsumerRulesTest` reads `LIM/consumer-rules.pro`, the rule
+         * set this library ships into every consumer's R8 run. It was added with that test rather
+         * than after it, and the difference was measured: with the extension absent, the whole of
+         * this file was green over a new test whose document was declared nowhere at all.
          */
         private val PATH_LITERAL =
-            Regex("\"([A-Za-z0-9_][A-Za-z0-9_./-]*\\.(?:md|api|toml|kts))\"")
+            Regex("\"([A-Za-z0-9_][A-Za-z0-9_./-]*\\.(?:md|api|toml|kts|pro))\"")
 
         /**
          * One input stanza: the path `inputs.files(...)` is given, then the path its
@@ -934,13 +947,20 @@ class BuildInputsTest {
         private val BLOCK_COMMENT = Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL)
 
         /**
-         * Floors, each set below the value measured when this file was written (7 documents, 24
-         * in-scope path literals over 4 test sources) so that ordinary additions do not have to
-         * move them.
-         * They exist against a different failure: a regex or a locator that found nothing would
-         * make the assertions they guard pass over an empty list.
+         * Floors against a different failure than the rules above: a regex or a locator that found
+         * nothing would make the assertions they guard pass over an empty list.
+         *
+         * [MINIMUM_PATH_LITERALS] sits below the value measured when this file was written (24
+         * in-scope path literals over 4 test sources), so ordinary additions do not have to move it.
+         *
+         * [MINIMUM_DOCUMENTS] does **not**, and the difference is deliberate. It is equal to
+         * [VERIFIED_DOCUMENTS]`.size`, so every document added to that list has to raise it by hand
+         * — which is the point: the list is the one place where "the suite reads this file" is
+         * written down, and a floor that trailed behind it would let the list shrink back to the
+         * count it was last set at while rule 1 stayed green. It was 7 until
+         * `LIM/consumer-rules.pro` became the eighth.
          */
-        private const val MINIMUM_DOCUMENTS = 7
+        private const val MINIMUM_DOCUMENTS = 8
         private const val MINIMUM_PATH_LITERALS = 16
 
         /** The on-disk measurement, shared across this class's test instances. See [onDisk]. */

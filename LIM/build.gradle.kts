@@ -123,6 +123,9 @@ tasks.withType<Test>().configureEach {
     inputs.files(repository.file("LIM/build.gradle.kts"))
         .withPathSensitivity(PathSensitivity.RELATIVE)
         .withPropertyName("verifiedDocument:LIM/build.gradle.kts")
+    inputs.files(repository.file("LIM/consumer-rules.pro"))
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+        .withPropertyName("verifiedDocument:LIM/consumer-rules.pro")
 }
 
 // ---------------------------------------------------------------------------------------

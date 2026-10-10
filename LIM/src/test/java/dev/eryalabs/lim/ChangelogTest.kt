@@ -48,13 +48,21 @@ import java.lang.reflect.Modifier
  * No Robolectric: nothing here constructs an Android object, so the whole file is reflection over
  * names plus four text files.
  *
- * **One thing to know before trusting a green run after editing only the changelog.**
- * `CHANGELOG.md` is not a declared input of `:LIM:testDebugUnitTest`, so a run whose *only* change
- * is to this document comes back `UP-TO-DATE` without executing anything — this test, a changelog
- * edited to say something false, and a successful build all at once. The same is true of
- * `LIM/api/lim.api` for `ApiBaselineTest` and of `docs/INTEGRATION.md` for `GuideSnippetTest`;
- * declaring those as task inputs is a build-file change nobody has made. Until somebody does,
- * verify a documentation-only edit with `--rerun`.
+ * **A green run after editing only the changelog can now be trusted, and that is a change.**
+ * `CHANGELOG.md` *is* a declared input of `:LIM:testDebugUnitTest` — `LIM/build.gradle.kts`
+ * declares it, along with `LIM/api/lim.api` for `ApiBaselineTest` and `docs/INTEGRATION.md` for
+ * `GuideSnippetTest`, and `BuildInputsTest` holds that declaration honest in both directions. So a
+ * commit whose only change is to this document re-runs the suite, and the `--rerun` ritual this
+ * paragraph used to demand is no longer needed.
+ *
+ * It *was* needed, and the paragraph that said so was right when it was written: before the
+ * declaration existed, a run whose only change was to this document came back `UP-TO-DATE` without
+ * executing anything — this test, a changelog edited to say something false, and a successful build
+ * all at once. The residue of that hole is narrower and is still open: the suite also reads the
+ * *main sources* as text, and the test task fingerprints those as compiled output, so a comment-only
+ * edit to a main source can still leave the gate `UP-TO-DATE` with the rules that read it
+ * unexecuted. That one is a decision about the Gradle cache, logged for a human rather than closed
+ * here.
  */
 class ChangelogTest {
 
