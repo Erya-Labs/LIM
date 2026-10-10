@@ -15,14 +15,31 @@ import java.io.File
  * this long with no class comment at all, and how `shareEntry` ended up with a `@return`, a
  * `@throws` and not one `@param`.
  *
- * Two rules, scoped narrowly on purpose so that neither widens into style policing:
+ * Rules, scoped narrowly on purpose so that none widens into style policing:
  *
  *  1. **every parameter of every published function has a `@param`**, and every `@param` names a
  *     parameter the function actually has — the second half is what catches a rename;
  *  2. **every public property or constant of every published type is documented**, either by an
  *     `@property` on the type (the house style for a constructor property) or by its own doc
  *     comment (the house style for a `const val` or an enum constant) — and every `@property`
- *     names a property the type actually declares.
+ *     names a property the type actually declares;
+ *  3. **every published type, and every published zero-parameter function, has a doc comment.**
+ *     Rules 1 and 2 require neither: `@property` coverage is satisfied by tags with no prose
+ *     around them, and a function with nothing to pass satisfies rule 1 by asking nothing. The
+ *     type half had a real gap — `Entry`'s `companion object : Parceler<Entry>`, seven published
+ *     member lines in `LIM/api/lim.api`, carried no comment at all. The zero-parameter half has
+ *     no subject in the library, because all fourteen zero-argument functions it publishes are
+ *     `override`s and those are skipped; it is prophylactic, and control (n) is all of its
+ *     evidence;
+ *  4. **every `[link]` in every doc comment names something that still exists.** This is the one
+ *     kind of rot none of the others can see: renaming a function leaves every `[oldName]` in
+ *     every *other* comment untouched while every tag in its own comment stays correct, and the
+ *     link then renders as literal brackets in the IDE and in the javadoc jar. There are 674 of
+ *     them. **The resolver's vocabulary is deliberately wider than the published surface this
+ *     file otherwise audits** — see [Vocabulary], where the reason is that real KDoc here links
+ *     private things, internal things, overrides and a private function's parameter, and Dokka
+ *     resolves every one. What rule 4 does *not* claim is that Dokka resolves a link in its own
+ *     lexical scope; see the test.
  *
  * **There is deliberately no `@return` rule.** The nine `@return` tags in `Utils.kt` sit on the
  * functions whose return value is a *verdict* rather than the thing the summary already names, and
@@ -44,15 +61,25 @@ import java.io.File
  * the joined text. Overloads are keyed by name *and* rendered parameter list, because
  * `createShareIntent` is two functions and only one of them carried the `@param targetPackage`.
  *
- * **Three limits, recorded rather than left to be discovered**, since none is reachable from
- * anything this library publishes today and all three would be a silent hole if it grew one:
+ * **Limits, recorded rather than left to be discovered.** All but the last are unreachable from
+ * anything this library publishes today and every one of those would be a silent hole if it grew
+ * one; the last is reached by a real doc comment and is noted as such:
  *
  *  - [DECLARATION] recognises `class`, `object`, `interface`, `fun`, `val` and `var`, so a
- *    published `typealias` or a published **secondary** `constructor` is invisible to both rules.
+ *    published `typealias` or a published **secondary** `constructor` is invisible to every rule.
  *  - A member key renders the parameter *types* but not an extension receiver, so
  *    `fun String.foo(x: Int)` and `fun Int.foo(x: Int)` would collide at `foo(Int)` and one
  *    [Excuse] would cover both. Nothing in `LIM/src/main/` is an extension on a published surface.
  *  - Kotlin block comments nest and the masker does not; see [mask].
+ *  - Rule 4 reads `[name]` and `[label][target]` and nothing else: a link carrying a parameter
+ *    list, which KDoc also accepts, is outside [DOC_LINK]. [MINIMUM_LINKS] is what would notice
+ *    the spelling drifting that way wholesale.
+ *  - [Vocabulary.membersOf] is keyed by a type's *simple* name, so two nested types sharing one
+ *    would merge. The only such name here is `Companion`.
+ *  - A backtick code span that opens on one doc line and closes on the next leaks its contents to
+ *    the link extractor; see [linksIn]. **This one is reached**: `Utils.kt:357-358` holds such a
+ *    span. It carries no bracket, so nothing is miscounted today, and the consequence if one
+ *    appeared is a false report with a file and a line on it — the loud direction.
  *
  * Regex and a character walk over 16 files, so it runs in milliseconds: no Robolectric, and no
  * reflection beyond resolving an excuse's citation.
@@ -112,6 +139,47 @@ class KDocCoverageTest {
      */
     private class Excuse(val reason: String, val coveredBy: String)
 
+    /**
+     * One `[name]` written in a doc comment, with where it was written.
+     *
+     * [name] is the half a resolver must answer about, which for KDoc's link-with-label form
+     * `[label][target]` is the **target**: a resolver that took the label would report
+     * `[Activity][android.app.Activity]`'s `Activity` as dangling and would never look at the
+     * target, where a genuine break would be.
+     */
+    private class Link(val name: String, val file: String, val line: Int) {
+        val where: String = "[$name] ($file:$line)"
+    }
+
+    /**
+     * The names a `[link]` may resolve to — deliberately a **wider** set than [Report.members].
+     *
+     * That report is the *published* surface by construction: it drops `private` and `internal`
+     * declarations and skips `override`s, which is right for "is this documented" and wrong for
+     * "does this name still exist". Real KDoc in this library links private and internal things
+     * and Dokka resolves every one of them — `[presentStringExtra]` is a private function,
+     * `[redactedValue]` is `internal`, `[width]` is *a private function's parameter* and
+     * `[TypedField.toString]` is an override. A resolver over the published report alone would
+     * call all of those dangling, and the fix an implementer would then reach for is deleting a
+     * correct cross-reference.
+     *
+     * So this set is every declaration in every published source whatever its visibility,
+     * `override`s included, plus the parameters of all of them, plus every enum entry.
+     *
+     * @property types Simple names of every declared `class`/`object`/`interface`, for rule (i)
+     *                 and for the owner half of a qualified link.
+     * @property names Every declaration name and every parameter name, for rules (ii) and (iii).
+     * @property membersOf What each type declares, keyed by the type's **simple** name, for rule
+     *                     (iv). Two nested types sharing a simple name would merge here; the only
+     *                     such name in this library is `Companion`, and the alternative — keying
+     *                     by path — would refuse `[Entry.fields]` for being written unqualified.
+     */
+    private class Vocabulary(
+        val types: Set<String>,
+        val names: Set<String>,
+        val membersOf: Map<String, Set<String>>,
+    )
+
     /** Every complaint the sources produce, so the real tests and the controls share one loop. */
     private class Report(
         val members: List<Member>,
@@ -119,6 +187,12 @@ class KDocCoverageTest {
         val staleParameterTags: List<String>,
         val undocumentedProperties: List<String>,
         val stalePropertyTags: List<String>,
+        val undocumentedTypes: List<String>,
+        val undocumentedNullaryFunctions: List<String>,
+        val links: List<Link>,
+        val danglingLinks: List<String>,
+        val externalLinks: List<Link>,
+        val unusedExternals: List<String>,
         val danglingExcuses: List<String>,
         val inertExcuses: List<String>,
     ) {
@@ -126,6 +200,7 @@ class KDocCoverageTest {
         val functions: List<Member> = members.filter { it.kind == Kind.FUNCTION }
         val properties: List<Member> = members.filter { it.kind == Kind.PROPERTY }
         val parameterCount: Int = functions.sumOf { it.parameters.size }
+        val resolvedLinkCount: Int = links.size - danglingLinks.size
     }
 
     // ── The one measurement every assertion below reads ───────────────────
@@ -138,12 +213,22 @@ class KDocCoverageTest {
      * `createShareIntent` overloads' *documentation* — only their signatures, which
      * `PublicApiAuditTest` already pins.
      */
-    private fun audit(sources: Map<String, String>, excuses: Map<String, Excuse>): Report {
-        val members = sources.entries.sortedBy { it.key }.flatMap { membersIn(it.key, it.value) }
+    private fun audit(
+        sources: Map<String, String>,
+        excuses: Map<String, Excuse>,
+        externals: Map<String, String> = EXTERNAL,
+    ): Report {
+        // Masked once per source, because three readers want it: the member scan, the
+        // declared-property scan the stale `@property` rule needs, and the link extractor.
+        val ordered = sources.entries.sortedBy { it.key }
+            .map { Triple(it.key, it.value, mask(it.value)) }
+        val scans = ordered.map { (file, text, masked) -> scanIn(file, text, masked) }
+        val members = scans.flatMap { it.members }
+        val vocabulary = vocabularyOf(scans)
 
         val declared = mutableMapOf<String, MutableSet<String>>()
-        sources.entries.sortedBy { it.key }.forEach { (_, text) ->
-            declaredPropertyNamesIn(text).forEach { (path, names) ->
+        ordered.forEach { (_, _, masked) ->
+            declaredPropertyNamesIn(masked).forEach { (path, names) ->
                 declared.getOrPut(path) { mutableSetOf() } += names
             }
         }
@@ -152,6 +237,8 @@ class KDocCoverageTest {
         val staleParameterTags = mutableListOf<String>()
         val undocumentedProperties = mutableListOf<String>()
         val stalePropertyTags = mutableListOf<String>()
+        val undocumentedTypes = mutableListOf<String>()
+        val undocumentedNullaryFunctions = mutableListOf<String>()
         val excusedKeys = mutableSetOf<String>()
 
         for (member in members) {
@@ -172,6 +259,18 @@ class KDocCoverageTest {
                         staleParameterTags += "${member.where} — @param `$it` names no parameter " +
                             "of it; its parameters are " +
                             (if (names.isEmpty()) "none" else names.joinToString(", "))
+                    }
+                    // The `@param` rule above asks nothing of a function that takes nothing, so
+                    // this is the half that keeps a zero-parameter member from being undocumented
+                    // and compliant at once.
+                    if (member.parameters.isEmpty() && member.doc == null) {
+                        if (member.key in excuses) {
+                            excusedKeys += member.key
+                        } else {
+                            undocumentedNullaryFunctions += "${member.where} — a published " +
+                                "function taking no parameters and carrying no doc comment, so " +
+                                "the @param rule has nothing to ask of it"
+                        }
                     }
                 }
 
@@ -196,7 +295,35 @@ class KDocCoverageTest {
                             "it declares; it declares " +
                             (if (names.isEmpty()) "none" else names.sorted().joinToString(", "))
                     }
+                    // `@property` coverage is satisfied by tags with no surrounding prose, and
+                    // nothing else asked whether a published type says what it is for.
+                    if (member.doc == null) {
+                        if (member.key in excuses) {
+                            excusedKeys += member.key
+                        } else {
+                            undocumentedTypes += "${member.where} — a published type with no doc " +
+                                "comment of any kind, so an IDE shows an integrator its name and " +
+                                "nothing else"
+                        }
+                    }
                 }
+            }
+        }
+
+        val links = scans.flatMap { it.links }
+        val danglingLinks = mutableListOf<String>()
+        val externalLinks = mutableListOf<Link>()
+        val usedExternals = mutableSetOf<String>()
+        for (link in links) {
+            if (resolvesInternally(link.name, vocabulary)) continue
+            val external = externalKeyFor(link.name, externals)
+            if (external != null) {
+                usedExternals += external
+                externalLinks += link
+            } else {
+                danglingLinks += "${link.where} — names nothing this library declares, at any " +
+                    "visibility, and sits on no EXTERNAL allow-list. An IDE and the javadoc jar " +
+                    "both render it as literal brackets"
             }
         }
 
@@ -207,9 +334,91 @@ class KDocCoverageTest {
             staleParameterTags = staleParameterTags.sorted(),
             undocumentedProperties = undocumentedProperties.sorted(),
             stalePropertyTags = stalePropertyTags.sorted(),
+            undocumentedTypes = undocumentedTypes.sorted(),
+            undocumentedNullaryFunctions = undocumentedNullaryFunctions.sorted(),
+            links = links,
+            danglingLinks = danglingLinks.sorted(),
+            externalLinks = externalLinks,
+            unusedExternals = externals.keys.filterNot { it in usedExternals }.sorted(),
             danglingExcuses = excuses.keys.filterNot { it in keys }.sorted(),
             inertExcuses = excuses.keys.filter { it in keys && it !in excusedKeys }.sorted(),
         )
+    }
+
+    /**
+     * The wider name set, merged across every source. See [Vocabulary] for why it is wider.
+     *
+     * `<anonymous>` scopes are skipped, which is what keeps a function's local `val` out of the
+     * vocabulary: Dokka cannot resolve a link to a local declaration either, so accepting one
+     * would be the loose direction — a `[verifiedKey]` written in prose would resolve against a
+     * local in some unrelated function body and the rename rot would go unreported.
+     */
+    private fun vocabularyOf(scans: List<SourceScan>): Vocabulary {
+        val types = mutableSetOf<String>()
+        val names = mutableSetOf<String>()
+        val membersOf = mutableMapOf<String, MutableSet<String>>()
+
+        fun own(owner: String, name: String) {
+            if (owner.isEmpty()) return
+            membersOf.getOrPut(owner.substringAfterLast('.')) { mutableSetOf() } += name
+        }
+
+        for (scan in scans) {
+            for (declaration in scan.declarations) {
+                if (declaration.name == ANONYMOUS) continue
+                names += declaration.name
+                own(declaration.owner, declaration.name)
+                declaration.parameters.forEach { parameter ->
+                    names += parameter.name
+                    // A type's parameter list is its primary constructor's, so those names are
+                    // members of it: `[Entry.fields]` is written that way.
+                    if (declaration.isType) own(declaration.path, parameter.name)
+                }
+                if (declaration.isType) types += declaration.name
+            }
+            for ((owner, name) in scan.enumEntries) {
+                names += name
+                own(owner, name)
+            }
+        }
+        return Vocabulary(types, names, membersOf)
+    }
+
+    /**
+     * Whether `[name]` names something this library still declares — rules (i) to (iv).
+     *
+     * A qualified `A.b` is split at the **last** dot and `A`'s own last segment is what must be a
+     * type, so `[SignedStatement.Rotate.signature]` asks the same question of `Rotate` that
+     * `[Entry.fields]` asks of `Entry`.
+     */
+    private fun resolvesInternally(name: String, vocabulary: Vocabulary): Boolean {
+        if ('.' !in name) return name in vocabulary.names
+        val owner = name.substringBeforeLast('.').substringAfterLast('.')
+        return owner in vocabulary.types &&
+            name.substringAfterLast('.') in vocabulary.membersOf[owner].orEmpty()
+    }
+
+    /**
+     * Which [EXTERNAL] entry accepts `[name]`, or `null` — rule (v), and the only rule that can
+     * say yes about a name this repository does not contain.
+     *
+     * An exact entry accepts the name itself **or any dotted owner of it**, because a member of an
+     * external type is external too: `Base64` is Android's and so `[Base64.DEFAULT]` is Android's
+     * constant, without `EXTERNAL` having to enumerate the platform's members. A prefix entry —
+     * one ending in `.` — accepts anything beneath it, which is what `[android.app.Activity]` and
+     * `[java.security.Signature]` are written as. The longest prefix wins so that a later, more
+     * specific entry can be the one a usage is attributed to.
+     */
+    private fun externalKeyFor(name: String, externals: Map<String, String>): String? {
+        var probe = name
+        while (true) {
+            if (probe in externals) return probe
+            if ('.' !in probe) break
+            probe = probe.substringBeforeLast('.')
+        }
+        return externals.keys
+            .filter { it.endsWith(".") && name.startsWith(it) }
+            .maxByOrNull { it.length }
     }
 
     /**
@@ -431,6 +640,129 @@ class KDocCoverageTest {
             "…and it must name `validateEntry`, which exists to say in advance why an entry will " +
                 "be refused — the thing an integrator most needs pointing at from here",
             "validateEntry" in doc,
+        )
+    }
+
+    // ── The two rules T33's log named as where this surface can regrow ────
+
+    /**
+     * Every published **type** carries a doc comment.
+     *
+     * The rules above require none: `@property` coverage is satisfied by tags with no prose
+     * around them, and a type with no properties at all is asked nothing by anything. Only
+     * `Entry`'s class comment was pinned, and that by name. This is the half with a *measured*
+     * gap rather than a prophylactic rule — `Entry`'s `companion object : Parceler<Entry>` is
+     * real published surface, seven member lines of it in `LIM/api/lim.api`, and it carried no
+     * comment at all.
+     */
+    @Test
+    fun `every published type has a doc comment`() {
+        assertEquals(
+            "a published type carries no documentation of any kind. `@property` tags satisfy the " +
+                "property rule without a word of prose around them, and a type with no " +
+                "properties is asked nothing by anything else — so this is the rule that keeps " +
+                "the next type from being published anonymous",
+            emptyList<String>(),
+            onDisk().undocumentedTypes,
+        )
+    }
+
+    /**
+     * Every published **zero-parameter** function carries a doc comment.
+     *
+     * **Prophylactic, and the task that added it says so rather than implying it closed a gap:**
+     * every zero-argument function in the published sources today is an `override` — fourteen
+     * `toString` and `hashCode` implementations across ten published types — and the scanner
+     * skips overrides, so this rule has no subject at all. (The one zero-argument function that
+     * is *not* an override, `readText` at `Utils.kt:1632`, is local to a function body, so it is
+     * not published either and the scan correctly never sees it.) What keeps the rule honest is
+     * its fixture in control (n): without one it would be an assertion that has never been shown
+     * to fail, which is control (b)'s and control (i)'s argument applied a third time.
+     *
+     * It exists because the `@param` rule is the only thing asking a function for documentation,
+     * and a function with nothing to pass satisfies it by asking nothing.
+     */
+    @Test
+    fun `every published zero-parameter function has a doc comment`() {
+        assertEquals(
+            "a published function takes no parameters and carries no doc comment, which the " +
+                "@param rule cannot notice: it asks a function about its parameters and this one " +
+                "has none",
+            emptyList<String>(),
+            onDisk().undocumentedNullaryFunctions,
+        )
+    }
+
+    // ── Cross-references ──────────────────────────────────────────────────
+
+    /**
+     * Every `[link]` in every published doc comment names something that still exists.
+     *
+     * **This is the one kind of doc rot nothing here could see.** `KDocCoverageTest`'s other rules
+     * answer "is every member documented"; `ChangelogTest` resolves every code span in one
+     * markdown file; a KDoc cross-reference was checked by nothing, and there are hundreds of
+     * them. A link naming something this library no longer has renders as literal brackets in the
+     * IDE and in the javadoc jar — and `@param`/`@property` coverage cannot catch it, because
+     * renaming a function leaves every `[oldName]` in every *other* comment untouched and every
+     * tag in its own comment still correct.
+     *
+     * **What this deliberately does not claim**, so it cannot be widened into a reimplementation
+     * of Dokka: that Dokka resolves the link *in that lexical scope*. A `[publicKey]` written in a
+     * function that has no such parameter resolves here, because some other declaration in the
+     * library has that name. The question answered is the rename rot, and this is the version of
+     * the rule whose first run does not demand an unbounded comment rewrite.
+     */
+    @Test
+    fun `every KDoc link resolves to a name this library still has`() {
+        assertEquals(
+            "a doc comment cross-references a name nothing in this library declares. Fix the " +
+                "link: a link naming something that left the library is the link's fault, not " +
+                "the code's",
+            emptyList<String>(),
+            onDisk().danglingLinks,
+        )
+        // Floor, measured over the surface actually scanned and set below it: an extractor that
+        // found nothing would report nothing dangling for ever, which is this file's standing
+        // vacuity trap.
+        assertTrue(
+            "the scan must find links for this to mean anything; found ${onDisk().links.size}",
+            onDisk().links.size >= MINIMUM_LINKS,
+        )
+        // And the published surface must be reached by the *internal* half of the resolver, or an
+        // over-broad EXTERNAL entry could carry the whole measurement.
+        assertTrue(
+            "most links must resolve internally; ${onDisk().externalLinks.size} of " +
+                "${onDisk().links.size} went to EXTERNAL",
+            onDisk().externalLinks.size * 4 < onDisk().links.size,
+        )
+        println(
+            "KDocCoverageTest: ${onDisk().links.size} KDoc links checked, " +
+                "${onDisk().resolvedLinkCount} resolved " +
+                "(${onDisk().externalLinks.size} of them external), " +
+                "${onDisk().danglingLinks.size} dangling",
+        )
+    }
+
+    /**
+     * [EXTERNAL] hygiene, in both directions, which is what keeps rule (v) from becoming the
+     * drawer a dangling link is filed in.
+     *
+     * The unused direction is the one that needs saying: an entry whose last usage went away is
+     * an allow-list line that will wave through whatever lands under that name next.
+     */
+    @Test
+    fun `every EXTERNAL entry is used, and carries a reason`() {
+        assertEquals(
+            "an EXTERNAL entry nothing links to. It was either never needed or the link that " +
+                "needed it has gone; either way it now stands ready to vouch for a name nobody " +
+                "has written yet",
+            emptyList<String>(),
+            onDisk().unusedExternals,
+        )
+        assertEquals(
+            "every EXTERNAL entry must say what it is and why this library may point at it",
+            emptyList<String>(),
+            EXTERNAL.filterValues { it.isBlank() }.keys.sorted(),
         )
     }
 
@@ -794,6 +1126,299 @@ class KDocCoverageTest {
     }
 
     /**
+     * (j) The link resolver reports absence **and** presence from one loop, which is control (a)'s
+     * argument applied to the new rule.
+     *
+     * `[kept]` names the fixture's one property and `[renamedAway]` names nothing, so neither a
+     * resolver that accepts everything nor one that accepts nothing can pass this.
+     */
+    @Test
+    fun `control - one resolving and one dangling link yields exactly one report`() {
+        val report = linkReport(LINK_FIXTURE_PAIR)
+        assertEquals("found ${report.danglingLinks}", 1, report.danglingLinks.size)
+        assertTrue(
+            "the complaint must name the link and where it is written: ${report.danglingLinks}",
+            "[renamedAway]" in report.danglingLinks.single() &&
+                "Fixture.kt:3" in report.danglingLinks.single(),
+        )
+        assertEquals(
+            "…and both links must have been extracted, or the one report is an accident",
+            listOf("kept", "renamedAway"),
+            report.links.map { it.name },
+        )
+    }
+
+    /**
+     * (k) A qualified link is two questions, and both halves must be asked.
+     *
+     * `[Fixture.kept]` has an owner this fixture declares and a member it declares; the shape
+     * beside it has the owner and not the member. The real instance is asserted too: the
+     * library's nine `[Utils.decodeEntry]` links resolve, which a resolver that gave up on the
+     * first dot would also manage — by reporting them, which is why the fixture carries the
+     * negative half. (The assertion is `>= 1` rather than that count, so adding or removing one
+     * of those links is not a reason for this control to fail.)
+     */
+    @Test
+    fun `control - a qualified link whose member is gone is reported`() {
+        val report = linkReport(LINK_FIXTURE_QUALIFIED)
+        assertEquals("found ${report.danglingLinks}", 1, report.danglingLinks.size)
+        assertTrue(
+            "the complaint must name the whole qualified link: ${report.danglingLinks}",
+            "[Fixture.goneAway]" in report.danglingLinks.single(),
+        )
+        assertEquals(
+            "the resolving one beside it must not be reported, or the rule means nothing",
+            emptyList<String>(),
+            report.danglingLinks.filter { "Fixture.kept" in it },
+        )
+        assertEquals(
+            "…and the real shape must resolve over the real sources",
+            emptyList<String>(),
+            onDisk().danglingLinks.filter { "Utils.decodeEntry" in it },
+        )
+        assertTrue(
+            "…having actually been found there, or that assertion is about nothing",
+            onDisk().links.count { it.name == "Utils.decodeEntry" } >= 1,
+        )
+    }
+
+    /**
+     * (l) KDoc's link-with-label form, in both directions — the pair is what pins the trap.
+     *
+     * `[label][target]` puts the name to resolve in the **second** bracket. A resolver that took
+     * the label would report `[Activity][android.app.Activity]`'s label as dangling and would
+     * never look at the target, where a genuine break would be. There are four real instances and
+     * all four are a label a resolver should ignore.
+     */
+    @Test
+    fun `control - the target of a labelled link is the half resolved`() {
+        val report = linkReport(LINK_FIXTURE_LABELLED)
+        assertEquals("found ${report.danglingLinks}", 1, report.danglingLinks.size)
+        assertTrue(
+            "the complaint must name the target, not the label: ${report.danglingLinks}",
+            "[noSuchTarget]" in report.danglingLinks.single(),
+        )
+        assertEquals(
+            "a nonsense *label* in front of a real target must not be reported — that is the " +
+                "half a label-reading resolver gets wrong",
+            emptyList<String>(),
+            report.danglingLinks.filter { "nonsenseLabel" in it },
+        )
+        assertEquals(
+            "…and only the two targets may be extracted at all",
+            listOf("kept", "noSuchTarget"),
+            report.links.map { it.name },
+        )
+    }
+
+    /** (m) [EXTERNAL] hygiene, both ways, over a fixture that needs exactly one entry. */
+    @Test
+    fun `control - external hygiene holds in both directions`() {
+        val reason = "a fixture external, named on purpose"
+
+        val unknown = linkReport(LINK_FIXTURE_EXTERNAL, emptyMap())
+        assertEquals(
+            "an external name on no allow-list must be reported: that is the direction which " +
+                "keeps rule (v) from being a hole",
+            2,
+            unknown.danglingLinks.size,
+        )
+
+        val allowed = linkReport(LINK_FIXTURE_EXTERNAL, mapOf("Alien" to reason))
+        assertEquals(
+            "…and an exact entry must accept the name and its members, or every platform " +
+                "constant would need enumerating: ${allowed.danglingLinks}",
+            emptyList<String>(),
+            allowed.danglingLinks,
+        )
+        assertEquals(
+            "…counted as external rather than quietly as internal",
+            2,
+            allowed.externalLinks.size,
+        )
+        assertEquals("…and the entry is used, so it is not reported", emptyList<String>(), allowed.unusedExternals)
+
+        val prefixed = linkReport(LINK_FIXTURE_EXTERNAL, mapOf("Alien." to reason))
+        assertEquals(
+            "a prefix entry accepts what is beneath it and not the bare name, so `[Alien]` is " +
+                "still reported: the two entry shapes are different claims",
+            1,
+            prefixed.danglingLinks.size,
+        )
+
+        val unused = linkReport(
+            LINK_FIXTURE_EXTERNAL,
+            mapOf("Alien" to reason, "NobodyLinksThis" to reason),
+        )
+        assertEquals(
+            "an entry nothing links to must be reported, or an allow-list line outlives its " +
+                "last usage and vouches for whatever lands under that name next",
+            listOf("NobodyLinksThis"),
+            unused.unusedExternals,
+        )
+    }
+
+    /**
+     * (n) The two rules T33's log named, each over a fixture, because one of them has no real
+     * subject at all.
+     *
+     * The zero-parameter rule is prophylactic — every zero-argument function the library publishes
+     * is an `override` and the scanner skips those — so this fixture is the only thing standing
+     * between it and an assertion that has never been shown to fail.
+     */
+    @Test
+    fun `control - an undocumented type and an undocumented nullary function are reported`() {
+        assertEquals(
+            "a published type with no doc comment must be reported, by key",
+            listOf("Undocumented"),
+            fixtureReport().undocumentedTypes.map { it.substringBefore(" (") },
+        )
+        assertEquals(
+            "…and a published zero-parameter function with none, likewise",
+            listOf("undocumentedNullary()"),
+            fixtureReport().undocumentedNullaryFunctions.map { it.substringBefore(" (") },
+        )
+        // A floor, not the non-reporting claim — that is the `assertEquals` above, which names
+        // the one offender exactly and so already refuses a rule that reports every type.
+        assertTrue(
+            "the scan must have found the fixture's types for this to mean anything: six " +
+                "documented and the one undocumented; found ${fixtureReport().types.size}",
+            fixtureReport().types.size >= 7,
+        )
+    }
+
+    /**
+     * (o) **The vocabulary split**, which is the control the whole resolver turns on.
+     *
+     * One fixture, one loop, both answers: a link naming a `private` function, that function's
+     * parameter, an `internal` type, an internal type's property, an `override` and a private
+     * enum's constant all resolve, while a link naming nothing at all is reported. A resolver
+     * scoped to [Report.members] — the *published* report, which drops private and internal
+     * declarations and skips overrides — fails this control and passes every other one in the
+     * file, and would have had an implementer deleting six correct cross-references.
+     */
+    @Test
+    fun `control - a link to a private or internal name resolves and a link to nothing does not`() {
+        val report = linkReport(LINK_FIXTURE_VISIBILITY)
+        assertEquals("found ${report.danglingLinks}", 1, report.danglingLinks.size)
+        assertTrue(
+            "the one complaint must be the name nothing declares: ${report.danglingLinks}",
+            "[nobodysName]" in report.danglingLinks.single(),
+        )
+        assertEquals(
+            "a private declaration, its parameter, an internal type, an internal type's " +
+                "property, an override and a private enum's constant must each resolve",
+            emptyList<String>(),
+            report.danglingLinks.filter { complaint ->
+                HIDDEN_FIXTURE_LINKS.any { "[$it]" in complaint }
+            },
+        )
+        assertEquals(
+            "…and every one of them must have been extracted, or this control is about nothing",
+            HIDDEN_FIXTURE_LINKS,
+            report.links.map { it.name }.filter { it in HIDDEN_FIXTURE_LINKS },
+        )
+        // And the premise: the published report genuinely cannot see any of them. Compared on the
+        // *last segment*, because a `Member` name is never qualified while `[HiddenFlow.OFF]` is —
+        // so matching the list verbatim would have let a leaked enum constant through as `OFF`.
+        val hiddenSimpleNames = HIDDEN_FIXTURE_LINKS.map { it.substringAfterLast('.') }
+        assertEquals(
+            "none of those six may appear in the published member set, or the two sets are not " +
+                "different and this control proves nothing",
+            emptyList<String>(),
+            report.members.map { it.name }.filter { it in hiddenSimpleNames },
+        )
+    }
+
+    /**
+     * (p) A bracketed subscript is not a link — in a fence, in a backtick span, and bare.
+     *
+     * **Prophylactic in both of the first two directions**, and the prose says so rather than
+     * implying a fix: there is no bracket occurrence inside any fence or code span in the
+     * published sources today. The hazard is concrete all the same. `KDocExampleTest` copies
+     * guide blocks verbatim into doc comments, and `docs/INTEGRATION.md:255` is
+     * `val account = accounts[verifiedKey]` — a subscript on a local `val`. The day that block is
+     * pulled into a doc comment, reporting it would offer two fixes and no good one: edit the
+     * example, which breaks the verbatim rule and `GuideSnippetTest`'s region equality, or excuse
+     * it, which is coverage theatre.
+     *
+     * The third and fourth fixtures are the *other* direction, because a skip that skipped
+     * everything would pass the first two for the wrong reason — and the fourth is the one a
+     * review probe earned. Pairing backticks left to right on a line with an odd count makes a
+     * stray backtick pair with the next span's opener and blanks the prose between them, so a
+     * genuinely dangling link went unreported and the whole suite stayed green. See
+     * [withoutCodeSpans].
+     */
+    @Test
+    fun `control - a bracketed subscript inside a fence or a code span is not a link`() {
+        assertEquals(
+            "a fenced example's subscript must be invisible to the extractor, not merely " +
+                "unreported: ${linkReport(LINK_FIXTURE_FENCED).links.map { it.name }}",
+            emptyList<String>(),
+            linkReport(LINK_FIXTURE_FENCED).links.map { it.name },
+        )
+        assertEquals(
+            "…and so must one inside a backtick span",
+            emptyList<String>(),
+            linkReport(LINK_FIXTURE_SPANNED).links.map { it.name },
+        )
+        val bare = linkReport(LINK_FIXTURE_UNFENCED)
+        assertEquals(
+            "…while the same text with no fence and no backticks around it is a link like any " +
+                "other, and is reported",
+            listOf("verifiedKey"),
+            bare.links.map { it.name },
+        )
+        assertEquals("found ${bare.danglingLinks}", 1, bare.danglingLinks.size)
+        assertTrue(
+            "…naming it: ${bare.danglingLinks}",
+            "[verifiedKey]" in bare.danglingLinks.single(),
+        )
+        // And the one that was a silent hole until a probe wrote it: a stray backtick before a
+        // real span must not swallow the link between them.
+        val stray = linkReport(LINK_FIXTURE_STRAY_BACKTICK)
+        assertEquals(
+            "a line whose backtick count is odd must be read whole, or an unpaired backtick " +
+                "blanks the prose up to the next span and takes a dangling link with it — " +
+                "silently, which for this file is the worst outcome available",
+            listOf("swallowed"),
+            stray.links.map { it.name },
+        )
+        assertEquals("found ${stray.danglingLinks}", 1, stray.danglingLinks.size)
+    }
+
+    /**
+     * (q) Markdown's own `[text](url)` form is not a KDoc link — trap (ii), and the one that was
+     * claimed as "pinned by a fixture" before it was.
+     *
+     * There are no `](` occurrences in the published sources, so this is prevention like the
+     * fence rule. A review round proved the skip was dead to the suite — removing the `(` half of
+     * the test in [linksIn] left all 28 tests green — which is the same vacuity this file refuses
+     * everywhere else, so the fixture carries both directions: a markdown link whose text would
+     * resolve to nothing is skipped, and the same bracket without a `(` after it is reported.
+     */
+    @Test
+    fun `control - a markdown text and url link is not a KDoc link`() {
+        assertEquals(
+            "a `[text](url)` form must be invisible to the extractor: it is markdown's link " +
+                "syntax, and its text is prose rather than a name to resolve",
+            emptyList<String>(),
+            linkReport(LINK_FIXTURE_MARKDOWN).links.map { it.name },
+        )
+        val bare = linkReport(LINK_FIXTURE_MARKDOWN_WITHOUT_URL)
+        assertEquals(
+            "…while the same bracket with no `(` after it is a KDoc link like any other",
+            listOf("guide"),
+            bare.links.map { it.name },
+        )
+        assertEquals("found ${bare.danglingLinks}", 1, bare.danglingLinks.size)
+        assertTrue(
+            "…naming it: ${bare.danglingLinks}",
+            "[guide]" in bare.danglingLinks.single(),
+        )
+    }
+
+    /**
      * The scan is only as trustworthy as its brace bookkeeping: a file whose braces it mis-counted
      * would put members in the wrong scope, and the scope is what decides whether a member is
      * published at all.
@@ -903,7 +1528,12 @@ class KDocCoverageTest {
 
     /**
      * How many scopes are still open at the end of [masked] — zero for a well-formed file, and the
-     * same bookkeeping [membersIn] makes every scope decision with.
+     * same bookkeeping [scanIn] makes every scope decision with.
+     *
+     * (This link said `membersIn` until the scan was renamed under it — rule 4's own rot, in rule
+     * 4's author's comment, found by a review round rather than by the rule. The resolver reads
+     * `LIM/src/main/` only, so nothing in this file's links is checked by anything; that is a
+     * deliberate scope and the reason it is written down here.)
      */
     private fun scopeDepthAtEndOf(masked: String): Int {
         var depth = 0
@@ -966,21 +1596,40 @@ class KDocCoverageTest {
     }
 
     /**
-     * Every published member of one source.
+     * What one source yields, on one walk: its published members, the wider vocabulary a `[link]`
+     * resolves against, and the links themselves.
+     *
+     * @property members The published surface, which is what the coverage rules ask about.
+     * @property declarations Every declaration in a *named* scope, whatever its visibility, with
+     *                       `override`s kept. See [Vocabulary] for why this is a different set.
+     * @property enumEntries Owner path to entry name — the one shape no [DECLARATION] match
+     *                       covers, and the one `[StatementVerdict.VALID]` needs.
+     * @property links Every `[name]` written in a doc comment of this source.
+     */
+    private class SourceScan(
+        val members: List<Member>,
+        val declarations: List<Declaration>,
+        val enumEntries: List<Pair<String, String>>,
+        val links: List<Link>,
+    )
+
+    /**
+     * Every published member of one source, plus the wider sets above.
      *
      * One character walk, which is what makes the scope question answerable at all: a declaration
      * is a *member* only when every brace it sits inside belongs to a published type. That keeps a
      * local `val` out of the property rule, a lambda's parameters out of the parameter rule, and
      * anything inside a private function out of both.
      */
-    private fun membersIn(file: String, source: String): List<Member> {
-        val masked = mask(source)
+    private fun scanIn(file: String, source: String, masked: Masked): SourceScan {
         val text = masked.text
         val lines = source.lines()
         val lineOf = lineIndex(text)
         val starts = DECLARATION.findAll(text).associateBy { it.range.first }
 
         val members = mutableListOf<Member>()
+        val declarations = mutableListOf<Declaration>()
+        val enumEntries = mutableListOf<Pair<String, String>>()
         val scopes = mutableListOf<Scope>()
         var pending: Declaration? = null
         var parens = 0
@@ -1002,6 +1651,9 @@ class KDocCoverageTest {
                     scopes.lastOrNull()?.path.orEmpty(),
                 )
                 pending = declaration
+                // The wider set, collected before the published filter below and deliberately
+                // without it: a link may name a private thing and Dokka will resolve it.
+                if (scopes.none { it.name == ANONYMOUS }) declarations += declaration
                 val inPublishedType = scopes.all { it.isPublishedType }
                 if (inPublishedType && declaration.published && !declaration.isOverride) {
                     val ownDoc = docFor(declaration.line)
@@ -1057,8 +1709,8 @@ class KDocCoverageTest {
                 }
                 '}' -> if (parens == 0 && scopes.isNotEmpty()) {
                     val scope = scopes.removeAt(scopes.size - 1)
-                    if (scope.isEnum && scope.isPublishedType) {
-                        members += enumEntriesIn(
+                    if (scope.isEnum) {
+                        val entries = enumEntriesIn(
                             file = file,
                             body = text.substring(scope.bodyStart, i),
                             bodyStart = scope.bodyStart,
@@ -1067,13 +1719,20 @@ class KDocCoverageTest {
                             ownerDoc = scope.doc,
                             docFor = ::docFor,
                         )
+                        enumEntries += entries.map { scope.path to it.name }
+                        if (scope.isPublishedType) members += entries
                     }
                     pending = null
                 }
             }
             i++
         }
-        return members
+        return SourceScan(
+            members = members,
+            declarations = declarations,
+            enumEntries = enumEntries,
+            links = linksIn(file, masked),
+        )
     }
 
     private fun declarationAt(
@@ -1316,6 +1975,112 @@ class KDocCoverageTest {
     }.toList()
 
     /**
+     * Every `[name]` in one source's doc comments, read off [Masked.docs] rather than by line
+     * prefix.
+     *
+     * **The scoping is the first parser rule and it is not cosmetic.** The arithmetic behind the
+     * total is derived in exactly one place, [MINIMUM_LINKS]'s KDoc, because this file's whole
+     * thesis is that a number transcribed twice is a number that will disagree with itself. The
+     * part that matters here is the split: of the bracket shapes on disk, most sit on `*`-prefixed lines, 7 are real code
+     * (`fields[key]`, `nonce[i]`), 7 are `//` comments Dokka never renders — and **7 are links on
+     * single-line `/** … */` comments, which Dokka renders like any other**. An extractor scoped
+     * to `*`-prefixed lines would silently skip that last bucket, two of whose targets are among
+     * the private-and-internal names this resolver exists for. Going through the masker's own doc
+     * spans picks them up and drops, correctly, the four links in `Redaction.kt`'s plain `/* */`
+     * file header, which is not KDoc and which Dokka does not render at all.
+     *
+     * **Three things in brackets that are not links**, each skipped here rather than excused
+     * later. **The first two are prevention rather than repair — neither has an instance in the
+     * published sources today**, which is why the extracted total equals the arithmetic with no
+     * deduction for either, and why each is pinned by a fixture in both directions rather than by
+     * a real occurrence: controls (p) and (q). The third has four real instances and is the only
+     * one of the three that changes the total:
+     *
+     *  - a **fenced code block**, and an **inline backtick span**. `KDocExampleTest` copies guide
+     *    blocks verbatim into doc comments, and `docs/INTEGRATION.md:255` is
+     *    `val account = accounts[verifiedKey]` — a subscript on a local `val`. That block has not
+     *    been pulled into a doc comment yet; when it is, reporting it would offer only two fixes:
+     *    edit the example, which breaks `GuideSnippetTest`'s region equality, or excuse it, which
+     *    is coverage theatre. The 7 real-code occurrences above are the same rule seen from the
+     *    other side, and they are what makes the hazard concrete rather than imagined.
+     *  - markdown's own **`[text](url)`** form; there are no `](` occurrences in the published
+     *    sources.
+     *  - the **label** half of KDoc's `[label][target]`; see [Link]. Four instances, all of them
+     *    a label a resolver should ignore.
+     *
+     * Backtick spans are paired within a line, and only when the line's count is even; see
+     * [withoutCodeSpans], which is where a review probe found the one silent hole this extractor
+     * had. A span that opens on one line and closes on the next leaks its contents here —
+     * Markdown mostly allows that, this does not read it, and the consequence is a false report
+     * carrying a file and a line rather than a silent miss.
+     */
+    private fun linksIn(file: String, masked: Masked): List<Link> {
+        val links = mutableListOf<Link>()
+        for ((endLine, doc) in masked.docs.entries.sortedBy { it.key }) {
+            val docLines = doc.lines()
+            val startLine = endLine - (docLines.size - 1)
+            var inFence = false
+            for ((offset, raw) in docLines.withIndex()) {
+                if (DOC_FENCE_LINE.containsMatchIn(raw)) {
+                    inFence = !inFence
+                    continue
+                }
+                if (inFence) continue
+                val prose = withoutCodeSpans(raw)
+                for (match in DOC_LINK.findAll(prose)) {
+                    val after = prose.getOrNull(match.range.last + 1)
+                    // `(` makes it markdown's link form; `[` makes it a label, whose target this
+                    // same loop reaches on its next iteration.
+                    if (after == '(' || after == '[') continue
+                    links += Link(match.groupValues[1], file, startLine + offset)
+                }
+            }
+        }
+        return links
+    }
+
+    /**
+     * One doc-comment line with its backtick spans blanked, pairs left to right.
+     *
+     * **A line whose backtick count is odd is left entirely alone**, and that is the only choice
+     * here that is not obvious. Pairing left to right on such a line is *wrong in the silent
+     * direction*: a stray backtick pairs with the next real span's opener, so the prose between
+     * them — including any `[link]` in it — is blanked and never checked. A review probe proved
+     * it with a real doc comment, where a genuinely dangling link went unreported and the whole
+     * suite stayed green. Blanking nothing instead can only produce a *false* report, with a file
+     * and a line on it, which is the direction a reader can act on.
+     *
+     * Which backtick is the unmatched one is not decidable from the line alone, so this does not
+     * try. **The odd-count branch is taken by the real sources on every run**, rather than being
+     * prophylactic: `Utils.kt:357-358` is a code span spread across two lines, so the first line
+     * carries one backtick and the second carries three, and those two are the whole of it. (A
+     * *fence* line never reaches here — [linksIn] toggles on it and skips the block's interior
+     * before calling this — so the 22 fence lines are not instances, which a review round
+     * established by instrumenting the branch and printing every line that took it.) Neither of
+     * the two holds a bracket today, so the extracted total is the same either way; the branch is
+     * live all the same, and that span is a standing instance of the cross-line limit the class
+     * KDoc records.
+     */
+    private fun withoutCodeSpans(line: String): String {
+        if (line.count { it == '`' } % 2 != 0) return line
+        val out = StringBuilder(line.length)
+        var i = 0
+        while (i < line.length) {
+            val close = if (line[i] == '`') line.indexOf('`', i + 1) else -1
+            if (close < 0) {
+                out.append(line[i])
+                i++
+            } else {
+                while (i <= close) {
+                    out.append(' ')
+                    i++
+                }
+            }
+        }
+        return out.toString()
+    }
+
+    /**
      * Every property name each type declares, whatever its visibility and whether or not it is an
      * `override`.
      *
@@ -1324,8 +2089,8 @@ class KDocCoverageTest {
      * which `SignedStatement` does, from the base class, for the `signature` its three cases
      * override — would read as a dead tag.
      */
-    private fun declaredPropertyNamesIn(source: String): Map<String, Set<String>> {
-        val text = mask(source).text
+    private fun declaredPropertyNamesIn(masked: Masked): Map<String, Set<String>> {
+        val text = masked.text
         val starts = DECLARATION.findAll(text).associateBy { it.range.first }
         val names = mutableMapOf<String, MutableSet<String>>()
         val scopes = mutableListOf<String>()
@@ -1449,7 +2214,18 @@ class KDocCoverageTest {
     // ── Fixtures ──────────────────────────────────────────────────────────
 
     private fun fixtureReport(excuses: Map<String, Excuse> = emptyMap()): Report =
-        audit(mapOf("Fixture.kt" to FIXTURE_SOURCE), excuses)
+        audit(mapOf("Fixture.kt" to FIXTURE_SOURCE), excuses, externals = emptyMap())
+
+    /**
+     * One link fixture, audited with no excuses and only the externals a control states.
+     *
+     * The link controls take a source each rather than sharing [FIXTURE_SOURCE]: every one of
+     * them claims an *exact* count, and a shared fixture carrying seven deliberate danglers would
+     * turn each of those claims into a substring filter — which is how the first draft of control
+     * (e) passed itself while asking nothing.
+     */
+    private fun linkReport(source: String, externals: Map<String, String> = emptyMap()): Report =
+        audit(mapOf("Fixture.kt" to source), emptyMap(), externals)
 
     private companion object {
         private const val SOURCE_ROOT = "src/main/java/dev/eryalabs/lim"
@@ -1477,21 +2253,80 @@ class KDocCoverageTest {
         private val EXCUSES = emptyMap<String, Excuse>()
 
         /**
+         * The names a `[link]` may resolve to that this repository does not contain — rule (v),
+         * and the only place where "resolves" is a claim about somebody else's code.
+         *
+         * Each entry carries its reason, and `EXTERNAL hygiene holds in both directions` fails on
+         * an entry nothing uses as well as on a name no entry covers. That is what keeps this map
+         * from becoming the place a dangling link goes to be forgotten: adding a line here is as
+         * visible as adding one to [EXCUSES], and removing a usage reddens the file.
+         *
+         * A key ending in `.` is a **package prefix** and accepts everything beneath it; any
+         * other key is an **exact name** and accepts that name and its members. See
+         * [externalKeyFor].
+         *
+         * The hygiene direction has already earned its keep: a first draft of this map carried
+         * `kotlin.`, `Activity`, `Gson`, `ByteArray` and `Map`, every one of them plausible and
+         * none of them linked by anything. The test below named all five.
+         */
+        private val EXTERNAL = mapOf(
+            "android." to "fully-qualified Android platform links: `android.app.Activity`, " +
+                "written out in five `@param` tags because `Utils` does not import the type, and " +
+                "`android.content.Intent` where the prose needs the whole name",
+            "java." to "fully-qualified JDK links, all of them in the signing and key-decoding " +
+                "KDoc — `java.security.Signature`, `java.security.KeyFactory`, `java.util.Locale`",
+            "Context" to "Android's, imported by `Utils` and the first parameter of every " +
+                "intent-building entry point",
+            "Intent" to "Android's, imported by `Utils`; the type every entry point returns",
+            "Parcelable" to "Android's, the supertype `Entry` and `TypedField` implement",
+            "Parcel" to "Android's, what `Entry`'s hand-written `Parceler` writes to and reads " +
+                "from; the argument whose untrusted contents its `create` defaults rather than " +
+                "throws on",
+            "Parceler" to "`kotlinx.parcelize.Parceler`, which `Entry.Companion` implements — the " +
+                "published surface whose doc comment this rule's sibling asked for",
+            "Base64" to "Android's `android.util.Base64`, which encodes every key and signature " +
+                "this library moves; `Base64.DEFAULT` is reached as a member of it",
+            "SecureRandom" to "`java.security.SecureRandom`, the injected randomness " +
+                "`generateNonce` and `createSignChallengeIntent` take",
+            "String" to "Kotlin's, named where a doc comment is about the type itself rather than " +
+                "a parameter that happens to be one",
+            "Int" to "Kotlin's, named where the protocol-version parser explains what does not " +
+                "fit in one",
+            "Long" to "Kotlin's; `Long.MAX_VALUE` is cited where a freshness window saturates",
+            "Char" to "Kotlin's; `Char.isISOControl` is cited by the describe-text sanitiser",
+            "NullPointerException" to "`java.lang`'s, named five times by the Java-interop " +
+                "warnings: a Kotlin non-null parameter compiles to a `checkNotNullParameter` " +
+                "intrinsic that Java callers can and do trip",
+        )
+
+
+        /**
          * Floors, each at or below a count this file *measured* and prints on every run — 16
-         * sources, 19 published types, 45 published functions with 93 parameters, and 82 published
-         * properties and constants when it was written. Set below the actuals so that *adding* a
-         * published member does not fail this file, while a scanner drifting towards the empty set
-         * does.
+         * sources, 19 published types, 45 published functions with 93 parameters, 82 published
+         * properties and constants, and **674 KDoc links** when it was written. Set below the
+         * actuals so that *adding* a published member does not fail this file, while a scanner
+         * drifting towards the empty set does.
          *
          * [MINIMUM_SOURCES] is the one set *at* the measured value rather than below it, on
          * purpose: a source file disappearing from the published package is worth a failure, while
          * adding one is not.
+         *
+         * [MINIMUM_LINKS] was measured the same way and is worth showing the arithmetic for,
+         * because a floor transcribed from a planning document is a floor nobody measured. `grep`
+         * for the bracket shape over the published sources returns 696 occurrences: 675 on
+         * `*`-prefixed lines, 7 on `//` lines Dokka never renders, 7 on single-line `/** … */`
+         * comments it renders like any other, and 7 that are real code (`fields[key]`,
+         * `nonce[i]`). Doc-span extraction takes the first and third buckets, drops the four
+         * links in `Redaction.kt`'s plain `/* */` file header, and resolves the *target* half of
+         * the four `[label][target]` pairs rather than both halves: 675 − 4 + 7 − 4 = **674**,
+         * which is what the run prints. 33 of them go to [EXTERNAL].
          */
         private const val MINIMUM_SOURCES = 16
         private const val MINIMUM_TYPES = 15
         private const val MINIMUM_FUNCTIONS = 38
         private const val MINIMUM_PARAMETERS = 85
         private const val MINIMUM_PROPERTIES = 70
+        private const val MINIMUM_LINKS = 620
 
         /**
          * A declaration at the start of a line, with its modifier run.
@@ -1577,6 +2412,27 @@ class KDocCoverageTest {
         private val PROSE_LINE = Regex("""[A-Za-z]{3}""")
 
         /**
+         * A KDoc cross-reference, in the one spelling this library uses: `[name]`, where the name
+         * may be dotted.
+         *
+         * Identical to the shape the measurement in [linksIn] counts, so the extracted total and
+         * the `grep` total are answers to the same question. A link carrying a parameter list —
+         * `[createShareIntent(Context, Entry)]`, which KDoc also accepts — is outside it, and
+         * there are none; the floor is what would notice a drift towards the empty set.
+         */
+        private val DOC_LINK = Regex("""\[([A-Za-z][A-Za-z0-9_.]*)]""")
+
+        /**
+         * A fenced-code line inside a doc comment — `KDocExampleTest:1747` verbatim, on purpose.
+         *
+         * That file *refuses* a fence line in a doc comment that carries no `*` prefix, as well
+         * as `~~~`, HTML `<pre>` and markdown's indented form. So this one pattern is enough to
+         * find every fence in this library's KDoc, and the two files agree about what a fence is
+         * by construction rather than by coincidence.
+         */
+        private val DOC_FENCE_LINE = Regex("""^\s*\*\s*```""")
+
+        /**
          * One fixture source carrying every shape the controls ask about, so each control runs the
          * same [audit] the real assertions run rather than a second implementation of it.
          *
@@ -1586,7 +2442,10 @@ class KDocCoverageTest {
          * `FixtureVerdict.BARE`, `FixtureVerdict.Mixed` and `Explicit.undeclared` are (e);
          * `hidden`, the overrides and `Subtype.inherited` are (f); `generic`, `genericGap`, `Box`,
          * `Explicit`, `onReceiver`, `receiverGap` and `plainReceiver` are (g); `comparisons` is
-         * (h); `Stale` is (i). Those last shapes are here because adversarial review probes found the scanner
+         * (h); `Stale` is (i); `Undocumented` and `undocumentedNullary` are (n), and the nullary
+         * one has no real subject in the library at all — every zero-argument function it
+         * publishes is an `override`, so this fixture is the whole of that rule's evidence.
+         * Those last shapes are here because adversarial review probes found the scanner
          * blind to every one of them — nothing in the library is generic, extends a receiver,
          * declares its constructor explicitly, defaults to a comparison or names an enum constant
          * in mixed case today, so without a fixture neither rule would ever have been asked about
@@ -1732,6 +2591,181 @@ class KDocCoverageTest {
 
                 Mixed,
             }
+
+            class Undocumented {
+
+                /** Documented, so the only gap is the type's own. */
+                val held: String = ""
+            }
+
+            fun undocumentedNullary(): Int = 0
+        """.trimIndent()
+
+        /**
+         * The six fixture names control (o) requires to resolve — a private function, its
+         * parameter, an `internal` type, an internal type's property, an `override` and a
+         * **private enum's constant**, which is the one shape no [DECLARATION] match covers and
+         * which no other fixture here exercises.
+         *
+         * Every one of them is a shape [Report.members] drops. **Three of the six have a real
+         * instance in the library and three do not**, which is worth stating exactly because the
+         * fixture is the only evidence for the other three: `[presentStringExtra]` is a private
+         * function, `[width]` is a private function's parameter and `[TypedField.toString]` is an
+         * override. An `internal` *type* and an internal type's property have no instance —
+         * `redactedValue` (`Redaction.kt:28`) is the library's only `internal` declaration and it
+         * is a function — and neither has a private enum's constant, `StatementVerdict` being the
+         * only enum here and published.
+         */
+        private val HIDDEN_FIXTURE_LINKS = listOf(
+            "hiddenHelper",
+            "hiddenOnly",
+            "Invisible",
+            "unpublished",
+            "toString",
+            "HiddenFlow.OFF",
+        )
+
+        /** (j) One resolving link and one dangling one, and nothing else. */
+        private val LINK_FIXTURE_PAIR = """
+            package dev.eryalabs.fixture
+
+            /** A fixture type linking [kept] and [renamedAway]. */
+            class Fixture(val kept: String)
+        """.trimIndent()
+
+        /** (k) A qualified link whose member exists, beside one whose member does not. */
+        private val LINK_FIXTURE_QUALIFIED = """
+            package dev.eryalabs.fixture
+
+            /** A fixture type linking [Fixture.kept] and [Fixture.goneAway]. */
+            class Fixture(val kept: String)
+        """.trimIndent()
+
+        /**
+         * (l) KDoc's `[label][target]` in both directions: a nonsense label in front of a real
+         * target, and a real label in front of a target that is gone.
+         */
+        private val LINK_FIXTURE_LABELLED = """
+            package dev.eryalabs.fixture
+
+            /** A fixture type linking [nonsenseLabel][kept] and [kept][noSuchTarget]. */
+            class Fixture(val kept: String)
+        """.trimIndent()
+
+        /** (m) An external name and a member of one, neither of which this fixture declares. */
+        private val LINK_FIXTURE_EXTERNAL = """
+            package dev.eryalabs.fixture
+
+            /** A fixture type linking [Alien] and [Alien.member]. */
+            class Fixture(val kept: String)
+        """.trimIndent()
+
+        /**
+         * (o) The vocabulary split: six links the *published* report cannot see, and one that
+         * names nothing at all.
+         */
+        private val LINK_FIXTURE_VISIBILITY = """
+            package dev.eryalabs.fixture
+
+            /**
+             * A fixture type linking [hiddenHelper], [hiddenOnly], [Invisible], [unpublished],
+             * [toString], [HiddenFlow.OFF] and [nobodysName].
+             *
+             * The first six are private, internal or an override, and Dokka resolves every one
+             * of them. The last names nothing.
+             */
+            class Fixture(val kept: String) {
+
+                /** A private function, whose own name and whose parameter a link may name. */
+                private fun hiddenHelper(hiddenOnly: String): Int = hiddenOnly.length
+
+                override fun toString(): String = "Fixture"
+            }
+
+            /**
+             * An internal type, which the published report also drops.
+             *
+             * @property unpublished Its one property.
+             */
+            internal class Invisible(val unpublished: String)
+
+            /**
+             * A private enum, whose constants no published report contains.
+             *
+             * Spelled one entry per line because that is what `ENUM_ENTRY` reads — it is anchored
+             * at a line start, so `{ ON, OFF }` on one line yields no entries at all. Every enum
+             * in the library is written this way; a review probe discovered the constraint by
+             * writing this fixture the short way first.
+             */
+            private enum class HiddenFlow {
+
+                ON,
+
+                OFF,
+            }
+        """.trimIndent()
+
+        /** (p) A guide example copied verbatim into a doc comment, fence and all. */
+        private val LINK_FIXTURE_FENCED = """
+            package dev.eryalabs.fixture
+
+            /**
+             * A fixture type whose example came out of the guide unaltered.
+             *
+             * ```kotlin
+             * val account = accounts[verifiedKey]
+             * ```
+             */
+            class Fenced(val kept: String)
+        """.trimIndent()
+
+        /** (p) The same subscript inside an inline backtick span. */
+        private val LINK_FIXTURE_SPANNED = """
+            package dev.eryalabs.fixture
+
+            /** A fixture type whose prose mentions `accounts[verifiedKey]` in passing. */
+            class Spanned(val kept: String)
+        """.trimIndent()
+
+        /** (p) The other direction: the same text as prose, where it *is* a link. */
+        private val LINK_FIXTURE_UNFENCED = """
+            package dev.eryalabs.fixture
+
+            /**
+             * A fixture type whose example lost its fence.
+             *
+             * val account = accounts[verifiedKey]
+             */
+            class Unfenced(val kept: String)
+        """.trimIndent()
+
+        /**
+         * (p) A stray backtick in front of a real code span, with a dangling link between them.
+         *
+         * Pairing left to right blanks from the stray to the span's opening backtick, which is
+         * exactly the text holding the link. Three backticks on the line, so the count is odd.
+         */
+        private val LINK_FIXTURE_STRAY_BACKTICK = """
+            package dev.eryalabs.fixture
+
+            /** A quote ` and [swallowed] before a `span` that closes. */
+            class Stray(val kept: String)
+        """.trimIndent()
+
+        /** (q) Markdown's `[text](url)` form, whose text is prose and not a name. */
+        private val LINK_FIXTURE_MARKDOWN = """
+            package dev.eryalabs.fixture
+
+            /** A fixture type pointing at [guide](../docs/INTEGRATION.md) for the whole flow. */
+            class Linked(val kept: String)
+        """.trimIndent()
+
+        /** (q) The other direction: the same bracket with no URL after it, where it is a link. */
+        private val LINK_FIXTURE_MARKDOWN_WITHOUT_URL = """
+            package dev.eryalabs.fixture
+
+            /** A fixture type pointing at [guide] for the whole flow. */
+            class Linked(val kept: String)
         """.trimIndent()
     }
 }

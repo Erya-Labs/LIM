@@ -2841,7 +2841,7 @@ object Utils {
     }
 
     /**
-     * Restore the invariants Gson cannot — see [TypedField.repaired].
+     * Restore the invariants Gson cannot — see the [TypedField] overload below.
      *
      * Returns `null` when the payload carries no usable identity, so that a caller cannot
      * mistake a hollow [Entry] for a real profile.

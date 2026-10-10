@@ -91,6 +91,29 @@ data class Entry(
     override fun toString(): String =
         "Entry(id=${redactedValue(id)}, publicKey=${previewedPublicKey(publicKey)}, fields=$fields)"
 
+    /**
+     * The hand-written [Parceler] that gives [Entry] its [Parcelable] encoding — published
+     * surface, because `Entry$Companion` is what a compiled consumer links against.
+     *
+     * The encoding is written out rather than left to `@Parcelize` to generate, and what it
+     * writes is [fields] as a count followed by one `key, value, type` triple per field, read
+     * back into a `LinkedHashMap`. That makes the insertion order of the field map explicit on
+     * this side of the boundary, which is the same promise [Utils.encodeFields] and
+     * [Utils.decodeFields] keep on the JSON side.
+     *
+     * **The cost of hand-writing it is that [write] and [create] can drift apart**, and the
+     * failure mode is not an exception: a profile whose values and declared types have been
+     * shuffled between fields, delivered to a client app as though it were correct. Both halves
+     * must be edited together, and `EntryParcelTest` is what says so out loud — it pins the
+     * round trip, the field order and a 200-field profile.
+     *
+     * `create` substitutes a safe default for every absent slot — an empty string for an absent
+     * id, key or value, [FieldType.STRING] for an absent type — rather than throwing. A [Parcel]
+     * handed to this reader arrived from another process, so its contents are untrusted input
+     * like any other payload crossing that boundary, and a reader that threw on a malformed one
+     * would fail the client app rather than the field it could not read. [Utils.decodeEntry]
+     * takes the same position on the JSON side, where its KDoc sets out the whole hazard.
+     */
     companion object : Parceler<Entry> {
         override fun Entry.write(parcel: Parcel, flags: Int) {
             parcel.writeString(id)
