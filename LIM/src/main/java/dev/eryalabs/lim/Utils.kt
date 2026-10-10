@@ -387,6 +387,25 @@ object Utils {
      * This library ships no `<queries>` of its own — that is a manifest change, and manifest
      * changes here are a human decision.
      *
+     * **Example**, verbatim from `docs/INTEGRATION.md`'s *Before you start: is there a vault?*
+     * section, which also shows the `<queries>` element the paragraph above is about:
+     *
+     * <!-- example: INTEGRATION.md#vault-present -->
+     * ```kotlin
+     * // A device may have no vault on it at all, and that is the first wall an integration
+     * // hits. `shareEntry` dispatches the sign-up and its return value is the answer: `false`
+     * // means nothing received the intent, so no consent dialog opened and nothing is coming.
+     * fun signUpIfAVaultIsInstalled(context: Context, entry: Entry): Boolean {
+     *     if (Utils.shareEntry(context, entry)) return true
+     *     // Nothing handled it. Offer to install a vault — but declare the vault in your own
+     *     // manifest's `<queries>` element first, or on Android 11+ a `false` here also means
+     *     // "this app was not allowed to look", and you would be telling the user to install
+     *     // an app they already have.
+     *     // promptToInstallAVault()
+     *     return false
+     * }
+     * ```
+     *
      * @param context       Used twice, which is why it may not be any old [Context]: once for
      *                      `packageManager` to resolve a vault, once for `startActivity`. This
      *                      intent sets `FLAG_ACTIVITY_NEW_TASK`, so an application context does

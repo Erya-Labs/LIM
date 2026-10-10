@@ -8,7 +8,7 @@ import org.junit.Test
 import java.io.File
 
 /**
- * The guide has ten runnable Kotlin blocks and the IDE popup had none. **Measured before this file
+ * The guide has eleven runnable Kotlin blocks and the IDE popup had none. **Measured before this file
  * existed: `grep -c '^\s*\* *```'` over every one of the sixteen published sources returned 0 for
  * each of them.** An integrator spends the afternoon in an IDE, not in
  * `docs/INTEGRATION.md`, so every executable example this repository owns was unreachable from the
@@ -395,7 +395,7 @@ class KDocExampleTest {
      *
      * **It is not the same guard as [MINIMUM_EXAMPLES] and neither replaces the other.** Deleting
      * a whole block removes two fence lines and one block, so this stays balanced and the floor is
-     * what reddens; a block the walk cannot see leaves the floor at 11 and unbalances this. One
+     * what reddens; a block the walk cannot see leaves the floor satisfied and unbalances this. One
      * notices the losing direction, one the gaining.
      *
      * Both of this test's own assertions are therefore *also* split that way: the per-source
@@ -426,10 +426,11 @@ class KDocExampleTest {
         // counter that counts nothing, so pinning it to the measured number would redden on the
         // next correctly-marked example somebody adds — a false red, and one contradicting
         // MINIMUM_EXAMPLES' own rationale that losing a block is worth a failure and gaining one
-        // is not. A review pass found it pointed at exactly that, with T40 queued to add a block.
+        // is not. A review pass found it pointed at exactly that, and T40 then added the twelfth
+        // block: the floor moved with it and this assertion did not have to.
         assertTrue(
-            "…and the two counts must be about something: $MINIMUM_EXAMPLES blocks were measured " +
-                "when this file was written, so the line-wise count must find at least twice " +
+            "…and the two counts must be about something: $MINIMUM_EXAMPLES blocks are published " +
+                "today, so the line-wise count must find at least twice " +
                 "that; found ${onDisk().fenceLines}",
             onDisk().fenceLines >= FENCE_LINES_PER_BLOCK * MINIMUM_EXAMPLES,
         )
@@ -525,7 +526,7 @@ class KDocExampleTest {
     }
 
     /**
-     * Rule 5, and the floor it prints is the whole reason the file is worth its runtime: the ten
+     * Rule 5, and the floor it prints is the whole reason the file is worth its runtime: the eleven
      * names an afternoon integration touches must each be *shown*, not merely described.
      *
      * The member name a block is attributed to is read off the declaration the comment precedes, so
@@ -551,7 +552,7 @@ class KDocExampleTest {
         // And rule 5's one real loophole, which a review probe walked straight through: the rule
         // above counts a *marked block*, not a relevant one. Re-point one marker at another
         // section's block and the name stays "exemplified" while the popup shows something else.
-        // Every one of the eleven blocks already names the member it sits on, so this costs
+        // Every one of the twelve blocks already names the member it sits on, so this costs
         // nothing today and refuses the swap.
         assertEquals(
             "a core-loop name's example never mentions it, so rule 5 is satisfied by an example " +
@@ -780,7 +781,7 @@ class KDocExampleTest {
      * (g) Excuse hygiene, both directions, over a **fixture** map.
      *
      * [NOT_AN_EXAMPLE] is empty, and hygiene over an empty map proves nothing — which is why
-     * `GuideSnippetTest:327` asserts its own map is non-empty before checking it. So the fixture
+     * `GuideSnippetTest:328` asserts its own map is non-empty before checking it. So the fixture
      * supplies the map as well as the source.
      */
     @Test
@@ -1466,7 +1467,7 @@ class KDocExampleTest {
     /**
      * [lines] with their common leading indentation removed, and nothing else removed.
      *
-     * `GuideSnippetTest:1081`'s dedent, applied to the other side of the same comparison: a blank
+     * `GuideSnippetTest:1108`'s dedent, applied to the other side of the same comparison: a blank
      * line is shorter than the indentation, so it maps to the empty string rather than being
      * sliced.
      */
@@ -1593,7 +1594,7 @@ class KDocExampleTest {
     /**
      * [relative], located by walking up from the working directory.
      *
-     * `GuideSnippetTest:1144`'s walk-up, for its reason: the working directory of a Gradle unit
+     * `GuideSnippetTest:1171`'s walk-up, for its reason: the working directory of a Gradle unit
      * test is the module directory, but that is a default rather than a promise, so every ancestor
      * is tried both as the module root and as the repository root. If none of them holds it, the
      * test *fails naming every absolute path it tried* — a scanner that silently finds nothing
@@ -1664,8 +1665,8 @@ class KDocExampleTest {
         private var cachedOnDisk: Audit? = null
 
         /**
-         * The two floors, each set **at** the measured count rather than below it: 11 example
-         * blocks over 2 published sources, and 10 snippet-marked guide blocks.
+         * The two floors, each set **at** the measured count rather than below it: 12 example
+         * blocks over 2 published sources, and 11 snippet-marked guide blocks.
          *
          * At rather than below, because both counts are the subject here, and losing either is
          * worth a failure while adding to it is not. These are the *losing*-direction guards and
@@ -1673,8 +1674,8 @@ class KDocExampleTest {
          * deleting a whole block removes one block and two fence lines, which leaves the two-way
          * count balanced and reddens only the floor below.
          */
-        private const val MINIMUM_EXAMPLES = 11
-        private const val MINIMUM_GUIDE_BLOCKS = 10
+        private const val MINIMUM_EXAMPLES = 12
+        private const val MINIMUM_GUIDE_BLOCKS = 11
 
         /**
          * A fence, with leading whitespace tolerated because the comment prefix has already been
@@ -1778,6 +1779,7 @@ class KDocExampleTest {
          * there; do not retype it.
          */
         private val CORE_LOOP = listOf(
+            "shareEntry",
             "createShareIntent",
             "parseShareResult",
             "createQueryIntent",
@@ -1803,8 +1805,15 @@ class KDocExampleTest {
 
         private const val FIXTURE_REASON = "a fixture gap, left open on purpose"
 
-        /** The name control (e)'s tampered sibling literal gains. */
-        private const val EXTRA_CORE_LOOP_NAME = "shareEntry"
+        /**
+         * The name control (e)'s tampered sibling literal gains.
+         *
+         * It must be a name [CORE_LOOP] does not already carry, or the "tampered" literal gains a
+         * *duplicate* rather than a name and the control stops being about drift. It was
+         * `shareEntry` until T40 put that into the real list, which is the drift this constant
+         * exists to detect happening to the constant itself.
+         */
+        private const val EXTRA_CORE_LOOP_NAME = "validateEntry"
 
         /**
          * The controls' fixture source, assembled from one-line literals rather than written as a
@@ -1814,7 +1823,7 @@ class KDocExampleTest {
          * their lines in **this** file. Nothing scans a test source for either today — this file
          * reads the *published* sources — but the next scanner to arrive would collect them, and
          * the failure would be in a file whose fixtures look like real examples. Written this way
-         * each line sits behind an opening `"`. `GuideSnippetTest:1324`'s argument, where the same
+         * each line sits behind an opening `"`. `GuideSnippetTest:1369`'s argument, where the same
          * shape is load-bearing rather than defensive.
          */
         private val FIXTURE_SOURCE = listOf(

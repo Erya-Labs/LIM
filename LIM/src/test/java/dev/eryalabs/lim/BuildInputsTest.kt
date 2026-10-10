@@ -680,7 +680,7 @@ class BuildInputsTest {
     /**
      * Every Kotlin test source, keyed by file name.
      *
-     * `GuideSnippetTest:1123`'s walk, for its reason: rule 3's claim is about *every* test source,
+     * `GuideSnippetTest:1150`'s walk, for its reason: rule 3's claim is about *every* test source,
      * and a test added under a subpackage would otherwise be able to read an undeclared document
      * that no assertion here could see.
      */

@@ -674,7 +674,7 @@ class KDocCoverageTest {
      * every zero-argument function in the published sources today is an `override` — fourteen
      * `toString` and `hashCode` implementations across ten published types — and the scanner
      * skips overrides, so this rule has no subject at all. (The one zero-argument function that
-     * is *not* an override, `readText` at `Utils.kt:1632`, is local to a function body, so it is
+     * is *not* an override, `readText` at `Utils.kt:1651`, is local to a function body, so it is
      * not published either and the scan correctly never sees it.) What keeps the rule honest is
      * its fixture in control (n): without one it would be an assertion that has never been shown
      * to fail, which is control (b)'s and control (i)'s argument applied a third time.
@@ -2423,7 +2423,7 @@ class KDocCoverageTest {
         private val DOC_LINK = Regex("""\[([A-Za-z][A-Za-z0-9_.]*)]""")
 
         /**
-         * A fenced-code line inside a doc comment — `KDocExampleTest:1747` verbatim, on purpose.
+         * A fenced-code line inside a doc comment — `KDocExampleTest:1748` verbatim, on purpose.
          *
          * That file *refuses* a fence line in a doc comment that carries no `*` prefix, as well
          * as `~~~`, HTML `<pre>` and markdown's indented form. So this one pattern is enough to

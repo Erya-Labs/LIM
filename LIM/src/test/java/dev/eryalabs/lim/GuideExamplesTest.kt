@@ -1,8 +1,11 @@
 package dev.eryalabs.lim
 
 import android.app.Activity
+import android.content.ComponentName
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
+import android.content.IntentFilter
 import android.util.Base64
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
@@ -14,6 +17,7 @@ import org.junit.BeforeClass
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.security.KeyPair
 import java.security.KeyPairGenerator
@@ -49,6 +53,63 @@ class GuideExamplesTest {
 
     /** A service's own account table, keyed the one way the protocol allows. */
     private val accounts = mutableMapOf<String, String>()
+
+    // ── Before you start: is there a vault? ───────────────────────────────
+
+    /**
+     * The step before sign-up, and the one wall every snippet below assumes away: the device may
+     * have no vault on it at all.
+     *
+     * [Utils.shareEntry] is the only function in this library whose return value answers that, so
+     * the guide's first block is the branch an app writes around it. Both states are driven through
+     * the region's own code — a vault registered with Robolectric's `ShadowPackageManager`, and
+     * none — and the dispatch is **counted** rather than inferred: a `false` that still handed an
+     * intent to the system would be a different bug than the one the guide describes, and asserting
+     * only the return value could not tell the two apart.
+     *
+     * `ShareEntryTest` is the fuller version of this — every branch of `shareEntry`, the flags on
+     * both share paths, and the two ways resolving and starting can disagree. The two branches
+     * below are deliberately that file's two simple ones, because they are the two a *snippet* can
+     * show; what this file repeats is neither the vault that vanishes between the resolve and the
+     * launch nor the refused launch that propagates.
+     */
+    @Test
+    fun `nothing is dispatched unless a vault is installed, and the return value says which`() {
+        // region snippet:vault-present
+        // A device may have no vault on it at all, and that is the first wall an integration
+        // hits. `shareEntry` dispatches the sign-up and its return value is the answer: `false`
+        // means nothing received the intent, so no consent dialog opened and nothing is coming.
+        fun signUpIfAVaultIsInstalled(context: Context, entry: Entry): Boolean {
+            if (Utils.shareEntry(context, entry)) return true
+            // Nothing handled it. Offer to install a vault — but declare the vault in your own
+            // manifest's `<queries>` element first, or on Android 11+ a `false` here also means
+            // "this app was not allowed to look", and you would be telling the user to install
+            // an app they already have.
+            // promptToInstallAVault()
+            return false
+        }
+        // endregion snippet:vault-present
+
+        val withoutAVault = CountingContext(context)
+        assertFalse(
+            "no vault is registered, so nothing on the device can receive the share",
+            signUpIfAVaultIsInstalled(withoutAVault, pushedEntry()),
+        )
+        assertEquals(
+            "…and nothing may be dispatched when nothing can receive it — asserted by count, " +
+                "because a `false` that still started an activity is a different failure",
+            0,
+            withoutAVault.attempts,
+        )
+
+        installVault()
+        val withAVault = CountingContext(context)
+        assertTrue(
+            "control: with a vault registered the same code takes the other branch",
+            signUpIfAVaultIsInstalled(withAVault, pushedEntry()),
+        )
+        assertEquals("…having really handed the intent to the system", 1, withAVault.attempts)
+    }
 
     // ── Sign-up ──────────────────────────────────────────────────────────
 
@@ -334,6 +395,42 @@ class GuideExamplesTest {
     /** A sign-up answer from [target], as `onActivityResult` would be handed it. */
     private fun shareAnswerFrom(target: FixtureVault): Intent? =
         target.answer(Utils.createShareIntent(context, pushedEntry(), requestCode = SIGN_UP_REQUEST)).data
+
+    /**
+     * Register an activity that handles the share action for the default vault package.
+     *
+     * `ShareEntryTest:51`'s registration, for its reason: `Intent.resolveActivity` matches with
+     * `MATCH_DEFAULT_ONLY`, so a filter without `CATEGORY_DEFAULT` would resolve to nothing here
+     * and a real vault's filter has to carry it too.
+     */
+    private fun installVault() {
+        val target = Utils.DEFAULT_ENDEAVOR_PACKAGE
+        val component = ComponentName(target, "$target.ShareActivity")
+        shadowOf(context.packageManager).addActivityIfNotPresent(component)
+        shadowOf(context.packageManager).addIntentFilterForActivity(
+            component,
+            IntentFilter(Utils.shareDataAction(target)).apply {
+                addCategory(Intent.CATEGORY_DEFAULT)
+            },
+        )
+    }
+
+    /**
+     * A context that counts the activities started through it, and still starts them.
+     *
+     * `ShareEntryTest`'s `FailingContext` counts attempts for the same reason this does: "returned
+     * `false`" and "dispatched nothing" are two claims, and a test that asserted only the first
+     * would pass against a `shareEntry` that launched the intent anyway.
+     */
+    private class CountingContext(base: Context) : ContextWrapper(base) {
+        var attempts = 0
+            private set
+
+        override fun startActivity(intent: Intent?) {
+            attempts++
+            super.startActivity(intent)
+        }
+    }
 
     /** Scene one against [vault], registered in [accounts]. Returns the key to keep. */
     private fun signUpOnTheFixtureVault(): String {

@@ -34,9 +34,10 @@ import java.io.File
  *     rather than silently skipped.
  *
  * **The marker rule binds ` ```kotlin ` and nothing else**, which is why the Setup section's
- * dependency declaration is fenced ` ```gradle `. Fencing Gradle Kotlin DSL as Kotlin would put it
- * under rule 1, which has no region to offer it, and rules 1 and 6 would deadlock on the one block
- * the guide cannot do without.
+ * dependency declaration is fenced ` ```gradle ` and the vault-visibility section's manifest
+ * element is fenced ` ```xml `. Fencing Gradle Kotlin DSL as Kotlin would put it under rule 1,
+ * which has no region to offer it, and rules 1 and 6 would deadlock on the one block the guide
+ * cannot do without; the same is true of an XML element no test here can execute.
  *
  * **What this test deliberately does not pin: the prose.** Rewriting any sentence outside a fenced
  * block changes nothing here, and that is the honest statement of its scope — it pins code, not
@@ -389,8 +390,9 @@ class GuideSnippetTest {
      * merely *mentioned* the rest of the loop in a comment would pass a floor measured over
      * region text as a whole.
      *
-     * These ten are the core loop VISION's yardstick names — send, parse, correlate, challenge,
-     * verify, expire — on both of the two flows that have a result worth checking.
+     * These eleven are the core loop VISION's yardstick names — ask whether there is a vault to
+     * ask, send, parse, correlate, challenge, verify, expire — on both of the two flows that have a
+     * result worth checking, plus the one call that answers "is a vault installed at all".
      */
     @Test
     fun `every function in the core loop is called in a snippet`() {
@@ -505,6 +507,31 @@ class GuideSnippetTest {
             "the guide must print `$coordinate` — the dependency a consumer of the AAR has to " +
                 "add by hand, at the version this library builds against",
             coordinate != null && coordinate in guide,
+        )
+    }
+
+    /**
+     * The vault-visibility section prints a package name, and that is the one name in its ` ```xml `
+     * block — the block [NOT_A_SNIPPET] excuses, citing a *behaviour* test rather than anything that
+     * reads the block's text. So the name is pinned here instead.
+     *
+     * A `<queries>` element naming a package this library never addresses leaves an installed vault
+     * invisible on Android 11+, so [Utils.shareEntry] reports `false` on a device that has one —
+     * exactly the failure that section exists to prevent, and silent in both directions. The
+     * Setup section's coordinate is pinned the same way and for the same reason.
+     *
+     * The constant is `const val`, so the compiler inlines it here; what keeps that honest is that
+     * editing `Utils.kt` recompiles this source, so the literal compared against the guide is
+     * always the one the library ships.
+     */
+    @Test
+    fun `the guide prints the vault package this library addresses by default`() {
+        assertTrue(
+            "the guide must print `${Utils.DEFAULT_ENDEAVOR_PACKAGE}` — the package a consumer " +
+                "declares in their own `<queries>` element so that the vault is visible to them. " +
+                "If the default moved, the guide is now telling integrators to declare a package " +
+                "nothing here addresses: update the guide, not this test",
+            Utils.DEFAULT_ENDEAVOR_PACKAGE in guideFile().readText(),
         )
     }
 
@@ -1257,6 +1284,7 @@ class GuideSnippetTest {
         /** Pinned by name so the guide cannot ship half-written. */
         private val REQUIRED_SECTIONS = listOf(
             "Setup",
+            "Before you start: is there a vault?",
             "Sign-up (share)",
             "Query",
             "Login (sign-challenge)",
@@ -1265,10 +1293,15 @@ class GuideSnippetTest {
         )
 
         /**
-         * The published surface an afternoon integration actually touches: send, parse, correlate,
-         * challenge, verify, expire. Every one must be *called* in at least one region.
+         * The published surface an afternoon integration actually touches: ask whether there is a
+         * vault, send, parse, correlate, challenge, verify, expire. Every one must be *called* in
+         * at least one region, and the names are grouped in the order the guide's sections come in
+         * — a reading aid, not a claim: nothing asserts order against the guide, and within a
+         * section the guide shows `matchesRequestCode` and `isNonceFresh` before the parse and the
+         * verify they guard.
          */
         private val CORE_LOOP = listOf(
+            "shareEntry",
             "createShareIntent",
             "parseShareResult",
             "createQueryIntent",
@@ -1302,6 +1335,18 @@ class GuideSnippetTest {
                     "the artifact the assemble task writes, and the Gson coordinate a bare AAR " +
                     "does not carry",
                 coveredBy = "GuideSnippetTest: the build-from-source path names what the build declares",
+            ),
+            "xml under Before you start: is there a vault?" to Excuse(
+                reason = "the `<queries>` element a consumer adds to their *own* manifest, so that " +
+                    "an installed vault is visible to them on Android 11+. Nothing in this " +
+                    "repository can execute a consumer's manifest, and this library ships no such " +
+                    "element of its own — that is a manifest change and a human decision — so the " +
+                    "XML itself is unverifiable from here and is not pretended otherwise. What is " +
+                    "pinned is the behaviour the element buys: the cited test is the branch a " +
+                    "caller reaches when no vault answers, which is what the element's absence " +
+                    "makes indistinguishable from a device with no vault at all",
+                coveredBy = "ShareEntryTest: shareEntry returns false and starts nothing when no " +
+                    "vault handles it",
             ),
         )
 

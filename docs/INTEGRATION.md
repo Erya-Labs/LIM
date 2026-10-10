@@ -66,6 +66,55 @@ Swap all of it for the coordinate above once the release is cut.
 
 ---
 
+## Before you start: is there a vault?
+
+Every block below assumes a vault that answers. The device may not have one, and that is the first
+wall a real app hits — before sign-up, not after it. `Utils.shareEntry` is the one function in this
+library whose return value tells you: it dispatches a fire-and-forget share and reports whether
+anything received it.
+
+<!-- snippet: GuideExamplesTest.kt#vault-present -->
+```kotlin
+// A device may have no vault on it at all, and that is the first wall an integration
+// hits. `shareEntry` dispatches the sign-up and its return value is the answer: `false`
+// means nothing received the intent, so no consent dialog opened and nothing is coming.
+fun signUpIfAVaultIsInstalled(context: Context, entry: Entry): Boolean {
+    if (Utils.shareEntry(context, entry)) return true
+    // Nothing handled it. Offer to install a vault — but declare the vault in your own
+    // manifest's `<queries>` element first, or on Android 11+ a `false` here also means
+    // "this app was not allowed to look", and you would be telling the user to install
+    // an app they already have.
+    // promptToInstallAVault()
+    return false
+}
+```
+
+That last part is a precondition, not a footnote. On Android 11+ an app sees only the packages it
+declares, and `setPackage` does not exempt it, so without the element below an installed vault
+resolves to nothing and `false` means "invisible" rather than "absent". The element goes in **your**
+manifest — this library ships none, because a manifest change here is a human decision:
+
+```xml
+<!-- your own AndroidManifest.xml, not this library's -->
+<queries>
+    <package android:name="com.github.adaydreamaway.endeavor" />
+</queries>
+```
+
+That package name is `Utils.DEFAULT_ENDEAVOR_PACKAGE`, the vault every call in this guide defaults
+to. If you pass `targetPackage` to address a different vault, declare that one instead.
+
+One case is not a return value: if a vault matches but *refuses* the launch — an activity that is
+not exported, or one behind a permission you do not hold — `shareEntry` throws `SecurityException`
+rather than returning `false`. That is deliberate, because reporting it as `false` would have you
+tell the user to install an app they already have. It is a misconfiguration on one side or the
+other, so catch it where you report bugs, not where you prompt for an install.
+
+Use `shareEntry` only for this check and for a share you do not need an answer to. Sign-up proper
+wants the result, which is the next section.
+
+---
+
 ## Sign-up (share)
 
 Sign-up is one round trip. You send an `Entry` naming the fields you want and the type you expect
