@@ -5,16 +5,11 @@ in this file. The format follows [Keep a Changelog](https://keepachangelog.com/e
 library intends [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 **Read the first entry as "what this release contains" rather than "what changed", and the reason
-deserves a paragraph instead of a footnote: nothing has ever been published that a third party
-could resolve.** As of this commit the only tag in this repository is `0.1.0` — a claim no test
-pins, so run `git tag` before trusting it. `LIM/build.gradle.kts` declares the Maven coordinate
-`dev.eryalabs.lim:lim:1.0.0`. The only artifact that exists anywhere is a
-`mavenLocal` build of 1.0.0, produced here so the sibling vault app could compile against
-something, and already an additive superset of the surface that tag names. So there is no
-predecessor release to diff against and nobody in the field holding an older one — which makes a
-list of *changes* a thing this file cannot honestly contain yet. What follows is a description of
-the surface, written once, at the point the surface first became worth publishing. The next entry
-will be an ordinary changelog.
+deserves a paragraph instead of a footnote: 1.0.0 is the first release anyone could resolve.**
+Before it, the only tag here was `0.1.0`, never published, and the only artifact anywhere was a
+`mavenLocal` build that the sibling vault app compiled against. So there was no predecessor release
+to diff against and nobody in the field holding an older one — which is why the 1.0.0 entry
+describes the surface rather than listing changes. The next entry will be an ordinary changelog.
 
 `ChangelogTest` keeps this file honest in both directions. Forwards: every published function and
 constant on `Utils`, every published type in `dev.eryalabs.lim`, and both published top-level
@@ -30,13 +25,15 @@ prose, checked only in the backwards direction, and pinned member-by-member by `
 and by `LIM/api/lim.api`, which is the record of the binary surface and the right place to read a
 diff.
 
-## 1.0.0 — unreleased
+## 1.0.0 — 2026-10-10
 
-**Not released.** No tag, no Maven Central artifact, no JitPack build of this version. The heading
-says `unreleased` and keeps saying it until a human cuts the release, which is not a decision this
-repository can make for itself — publishing is gated on a signing key that is not configured here.
-The version number is read out of `LIM/build.gradle.kts`'s `coordinates(...)` call by
-`ChangelogTest`, so a bump there reddens this file as well as `docs/INTEGRATION.md`.
+**Released on Maven Central as `dev.eryalabs.lim:lim:1.0.0`, signed, with sources and javadoc.**
+The date is the one Central itself records for the publication, in UTC. Tag `1.0.0` marks the
+commit it was built from. `ChangelogTest` ties the two together: a version heading carries a date
+exactly when a git tag of that version exists, and says `unreleased` exactly when one does not — so
+the next version's heading starts out `unreleased` and cannot be dated before it is cut. The
+version number itself is read out of `LIM/build.gradle.kts`'s `coordinates(...)` call, so a bump
+there reddens this file as well as `docs/INTEGRATION.md`.
 
 The protocol generation is `PROTOCOL_VERSION` = 2. Version 1 is the implicit legacy protocol:
 nothing on the wire ever says "1" — absence says it instead.
@@ -219,5 +216,5 @@ compiled consumer.
   a deliberate decision about an allow-list and has not been made.
 - There is no vault discovery. A client addresses a vault by package name, defaulting to Endeavor;
   finding every installed app that handles the share action needs a manifest change.
-- Nothing here is a comparison against a published artifact, because there is not one. See
+- This entry is not a comparison against an earlier release, because 1.0.0 is the first. See
   `LIM/api/lim.api` for the surface as it stands at this commit.

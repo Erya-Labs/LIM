@@ -682,25 +682,35 @@ class ChangelogTest {
         return "get$capitalized" in members || "is$capitalized" in members
     }
 
-    // ── The version heading, and what it must not claim ───────────────────
+    // ── The version heading, and what it may claim ──────────────────────────────
 
     /**
-     * The heading carries the version the build declares, and says the release has not happened.
+     * The heading carries the version the build declares, and its date says whether that version
+     * was actually released - decided by the one record of a release this repository keeps: a git
+     * tag of that version.
      *
-     * Two readers of one fact, deliberately: `GuideSnippetTest` already reads the same
-     * `coordinates(...)` call for the coordinate `docs/INTEGRATION.md` prints. That is not a
-     * duplicate — a human bumping the version has to move both documents, and each failure names
-     * the document it is about.
+     * **What this replaced, and why it is not the old assertion flipped.** Until 1.0.0 shipped, this
+     * asserted `unreleased` as literal text and forbade a date, because nothing here could publish
+     * and a dated heading would be a release nobody cut. Its KDoc said that when a human cut the
+     * release, *this assertion was the thing to change*. 1.0.0 was published to Maven Central on
+     * 2026-10-10. Flipping it to "must carry a date" would have been true for exactly one version:
+     * as soon as the build declared 1.0.1, its new heading would have been required to carry a date
+     * for a release nobody had cut - the very hazard the original assertion existed to prevent.
      *
-     * **`unreleased` is asserted as literal text**, because a changelog that dates a release
-     * nobody cut is the first thing a reader believes. Nothing in this repository can publish:
-     * `~/.m2` is out of reach and the publish is gated on a signing key that is not configured. So
-     * for as long as that holds, a date in this heading would be false. When a human does cut the
-     * release, *this assertion is the thing to change*, in the same commit that publishes — which
-     * is the point of making it fail rather than leaving the claim to prose.
+     * So the rule is stated against the repository instead: a heading is dated **exactly when** a
+     * tag of its version exists, and says `unreleased` exactly when one does not. Never both, never
+     * neither.
+     *
+     * **Asked of git, not read out of `.git/`.** Tags may be loose files or packed into one file,
+     * and in a worktree `.git` is itself a file pointing elsewhere; git resolves all of that. It is
+     * not declared as a Gradle input for the same reason - no `.git` path is stable across clones and
+     * worktrees. The cost is bounded: adding a tag alone does not invalidate this test's cached
+     * result, but a release also edits this file, which does. Where git cannot be asked at all - no
+     * binary, or a source tarball - only the never-both / never-neither half is checked, and the
+     * control below reports itself skipped rather than passing silently.
      */
     @Test
-    fun `the release section is headed by the declared version and marked unreleased`() {
+    fun `the release section is dated exactly when its version has been tagged`() {
         val version = declaredVersion()
         val naming = versionHeadings().filter { mentions(it, version) }
 
@@ -710,16 +720,62 @@ class ChangelogTest {
             1,
             naming.size,
         )
+        val heading = naming.single()
+        val dated = ISO_DATE.containsMatchIn(heading)
+        val unreleased = UNRELEASED in heading
         assertTrue(
-            "the heading must say `$UNRELEASED` in as many words: nothing in this repository can " +
-                "publish, so a dated heading would be a release nobody cut. Found: " +
-                "\"${naming.single()}\"",
-            UNRELEASED in naming.single(),
+            "the heading must not be both dated and `$UNRELEASED`. Found: \"$heading\"",
+            !(dated && unreleased),
         )
         assertTrue(
-            "…and must therefore carry no date. Found: \"${naming.single()}\"",
-            !ISO_DATE.containsMatchIn(naming.single()),
+            "the heading must be either dated or `$UNRELEASED`. Found: \"$heading\"",
+            dated || unreleased,
         )
+        when (tagExists(version)) {
+            true -> assertTrue(
+                "git tag $version exists, so $version was released: its heading must carry the " +
+                    "release date, not `$UNRELEASED`. Found: \"$heading\"",
+                dated,
+            )
+            false -> assertTrue(
+                "there is no git tag $version, so $version has not been released: its heading " +
+                    "must say `$UNRELEASED` and carry no date. Found: \"$heading\"",
+                unreleased,
+            )
+            null -> Unit // git could not be asked; the control below reports that.
+        }
+    }
+
+    /**
+     * The control for the arm above: the tag query answers, both ways, against tags this repository
+     * is known to hold. Without it, a query that silently answered "no tag" for everything would turn
+     * a released heading into a demand for `unreleased` - and pass every unreleased one for free.
+     *
+     * Skipped rather than failed where git cannot be asked.
+     */
+    @Test
+    fun `the tag query finds known tags and not an invented one`() {
+        val first = tagExists("0.1.0")
+        org.junit.Assume.assumeTrue("git cannot be asked here, so the tag rule is unchecked", first != null)
+        assertEquals("tag 0.1.0 must be found", true, first)
+        assertEquals("tag 1.0.0 must be found", true, tagExists("1.0.0"))
+        assertEquals("an invented tag must not be found", false, tagExists("0.0.0-never-tagged"))
+    }
+
+    /**
+     * Whether a git tag named exactly [name] exists in this repository, or null when git cannot be
+     * asked. `git tag --list` takes a pattern, so its output is compared line by line rather than
+     * trusted as a yes or no.
+     */
+    private fun tagExists(name: String): Boolean? = try {
+        val process = ProcessBuilder("git", "tag", "--list", name)
+            .directory(changelogFile().absoluteFile.parentFile)
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().readText()
+        if (process.waitFor() != 0) null else output.lineSequence().any { it.trim() == name }
+    } catch (e: java.io.IOException) {
+        null
     }
 
     /**
