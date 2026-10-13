@@ -1327,12 +1327,12 @@ class GuideSnippetTest {
         private val NOT_A_SNIPPET: Map<String, Excuse> = mapOf(
             "gradle under Setup" to Excuse(
                 reason = "the dependency declaration a consumer writes in their own build file. " +
-                    "No test here can run it — the artifact is not published anywhere " +
-                    "resolvable as of this commit — so what is pinned instead is the one part " +
+                    "No test here can run a consumer's build, and nothing in this repository " +
+                    "reaches the network to resolve it — so what is pinned instead is the one part " +
                     "that can go stale silently: the version it prints",
                 coveredBy = "GuideSnippetTest: the guide prints the coordinate the build file declares",
             ),
-            "gradle under Until then: build from source" to Excuse(
+            "gradle under Building from source" to Excuse(
                 reason = "a consumer project's own build file, which this repository cannot " +
                     "execute — the guide says as much in that section rather than implying " +
                     "otherwise. What is pinned is every name in it: the Gradle project path, " +

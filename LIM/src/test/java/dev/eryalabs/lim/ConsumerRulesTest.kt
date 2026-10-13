@@ -686,10 +686,10 @@ class ConsumerRulesTest {
      * (9) `docs/INTEGRATION.md`'s one ` ```proguard ` block holds these directive lines, both ways.
      *
      * **Why the guide has to print them at all.** AGP packages this file into the AAR, so a consumer
-     * who resolves the library as a *dependency* gets these rules whether they read a word of the
-     * guide. No release has been cut, so that is not the install path anybody is on: the guide's
-     * only working one is vendoring the AAR into `libs/` (`docs/INTEGRATION.md`, "Until then: build
-     * from source"). Whether AGP hands a **file** dependency's packaged `proguard.txt` to R8 is not
+     * who resolves the library as a *dependency* — from Maven Central, the main install path since
+     * 1.0.0 shipped — gets these rules whether they read a word of the guide. The guide prints them
+     * for the other path, vendoring the AAR into `libs/` (`docs/INTEGRATION.md`, "Building from
+     * source"). Whether AGP hands a **file** dependency's packaged `proguard.txt` to R8 is not
      * answerable from this repository — nothing here builds a consumer project — so the guide tells
      * the integrator to copy the rules into their own file rather than asserting either answer. That
      * makes the printed copy part of the shipped rule set, and a printed copy that drifts is worse

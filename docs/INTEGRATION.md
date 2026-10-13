@@ -20,7 +20,7 @@ pasted prose that compiled once: it is a line JUnit executed to get the suite gr
 
 ## Setup
 
-The coordinate this library will publish under is:
+LIM is published on Maven Central:
 
 ```gradle
 dependencies {
@@ -28,20 +28,16 @@ dependencies {
 }
 ```
 
-**It is not resolvable yet, as of this commit.** No release has been cut from this repository: the
-only git tag here is `0.1.0`, and `LIM/build.gradle.kts` declares Central publishing
-(`publishToMavenCentral()`, `signAllPublications()`) for a version that has never been published.
-Cutting it is a human step, tracked in the maintainers' release queue as *"Cut the first public
-release on JitPack as `1.0.0` (human only)"* alongside a release checklist. When it lands, the
-block above starts working and this section loses this paragraph. That last part is the one claim
-here that was not checked against a repository — nothing in this repository reaches the network —
-so if the coordinate above resolves for you, the release has happened and this paragraph is stale.
+It resolves from `mavenCentral()`, which a new Android project already declares in
+`settings.gradle.kts` — there is nothing else to configure. The version printed above is checked
+against this repository's build file, so it cannot drift from the release it names.
 
 LIM needs `minSdk 24`. Its only runtime dependency is Gson.
 
-### Until then: build from source
+### Building from source
 
-Clone this repository and run `./gradlew :LIM:assembleRelease`. The artifact lands at
+Only for trying a change that has not been released yet. Clone this repository and run
+`./gradlew :LIM:assembleRelease`. The artifact lands at
 `LIM/build/outputs/aar/LIM-release.aar`. Copy it into your project's `libs/` directory and declare
 it — an AAR carries no dependency metadata, so LIM's one runtime dependency is yours to add:
 
@@ -64,7 +60,7 @@ a local AAR is still your build's business.
 Do not add this module to your own build with `include(...)`: it resolves its plugins and test
 dependencies through *this* repository's version catalog, which yours does not have.
 
-Swap all of it for the coordinate above once the release is cut.
+For anything else, use the Maven Central coordinate above.
 
 ---
 
