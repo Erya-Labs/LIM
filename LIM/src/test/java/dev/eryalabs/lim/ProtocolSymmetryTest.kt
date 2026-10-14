@@ -76,7 +76,7 @@ import java.lang.reflect.Modifier
  * **No keypair is generated and nothing here verifies a signature.** [SIGNATURE_BYTES] is Base64
  * round-trippable and non-empty, which is all `parseSignChallengeResult` asks of it; proof of
  * possession is `ResultBuilderTest`'s and `SignatureVerificationTest`'s. That is deliberate and it
- * is what keeps this file — breadth over ten keys and six parsers — well under a second. The
+ * is what keeps this file — breadth over twelve keys and eight parsers — well under a second. The
  * measured wall-clock is printed on every run.
  *
  * Robolectric is required: [Intent] extras and `android.util.Base64` are unimplemented stubs in a
@@ -162,11 +162,18 @@ class ProtocolSymmetryTest {
         // `requestCode` by name, not positionally: a bare third string binds to the
         // `targetPackage` overload and addresses the intent to a package named `req-1`, which is
         // the hazard `createShareIntent`'s own KDoc spends a paragraph on.
-        Builder("createShareIntent", 4) {
+        //
+        // The fullest `createShareIntent` is the required-fields overload, at 5, so that is the
+        // one called: it delegates through the 1.0.0 request-code overload and then adds the
+        // declaration, so every key that overload wrote is still written here. `email` is named
+        // optional because it is a field of [entry]; a name the entry lacked would be dropped and
+        // the declaration would read the same with or without the extra.
+        Builder("createShareIntent", 5) {
             Utils.createShareIntent(
                 context,
                 entry,
                 requestCode = CODE,
+                optionalFields = setOf("email"),
                 targetPackage = VAULT_PACKAGE,
             )
         },
@@ -183,8 +190,17 @@ class ProtocolSymmetryTest {
                 Utils.NONCE_FORMAT_TIMESTAMPED,
             )
         },
-        Builder("createShareResultIntent", 3) {
-            Utils.createShareResultIntent(VAULT_KEY, fields, CODE)
+        // The fullest share-result builder is the requirements-aware one, at 4. The fixture
+        // requirements name `age` optional and the payload fills both fields, so they are
+        // satisfied and the acknowledgement is written — over an unsatisfied payload it would be
+        // omitted, and the key would look unwritten with nothing wrong in `Utils`.
+        Builder("createShareResultIntent", 4) {
+            Utils.createShareResultIntent(
+                VAULT_KEY,
+                fields,
+                CODE,
+                FieldRequirements(fields.keys, setOf("age")),
+            )
         },
         Builder("createQueryResultIntent", 3) {
             Utils.createQueryResultIntent(VAULT_KEY, fields, CODE)
@@ -197,7 +213,7 @@ class ProtocolSymmetryTest {
     // ── The mechanism ────────────────────────────────────────────────────
 
     /**
-     * The six published parsers, in a fixed order, applied to the same intent.
+     * The eight published parsers, in a fixed order, applied to the same intent.
      *
      * Order matters only for reproducibility; what matters for the property is that all six are
      * here, which [the enumeration and the table meet their floors] pins by count. Every one of the
@@ -212,6 +228,10 @@ class ProtocolSymmetryTest {
         Utils.parseShareResult(intent),
         Utils.parseQueryResult(intent),
         Utils.parseSignChallengeResult(intent),
+        // Required fields' two readers. Both compare by content — `FieldRequirements` declares its
+        // own equality, and the acknowledgement is a plain read-only set.
+        Utils.parseFieldRequirements(intent),
+        Utils.parseAppliedOptionalFields(intent),
     )
 
     /**
@@ -490,7 +510,7 @@ class ProtocolSymmetryTest {
         // Both directions, and the second is the one that matters: comparing `parseAll`'s length
         // against a constant in the same file only catches a line *deleted* from it. A parser
         // *added* to `Utils` and never wired in here is caught by counting them off the published
-        // surface instead — six today, and a seventh makes this red until parseAll names it.
+        // surface instead — eight today, and a ninth makes this red until parseAll names it.
         assertEquals(
             "a line has been removed from parseAll, so the differential no longer runs every " +
                 "parser and an extra only that parser reads would be reported unread",
@@ -678,19 +698,24 @@ class ProtocolSymmetryTest {
         private val NOT_READ: Map<String, Excuse> = emptyMap()
 
         /**
-         * Ten today, and the floor is the same ten rather than something lower: unlike
+         * Twelve today, and the floor is the same twelve rather than something lower: unlike
          * `PublishedSurfaceFuzzTest`'s method count, this number cannot grow by accident — adding
          * an extra is a wire change, and the two properties are what notice it. What the floor
          * catches is the reflection filter drifting towards the empty set. The actual is printed on
-         * every run.
+         * every run. It was ten until required fields added `EXTRA_OPTIONAL_FIELDS` and
+         * `EXTRA_APPLIED_OPTIONAL_FIELDS`, and moved with them so that it stays the measured value.
          */
-        private const val MINIMUM_EXTRAS = 10
+        private const val MINIMUM_EXTRAS = 12
 
         /** Three request builders and three result builders, as of T28. */
         private const val MINIMUM_BUILDERS = 6
 
-        /** Three request parsers and three result parsers. */
-        private const val PARSER_COUNT = 6
+        /**
+         * Three request parsers and three result parsers, plus required fields' two readers —
+         * `parseFieldRequirements` and `parseAppliedOptionalFields`, each a published single-`Intent`
+         * `parse*` function, which is what the census below counts.
+         */
+        private const val PARSER_COUNT = 8
 
         private const val CODE = "req-1"
         private const val VAULT_PACKAGE = "com.example.vault"

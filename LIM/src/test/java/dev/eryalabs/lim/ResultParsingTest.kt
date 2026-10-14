@@ -639,4 +639,73 @@ class ResultParsingTest {
         assertEquals(FieldType.STRING, result.fields["a"]?.type)
         assertEquals("", result.fields["c"]?.value)
     }
+
+    // ── The required-fields acknowledgement ─────────────────────────────
+
+    @Test
+    fun `an acknowledgement is read back as the set the vault applied`() {
+        val applied = Utils.parseAppliedOptionalFields(
+            resultIntent(Utils.EXTRA_APPLIED_OPTIONAL_FIELDS to """["phone","nickname","phone"]"""),
+        )
+
+        assertEquals("duplicates collapse, and the order is the order sent", listOf("phone", "nickname"), applied?.toList())
+        assertEquals(
+            "an empty array is an acknowledgement — of nothing optional — and not its absence",
+            emptySet<String>(),
+            Utils.parseAppliedOptionalFields(resultIntent(Utils.EXTRA_APPLIED_OPTIONAL_FIELDS to "[]")),
+        )
+    }
+
+    /** Every shape that is not an acknowledgement reads as none, never as an empty one. */
+    @Test
+    fun `an absent, blank, wrong-typed, unreadable or malformed acknowledgement is none`() {
+        val shapes = listOf(
+            null,
+            Intent(),
+            resultIntent(Utils.EXTRA_APPLIED_OPTIONAL_FIELDS to "  "),
+            Intent().apply { putExtra(Utils.EXTRA_APPLIED_OPTIONAL_FIELDS, 3) },
+            Intent().apply { putExtra(Utils.EXTRA_APPLIED_OPTIONAL_FIELDS, arrayOf("phone")) },
+            UnreadableIntent(),
+            resultIntent(Utils.EXTRA_APPLIED_OPTIONAL_FIELDS to "[phone]"),
+            resultIntent(Utils.EXTRA_APPLIED_OPTIONAL_FIELDS to """["phone",1]"""),
+            resultIntent(Utils.EXTRA_APPLIED_OPTIONAL_FIELDS to """["phone"] trailing"""),
+            resultIntent(Utils.EXTRA_APPLIED_OPTIONAL_FIELDS to "{}"),
+            // Three spellings only a reader below `Strictness.STRICT` accepts — and Gson's
+            // `JsonReader` defaults to `LEGACY_STRICT`, which takes all three — so each would read
+            // as an acknowledgement naming a field: the `\'` escape, a backslash before a raw line
+            // feed, and a raw control character inside the string. A backslash is "\\".
+            resultIntent(Utils.EXTRA_APPLIED_OPTIONAL_FIELDS to "[\"ph" + "\\" + "'one\"]"),
+            resultIntent(Utils.EXTRA_APPLIED_OPTIONAL_FIELDS to "[\"ph" + "\\" + "\n" + "one\"]"),
+            resultIntent(Utils.EXTRA_APPLIED_OPTIONAL_FIELDS to "[\"ph" + 0x0001.toChar() + "one\"]"),
+            // The request's key on a result is not the acknowledgement — the reason the keys differ.
+            resultIntent(Utils.EXTRA_OPTIONAL_FIELDS to """["phone"]"""),
+        )
+        shapes.forEachIndexed { index, intent ->
+            assertNull("shape #$index must be no acknowledgement", Utils.parseAppliedOptionalFields(intent))
+        }
+    }
+
+    /**
+     * The old-client differential from the parser's side: a 1.0.0 client reads the same
+     * [ShareResult] whether or not the vault acknowledged anything, because [Utils.parseShareResult]
+     * does not read the key at all.
+     */
+    @Test
+    fun `a share result parses the same with and without an acknowledgement`() {
+        val without = resultIntent(
+            Utils.EXTRA_PUBLIC_KEY to "PUBLIC-KEY-BASE64",
+            Utils.EXTRA_FIELDS_JSON to fieldsJson,
+            Utils.EXTRA_SHARE_REQUEST_CODE to "req-1",
+            Utils.EXTRA_PROTOCOL_VERSION to "2",
+        )
+        val acknowledged = Intent(without).apply {
+            putExtra(Utils.EXTRA_APPLIED_OPTIONAL_FIELDS, """["age"]""")
+        }
+
+        assertEquals(Utils.parseShareResult(without), Utils.parseShareResult(acknowledged))
+        assertNull(
+            "an acknowledgement alone is not an answer",
+            Utils.parseShareResult(resultIntent(Utils.EXTRA_APPLIED_OPTIONAL_FIELDS to "[]")),
+        )
+    }
 }

@@ -8,7 +8,7 @@ import org.junit.Test
 import java.io.File
 
 /**
- * The guide has thirteen runnable Kotlin blocks and the IDE popup had none. **Measured before this file
+ * The guide has sixteen runnable Kotlin blocks and the IDE popup had none. **Measured before this file
  * existed: `grep -c '^\s*\* *```'` over every one of the sixteen published sources returned 0 for
  * each of them.** An integrator spends the afternoon in an IDE, not in
  * `docs/INTEGRATION.md`, so every executable example this repository owns was unreachable from the
@@ -146,7 +146,7 @@ import java.io.File
  *    a renderer shows as code. That regex is case-insensitive, so the residue is other *tags* —
  *    not other spellings of these two, which a review pass closed after finding `<PRE>` open.
  *
- * Regex over seventeen files, so it runs in milliseconds: no Robolectric, and the one piece of
+ * Regex over nineteen files, so it runs in milliseconds: no Robolectric, and the one piece of
  * reflection is [resolvesToATest], which resolves an excuse's cited `@Test` and is not on the
  * scanning path at all.
  */
@@ -342,7 +342,7 @@ class KDocExampleTest {
      * The published sources against the guide, measured once for the whole class.
      *
      * `GuideSnippetTest`'s cache, for its reason: JUnit constructs a fresh instance per test
-     * method, so a per-instance `by lazy` would re-read and re-scan seventeen files once per
+     * method, so a per-instance `by lazy` would re-read and re-scan nineteen files once per
      * assertion. The files cannot change within a run, and editing one re-runs the class.
      */
     private fun onDisk(): Audit = cachedOnDisk ?: audit(
@@ -552,7 +552,7 @@ class KDocExampleTest {
         // And rule 5's one real loophole, which a review probe walked straight through: the rule
         // above counts a *marked block*, not a relevant one. Re-point one marker at another
         // section's block and the name stays "exemplified" while the popup shows something else.
-        // Every one of the twelve blocks already names the member it sits on, so this costs
+        // Every one of the nineteen blocks already names the member it sits on, so this costs
         // nothing today and refuses the swap.
         assertEquals(
             "a core-loop name's example never mentions it, so rule 5 is satisfied by an example " +
@@ -1665,8 +1665,8 @@ class KDocExampleTest {
         private var cachedOnDisk: Audit? = null
 
         /**
-         * The two floors, each set **at** the measured count rather than below it: 12 example
-         * blocks over 2 published sources, and 13 snippet-marked guide blocks.
+         * The two floors, each set **at** the measured count rather than below it: 19 example
+         * blocks over 4 published sources, and 16 snippet-marked guide blocks.
          *
          * At rather than below, because both counts are the subject here, and losing either is
          * worth a failure while adding to it is not. These are the *losing*-direction guards and
@@ -1674,8 +1674,8 @@ class KDocExampleTest {
          * deleting a whole block removes one block and two fence lines, which leaves the two-way
          * count balanced and reddens only the floor below.
          */
-        private const val MINIMUM_EXAMPLES = 12
-        private const val MINIMUM_GUIDE_BLOCKS = 13
+        private const val MINIMUM_EXAMPLES = 19
+        private const val MINIMUM_GUIDE_BLOCKS = 16
 
         /**
          * A fence, with leading whitespace tolerated because the comment prefix has already been

@@ -277,6 +277,25 @@ class ToStringRedactionTest {
         assertTrue("the field keys should still be named: $rendered", rendered.contains("email"))
     }
 
+    /**
+     * A field *name* is as likely to be something about one user as it is to be `email`, so the
+     * requirements a vault read off a sign-up print their counts and nothing else — the line a
+     * `Log.d("requirements: $it")` writes carries no name, required or optional.
+     */
+    @Test
+    fun `field requirements toString prints counts and never a name`() {
+        val requirements = FieldRequirements(
+            listOf("SENTINEL-required-name", "SENTINEL-optional-name", "third"),
+            setOf("SENTINEL-optional-name"),
+        )
+
+        val rendered = requirements.toString()
+
+        assertEquals("FieldRequirements(fields=3, optional=1)", rendered)
+        assertFalse("a field name reached the rendering: $rendered", "SENTINEL" in rendered)
+        assertFalse(rendered.contains("third"))
+    }
+
     @Test
     fun `share result toString does not print stored field values`() {
         val rendered = ShareResult(

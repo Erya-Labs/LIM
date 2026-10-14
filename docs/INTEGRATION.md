@@ -160,8 +160,8 @@ manifest — this library ships none, because a manifest change here is a human 
 </queries>
 ```
 
-That package name is `Utils.DEFAULT_ENDEAVOR_PACKAGE`, the vault every call in this guide defaults
-to. If you pass `targetPackage` to address a different vault, declare that one instead.
+That package name is `Utils.DEFAULT_ENDEAVOR_PACKAGE`, the vault every call in this guide addresses.
+If you pass `targetPackage` to address a different vault, declare that one instead.
 
 One case is not a return value: if a vault matches but *refuses* the launch — an activity that is
 not exported, or one behind a permission you do not hold — `shareEntry` throws `SecurityException`
@@ -177,8 +177,8 @@ wants the result, which is the next section.
 ## Sign-up (share)
 
 Sign-up is one round trip. You send an `Entry` naming the fields you want and the type you expect
-for each; the vault shows the user what is being asked for, fills the values from its own stored
-profile, mints a keypair, and answers with the public half.
+for each; the vault shows the user what is being asked for, lets them type a value for each, mints
+a keypair, and answers with the public half.
 
 <!-- snippet: GuideExamplesTest.kt#signup-request -->
 ```kotlin
@@ -213,6 +213,118 @@ val accountKey = result?.publicKey
 
 Store `accountKey`. It is the account. See **Rules you must not break** for the two ways storing
 it goes wrong.
+
+### Required and optional fields
+
+**This needs the release after 1.0.0** — the version Setup prints does not have it — and a vault
+built on that release to honour it.
+
+A vault that implements required fields treats **every field you declare as required**: the user
+cannot save the sign-up while one of them is blank, and if they will not fill it in they back out,
+which reaches you as `RESULT_CANCELED` like any other refusal. That holds for an app that has never
+heard of this, too. To let the user leave some fields empty, name them:
+
+<!-- snippet: GuideExamplesTest.kt#signup-optional-request -->
+```kotlin
+// Every field you declare is required unless you name it here. Names match exactly, so
+// a misspelt name is simply not sent and that field stays required. All five arguments
+// are needed, the vault's package included: with no defaults, no shorter call can
+// resolve to this overload, so every call written before it still means what it did.
+val entry = Entry(
+    id = "signup-form",
+    fields = linkedMapOf(
+        "name" to TypedField(value = "", type = FieldType.STRING),
+        "email" to TypedField(value = "", type = FieldType.EMAIL),
+        "phone" to TypedField(value = "", type = FieldType.PHONE),
+    ),
+    publicKey = "no-key-yet",
+)
+val requirements = FieldRequirements(entry.fields.keys, setOf("phone"))
+val request = Utils.createShareIntent(
+    context,
+    entry,
+    SIGN_UP_REQUEST,
+    requirements.optionalFields,
+    Utils.DEFAULT_ENDEAVOR_PACKAGE,
+)
+// startActivityForResult(request, VAULT_RESULT)
+```
+
+On such a vault, a field you named and the user left blank is dropped: it is absent from the
+answer, never sent as `""`. The answer also carries the vault's acknowledgement of what it applied,
+which `Utils.checkFieldRequirements` reads against what you declared:
+
+<!-- snippet: GuideExamplesTest.kt#signup-optional-result -->
+```kotlin
+// In onActivityResult, once `resultCode` is RESULT_OK and the request code matches.
+fun onSignUpAnswer(data: Intent?) {
+    val result = Utils.parseShareResult(data) ?: return
+    // Keep the key whatever follows: the profile now exists in the vault, bound to you.
+    val accountKey = result.publicKey ?: return
+    // Gate on the data, never on a version number. `committed` is null exactly when a
+    // required field is missing or blank. It drops a blank optional field too, whether
+    // the vault left it out or, as an older vault may, sent it as an empty value.
+    val profile = requirements.committed(result.fields)
+    when (Utils.checkFieldRequirements(requirements, data)) {
+        FieldRequirementsVerdict.HONOURED,
+        FieldRequirementsVerdict.MISMATCHED,
+        FieldRequirementsVerdict.NOT_ACKNOWLEDGED -> createAccount(accountKey, profile!!)
+        FieldRequirementsVerdict.INCOMPLETE ->
+            accountIncomplete(accountKey, requirements.missingRequired(result.fields))
+        else -> reportVault(accountKey) // VIOLATED, and any verdict a later release adds
+    }
+}
+```
+
+The verdicts split on one question you can answer without trusting the vault — did every required
+field arrive with something in it? `FieldRequirements.committed` is that answer, and it is what to
+create the account from.
+
+- `HONOURED` — the vault acknowledged exactly your optional set, and the data is complete. That is
+  the vault's claim, not a check of every value: an acknowledgement written by hand can sit beside
+  a blank optional value, which `committed` drops.
+- `MISMATCHED` — it acknowledged a different set, and the data is complete. The usual cause is a
+  declaration it could not read, so it asked the user for everything.
+- `NOT_ACKNOWLEDGED` — no acknowledgement, and the data is complete. A vault that predates this
+  release, which may have made the user fill in fields you marked optional, or one that answered
+  without acknowledging.
+- `INCOMPLETE` — no acknowledgement, and a required field is missing. An older vault let the user
+  skip it, or a vault on this release answered without acknowledging — through the builder that
+  writes none, or over a payload that fell short, where the requirements-aware builder omits it.
+  `FieldRequirements.missingRequired` names what is missing.
+- `VIOLATED` — an acknowledgement over a missing required field. This library's builder never
+  writes one, so the vault is writing it by hand or is broken — unless you required a field you
+  never sent. A field whose `TypedField` is null in your `Entry`, as Java code or a template Gson
+  built can leave one, is not encoded, so build your requirements from the keys whose value is
+  not null.
+
+Keep an `else` branch, as the handler above does: a later release may add a verdict.
+
+What to know before relying on it:
+
+- **A vault built before this release ignores your declaration.** It may let the user skip any
+  field, required ones included, or — like the interim Endeavor build — make them fill in every
+  field, optional ones included, and the only sign of either is `NOT_ACKNOWLEDGED` or
+  `INCOMPLETE`. Keep the key even when the data is incomplete — the profile exists and is bound to
+  it. There is no protocol path to fill a skipped field in later, and signing up again mints a
+  second profile.
+- **Required is not validation.** A required field holds *something*: `"x"` passes, and so does a
+  zero-width space. Check the value yourself.
+- **Blank is defined once**, by `FieldRequirements`, and the vault and your handler use the same
+  definition: a field that is absent, or whose value is empty or whitespace only. This library
+  never trims or rewrites a value.
+- **What Endeavor, the reference vault, does once it is built on this release.** Every yes/no field
+  starts as "Not answered", and an unanswered one is blank on the definition above whether it is
+  absent or an empty value — a required one blocks Save, an optional one is dropped — so a "No" the
+  user never chose is never sent. A required date must be picked, and an optional date that was
+  never picked is dropped; no date format is promised. If every field is optional and the user
+  leaves all of them blank, Endeavor creates a profile that is a key and nothing else: the answer
+  carries the key, an empty field map and the acknowledgement, and the verdict is `HONOURED`.
+- **The verdict is not authentication.** The acknowledgement is an unsigned extra, exactly as
+  trustworthy as the vault you addressed.
+- **The version number cannot tell you either.** `PROTOCOL_VERSION` stays 2. A vault echoes the
+  version of the library it was built on, which says what vocabulary it speaks and not whether it
+  implements this; the acknowledgement is the signal, and only a vault's answer carries it.
 
 ---
 
@@ -311,7 +423,7 @@ authentication.
 
 ## Rules you must not break
 
-Three of them. Each one is a way an integration can be entirely working and still wrong.
+Four of them. Each one is a way an integration can be entirely working and still wrong.
 
 ### The public key is the account identifier
 
@@ -367,6 +479,14 @@ This is the rule with the sharpest edge, because the failure is silent and perma
 with a stray newline authenticates perfectly for ever and matches no profile, so the account it
 names can never be moved or recovered.
 
+### Gate on the data, never on the version
+
+Whether a sign-up gave you what you need is a fact about the fields that arrived, and
+`FieldRequirements.committed` reads it straight off them — the handler under **Required and
+optional fields** creates an account only from what that returns. Never infer it from
+`vaultProtocolVersion`, or from any other number a vault echoes: a vault built on this library
+echoes the library's version whether or not it does what that release made possible.
+
 ---
 
 ## Testing your integration without a vault
@@ -415,6 +535,36 @@ this repository would notice the difference. What ties the recipe to the protoco
 reference vault calls to answer a real sign-up — so an answer built this way cannot drift from the
 answer a vault sends. That is the claim; the section makes no larger one.
 
+A sign-up that declares optional fields is tested the same way, with the vault-side half this
+library also publishes: `Utils.parseFieldRequirements` reads your request as a vault does, and the
+`createShareResultIntent` overload that takes those requirements writes the acknowledgement — but
+only when the payload beside it satisfies them, so the verdict your test sees is the one a real
+vault produces.
+
+<!-- snippet: GuideExamplesTest.kt#testing-optional-fields -->
+```kotlin
+// A vault that implements required fields reads your declaration off the request, stores
+// what the user filled in, and acknowledges the declaration only when what it stored
+// satisfies it. Build that answer and your handler meets the verdict it will really get:
+// here the user filled in both required fields and left the optional "phone" blank.
+val declared = Utils.parseFieldRequirements(request)!!
+val answer = Utils.createShareResultIntent(
+    FAKE_PUBLIC_KEY,
+    linkedMapOf(
+        "name" to TypedField(value = "Ada", type = FieldType.STRING),
+        "email" to TypedField(value = FAKE_EMAIL, type = FieldType.EMAIL),
+    ),
+    SIGN_UP_REQUEST,
+    declared,
+)
+val verdict = Utils.checkFieldRequirements(requirements, answer)
+// The optional set the vault says it applied. `null` means the answer acknowledges
+// nothing: a vault older than this release, one answering through the builder that
+// writes none, or one whose payload did not satisfy your declaration, with a required
+// field missing or a blank value left in.
+val applied = Utils.parseAppliedOptionalFields(answer)
+```
+
 A login test is the one case that still needs real cryptography: a signature has to be made with a
 private key before `isVerified` can be true of it. `ClientIntegrationExampleTest` is the file to
 read for that, and it generates its own keypair.
@@ -454,5 +604,8 @@ here would accept the intent as anything at all.
 - `ClientIntegrationExampleTest` — sign-up, query, login and refusal as one runnable sequence,
   against one profile, with a fixture vault answering. Read this if you are writing a vault: it
   runs both halves of the wire.
+- `RequirementsCompatibilityMatrixTest` — an app on 1.0.0 or on the release after it, against a
+  vault from before required fields, the interim one that required everything, and one that
+  implements them: what the user is asked for, what comes back, and the verdict, in every pairing.
 - `GuideExamplesTest` — the source of every block on this page.
 - `IntentBuilderTest` — the wire format as literals. This is the contract between the two apps.

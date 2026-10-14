@@ -14,7 +14,9 @@ import org.robolectric.annotation.Config
 
 /**
  * Protocol versioning: the one fact every future protocol addition depends on is that a
- * client can tell "the vault honoured this" from "the vault ignored what it did not know".
+ * client can tell a versioned vault from a legacy one that ignored what it did not know — the
+ * vocabulary a vault speaks, never whether it honoured a particular request, which a behaviour
+ * acknowledges with an extra of its own (see `Utils.PROTOCOL_VERSION`).
  * The version rides in both directions — attached to every outgoing request, echoed by a
  * vault that understands it — and like every wire constant, the key and the value are pinned
  * to literals here so a renamed constant cannot quietly rename the wire format.
@@ -22,7 +24,7 @@ import org.robolectric.annotation.Config
  * The echo is hostile input like every other extra: a peer app chooses what to send back, so
  * every unusable declaration must read as `null` — the legacy shape — and never as a throw,
  * and never as a *default*, because a `null` that quietly became a modern version would tell
- * a client its request was honoured by a vault that never saw it.
+ * a client it was talking to a modern vault when it was not.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -69,6 +71,28 @@ class ProtocolVersionTest {
                     intent.getStringExtra("extra_protocol_version"),
                 )
             }
+    }
+
+    /**
+     * Required fields moved no version: both of their builders write the same "2" as everything
+     * else, because the number marks vocabulary and the behaviour is acknowledged by an extra of its
+     * own. Pinned so a bump cannot slip in on the back of the feature.
+     */
+    @Test
+    fun `both requirements-aware builders still declare version 2`() {
+        val declaring = Utils.createShareIntent(context, entry, "req-1", setOf("name"), Utils.DEFAULT_ENDEAVOR_PACKAGE)
+        val acknowledging = Utils.createShareResultIntent(
+            "PUBLIC-KEY-BASE64",
+            mapOf("name" to TypedField("Ada", FieldType.STRING)),
+            "req-1",
+            FieldRequirements(listOf("name")),
+        )
+
+        assertEquals(2, Utils.PROTOCOL_VERSION)
+        assertEquals("2", declaring.getStringExtra("extra_protocol_version"))
+        assertEquals("2", acknowledging.getStringExtra("extra_protocol_version"))
+        assertEquals(2, Utils.parseShareRequest(declaring)?.protocolVersion)
+        assertEquals(2, Utils.parseShareResult(acknowledging)?.vaultProtocolVersion)
     }
 
     // ── A versioned vault's echo is surfaced ─────────────────────────────

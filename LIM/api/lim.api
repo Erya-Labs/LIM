@@ -78,6 +78,8 @@
 public final class dev.eryalabs.lim.Entry: java.lang.Object, android.os.Parcelable
 public static final class dev.eryalabs.lim.Entry$Companion: java.lang.Object, kotlinx.parcelize.Parceler
 public static final class dev.eryalabs.lim.Entry$Creator: java.lang.Object, android.os.Parcelable$Creator
+public final class dev.eryalabs.lim.FieldRequirements: java.lang.Object
+public final enum class dev.eryalabs.lim.FieldRequirementsVerdict: java.lang.Enum
 public final class dev.eryalabs.lim.FieldType: java.lang.Object
 public final class dev.eryalabs.lim.QueryRequest: java.lang.Object
 public final class dev.eryalabs.lim.QueryResult: java.lang.Object
@@ -125,6 +127,26 @@ public final dev.eryalabs.lim.Entry.getPublicKey(): java.lang.String
 public dev.eryalabs.lim.Entry.hashCode(): int
 public dev.eryalabs.lim.Entry.toString(): java.lang.String
 public final dev.eryalabs.lim.Entry.writeToParcel(android.os.Parcel, int): void
+public dev.eryalabs.lim.FieldRequirements.<init>(java.util.Collection): void
+public dev.eryalabs.lim.FieldRequirements.<init>(java.util.Collection, java.util.Collection): void
+public synthetic dev.eryalabs.lim.FieldRequirements.<init>(java.util.Collection, java.util.Collection, int, kotlin.jvm.internal.DefaultConstructorMarker): void
+public final dev.eryalabs.lim.FieldRequirements.committed(java.util.Map): java.util.Map
+public dev.eryalabs.lim.FieldRequirements.equals(java.lang.Object): boolean
+public final dev.eryalabs.lim.FieldRequirements.getFieldNames(): java.util.List
+public final dev.eryalabs.lim.FieldRequirements.getOptionalFields(): java.util.Set
+public final dev.eryalabs.lim.FieldRequirements.getRequiredFields(): java.util.Set
+public dev.eryalabs.lim.FieldRequirements.hashCode(): int
+public final dev.eryalabs.lim.FieldRequirements.isSatisfiedBy(java.util.Map): boolean
+public final dev.eryalabs.lim.FieldRequirements.missingRequired(java.util.Map): java.util.List
+public dev.eryalabs.lim.FieldRequirements.toString(): java.lang.String
+public static final dev.eryalabs.lim.FieldRequirementsVerdict.HONOURED: dev.eryalabs.lim.FieldRequirementsVerdict
+public static final dev.eryalabs.lim.FieldRequirementsVerdict.INCOMPLETE: dev.eryalabs.lim.FieldRequirementsVerdict
+public static final dev.eryalabs.lim.FieldRequirementsVerdict.MISMATCHED: dev.eryalabs.lim.FieldRequirementsVerdict
+public static final dev.eryalabs.lim.FieldRequirementsVerdict.NOT_ACKNOWLEDGED: dev.eryalabs.lim.FieldRequirementsVerdict
+public static final dev.eryalabs.lim.FieldRequirementsVerdict.VIOLATED: dev.eryalabs.lim.FieldRequirementsVerdict
+public static dev.eryalabs.lim.FieldRequirementsVerdict.getEntries(): kotlin.enums.EnumEntries
+public static dev.eryalabs.lim.FieldRequirementsVerdict.valueOf(java.lang.String): dev.eryalabs.lim.FieldRequirementsVerdict
+public static dev.eryalabs.lim.FieldRequirementsVerdict.values(): dev.eryalabs.lim.FieldRequirementsVerdict[]
 public static final dev.eryalabs.lim.FieldType.BOOLEAN: java.lang.String
 public static final dev.eryalabs.lim.FieldType.DATE: java.lang.String
 public static final dev.eryalabs.lim.FieldType.DECIMAL: java.lang.String
@@ -339,10 +361,12 @@ public dev.eryalabs.lim.TypedField.toString(): java.lang.String
 public final dev.eryalabs.lim.TypedField.writeToParcel(android.os.Parcel, int): void
 public static final dev.eryalabs.lim.Utils.DEFAULT_ENDEAVOR_PACKAGE: java.lang.String
 public static final dev.eryalabs.lim.Utils.EXTRA_ALGORITHM: java.lang.String
+public static final dev.eryalabs.lim.Utils.EXTRA_APPLIED_OPTIONAL_FIELDS: java.lang.String
 public static final dev.eryalabs.lim.Utils.EXTRA_ENTRY_JSON: java.lang.String
 public static final dev.eryalabs.lim.Utils.EXTRA_FIELDS_JSON: java.lang.String
 public static final dev.eryalabs.lim.Utils.EXTRA_NONCE: java.lang.String
 public static final dev.eryalabs.lim.Utils.EXTRA_NONCE_FORMAT: java.lang.String
+public static final dev.eryalabs.lim.Utils.EXTRA_OPTIONAL_FIELDS: java.lang.String
 public static final dev.eryalabs.lim.Utils.EXTRA_PROTOCOL_VERSION: java.lang.String
 public static final dev.eryalabs.lim.Utils.EXTRA_PUBLIC_KEY: java.lang.String
 public static final dev.eryalabs.lim.Utils.EXTRA_QUERY_RESULT_FIELDS: java.lang.String
@@ -356,6 +380,7 @@ public static final dev.eryalabs.lim.Utils.STATEMENT_ENVELOPE_V1: java.lang.Stri
 public static final dev.eryalabs.lim.Utils.STATEMENT_RECOVER_V1: java.lang.String
 public static final dev.eryalabs.lim.Utils.STATEMENT_REVOKE_V1: java.lang.String
 public static final dev.eryalabs.lim.Utils.STATEMENT_ROTATE_V1: java.lang.String
+public final dev.eryalabs.lim.Utils.checkFieldRequirements(dev.eryalabs.lim.FieldRequirements, android.content.Intent): dev.eryalabs.lim.FieldRequirementsVerdict
 public static synthetic dev.eryalabs.lim.Utils.createQueryIntent$default(dev.eryalabs.lim.Utils, android.content.Context, java.lang.String, java.lang.String, java.lang.String, int, java.lang.Object): android.content.Intent
 public final dev.eryalabs.lim.Utils.createQueryIntent(android.content.Context, java.lang.String, java.lang.String): android.content.Intent
 public final dev.eryalabs.lim.Utils.createQueryIntent(android.content.Context, java.lang.String, java.lang.String, java.lang.String): android.content.Intent
@@ -371,6 +396,7 @@ public static synthetic dev.eryalabs.lim.Utils.createShareIntent$default(dev.ery
 public final dev.eryalabs.lim.Utils.createShareIntent(android.content.Context, dev.eryalabs.lim.Entry): android.content.Intent
 public final dev.eryalabs.lim.Utils.createShareIntent(android.content.Context, dev.eryalabs.lim.Entry, java.lang.String): android.content.Intent
 public final dev.eryalabs.lim.Utils.createShareIntent(android.content.Context, dev.eryalabs.lim.Entry, java.lang.String, java.lang.String): android.content.Intent
+public final dev.eryalabs.lim.Utils.createShareIntent(android.content.Context, dev.eryalabs.lim.Entry, java.lang.String, java.util.Set, java.lang.String): android.content.Intent
 public static synthetic dev.eryalabs.lim.Utils.createShareResultIntent$default(dev.eryalabs.lim.Utils, dev.eryalabs.lim.ShareRequest, java.lang.String, java.util.Map, int, java.lang.Object): android.content.Intent
 public static synthetic dev.eryalabs.lim.Utils.createShareResultIntent$default(dev.eryalabs.lim.Utils, java.lang.String, java.util.Map, java.lang.String, int, java.lang.Object): android.content.Intent
 public final dev.eryalabs.lim.Utils.createShareResultIntent(dev.eryalabs.lim.ShareRequest, java.lang.String): android.content.Intent
@@ -378,6 +404,7 @@ public final dev.eryalabs.lim.Utils.createShareResultIntent(dev.eryalabs.lim.Sha
 public final dev.eryalabs.lim.Utils.createShareResultIntent(java.lang.String): android.content.Intent
 public final dev.eryalabs.lim.Utils.createShareResultIntent(java.lang.String, java.util.Map): android.content.Intent
 public final dev.eryalabs.lim.Utils.createShareResultIntent(java.lang.String, java.util.Map, java.lang.String): android.content.Intent
+public final dev.eryalabs.lim.Utils.createShareResultIntent(java.lang.String, java.util.Map, java.lang.String, dev.eryalabs.lim.FieldRequirements): android.content.Intent
 public static synthetic dev.eryalabs.lim.Utils.createSignChallengeIntent$default(dev.eryalabs.lim.Utils, android.content.Context, java.lang.String, byte[], java.lang.String, java.lang.String, java.lang.String, int, java.lang.Object): android.content.Intent
 public final dev.eryalabs.lim.Utils.createSignChallengeIntent(android.content.Context, java.lang.String, byte[], java.lang.String): android.content.Intent
 public final dev.eryalabs.lim.Utils.createSignChallengeIntent(android.content.Context, java.lang.String, byte[], java.lang.String, java.lang.String): android.content.Intent
@@ -410,6 +437,8 @@ public final dev.eryalabs.lim.Utils.isStatementPreImage(byte[]): boolean
 public final dev.eryalabs.lim.Utils.liveAuthorizations(java.util.List, java.util.List): java.util.List
 public final dev.eryalabs.lim.Utils.matchesRequestCode(android.content.Intent, java.lang.String): boolean
 public final dev.eryalabs.lim.Utils.nonceTimestamp(byte[]): java.lang.Long
+public final dev.eryalabs.lim.Utils.parseAppliedOptionalFields(android.content.Intent): java.util.Set
+public final dev.eryalabs.lim.Utils.parseFieldRequirements(android.content.Intent): dev.eryalabs.lim.FieldRequirements
 public final dev.eryalabs.lim.Utils.parseQueryRequest(android.content.Intent): dev.eryalabs.lim.QueryRequest
 public final dev.eryalabs.lim.Utils.parseQueryResult(android.content.Intent): dev.eryalabs.lim.QueryResult
 public final dev.eryalabs.lim.Utils.parseShareRequest(android.content.Intent): dev.eryalabs.lim.ShareRequest

@@ -17,6 +17,7 @@ import org.robolectric.annotation.Config
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.Signature
+import java.util.TreeMap
 
 /**
  * The half of the wire format this library had never written.
@@ -972,5 +973,103 @@ class ResultBuilderTest {
         )
         assertEquals(signKeys, sign.first.extras!!.keySet())
         assertEquals(signKeys, sign.second.extras!!.keySet())
+    }
+
+    // ── The requirements-aware share result ─────────────────────────────
+
+    /** `email` required, `age` optional — the class fixture's two fields. */
+    private val requirements = FieldRequirements(fields.keys, setOf("age"))
+
+    /**
+     * The four 1.0.0 extras exactly as the three-argument builder writes them, plus the
+     * acknowledgement naming the applied set — and nothing else.
+     */
+    @Test
+    fun `the requirements-aware share result writes the 1_0_0 extras plus the acknowledgement`() {
+        val intent = Utils.createShareResultIntent(publicKey, fields, "req-5", requirements)
+        val plain = Utils.createShareResultIntent(publicKey, fields, "req-5")
+
+        assertEquals("""["age"]""", intent.getStringExtra("extra_applied_optional_fields"))
+        assertEquals(plain.extras!!.keySet() + "extra_applied_optional_fields", intent.extras!!.keySet())
+        plain.extras!!.keySet().forEach { key ->
+            assertEquals("extra $key", plain.getStringExtra(key), intent.getStringExtra(key))
+        }
+        assertEquals("2", intent.getStringExtra("extra_protocol_version"))
+        assertEquals(
+            "nothing optional is acknowledged as the empty array, not omitted",
+            "[]",
+            Utils.createShareResultIntent(publicKey, fields, "req-5", FieldRequirements(fields.keys))
+                .getStringExtra("extra_applied_optional_fields"),
+        )
+        assertEquals(
+            "a null request code attaches nothing, as on the sibling",
+            false,
+            Utils.createShareResultIntent(publicKey, fields, null, requirements).hasExtra("extra_share_request_code"),
+        )
+    }
+
+    /**
+     * Over a payload that does not satisfy the requirements the acknowledgement is omitted, never
+     * thrown and never written — so a buggy vault degrades to an older vault's answer instead of a
+     * false claim.
+     */
+    @Test
+    fun `no acknowledgement is written over a payload that does not satisfy the requirements`() {
+        val missingRequired = linkedMapOf("age" to TypedField("36", FieldType.INTEGER))
+        val blankRequired = linkedMapOf(
+            "email" to TypedField("  ", FieldType.EMAIL),
+            "age" to TypedField("36", FieldType.INTEGER),
+        )
+        val blankOptionalKept = fields + ("age" to TypedField("", FieldType.INTEGER))
+
+        for ((case, payload) in listOf(
+            "a required field missing" to missingRequired,
+            "a required field blank" to blankRequired,
+            "a blank optional field not dropped" to blankOptionalKept,
+        )) {
+            val intent = Utils.createShareResultIntent(publicKey, payload, "req-5", requirements)
+            assertFalse("$case: no acknowledgement", intent.hasExtra("extra_applied_optional_fields"))
+            assertEquals(
+                "$case: the rest is the sibling's answer exactly",
+                Utils.createShareResultIntent(publicKey, payload, "req-5").extras!!.keySet(),
+                intent.extras!!.keySet(),
+            )
+        }
+    }
+
+    /**
+     * The old-client differential: whatever the requirements, a 1.0.0 client's parse of the new
+     * builder's answer is its parse of the three-argument builder's.
+     */
+    @Test
+    fun `an old client parses the requirements-aware answer exactly as the 1_0_0 one`() {
+        for (declared in listOf(requirements, FieldRequirements(fields.keys), FieldRequirements(listOf("missing")))) {
+            assertEquals(
+                Utils.parseShareResult(Utils.createShareResultIntent(publicKey, fields, "req-5")),
+                Utils.parseShareResult(Utils.createShareResultIntent(publicKey, fields, "req-5", declared)),
+            )
+        }
+    }
+
+    /**
+     * The payload is checked by the keys it will be encoded under, not by the map's own lookup. A
+     * case-insensitive map holding `EMAIL` answers for `email`, but it is encoded as `"EMAIL"`, so
+     * the client looking up `email` finds nothing — an acknowledgement over it would make the
+     * client read the answer as `VIOLATED` and blame the vault. None is written, and the client
+     * reads `INCOMPLETE`, as it would for any answer missing a required field.
+     */
+    @Test
+    fun `a case-insensitive payload whose keys lack a required field is not acknowledged`() {
+        val draft = TreeMap<String, TypedField>(String.CASE_INSENSITIVE_ORDER).apply {
+            put("EMAIL", TypedField("ada@example.com", FieldType.EMAIL))
+            put("age", TypedField("36", FieldType.INTEGER))
+        }
+        assertTrue("precondition: the map answers for email by itself", draft.containsKey("email"))
+
+        val intent = Utils.createShareResultIntent(publicKey, draft, "req-5", requirements)
+
+        assertFalse("no acknowledgement", intent.hasExtra("extra_applied_optional_fields"))
+        assertEquals(setOf("EMAIL", "age"), Utils.parseShareResult(intent)!!.fields.keys)
+        assertEquals(FieldRequirementsVerdict.INCOMPLETE, Utils.checkFieldRequirements(requirements, intent))
     }
 }

@@ -14,7 +14,9 @@ describes the surface rather than listing changes. The next entry will be an ord
 `ChangelogTest` keeps this file honest in both directions. Forwards: every published function and
 constant on `Utils`, every published type in `dev.eryalabs.lim`, and both published top-level
 members of `Redaction.kt` must be named below, and every published function must lead a bullet —
-alone or beside its siblings, as many do. Backwards: every name this file cites in a code span
+alone or beside its siblings, as many do. "Below" is any `## ` section, the `## Unreleased` one
+included, because a member added since the last release is described there until a release
+heading takes it over. Backwards: every name this file cites in a code span
 must either name something this library publishes or be recorded in the test as a name it does not
 publish, which is where `Parcelable`, `SecureRandom` and `SHA256withRSA` live. So a bullet left behind
 by a rename reddens a test rather than quietly becoming a lie.
@@ -24,6 +26,66 @@ What that census does *not* reach is the members of the data types — `Entry`'s
 prose, checked only in the backwards direction, and pinned member-by-member by `PublicApiAuditTest`
 and by `LIM/api/lim.api`, which is the record of the binary surface and the right place to read a
 diff.
+
+## Unreleased
+
+No version number yet: which release this becomes, and when it is tagged and published, is a human
+decision. Everything below is additive — `LIM/api/lim.api` gains lines and loses none.
+
+### Share (sign-up): required and optional fields
+
+A sign-up can now say which of its fields the user may leave blank, a vault can say what it
+applied, and both sides share one definition of blank.
+
+- `EXTRA_OPTIONAL_FIELDS` — on a share request, a JSON array naming the entry's fields the user
+  may leave blank. **Every declared field not named is required.** Read strictly: anything but one
+  flat array of strings means nothing is optional, and nothing is salvaged.
+- `EXTRA_APPLIED_OPTIONAL_FIELDS` — on a successful share result only, the optional set the vault
+  applied: its acknowledgement. A different key from the request's on purpose, so a vault that
+  answers by echoing the request back can never forge it.
+- `createShareIntent` — a fourth overload, taking the request code, a set of optional field
+  names and the vault's package, with no defaults at all, so no call with fewer arguments can
+  reach it. Names that are not fields of the entry as it is sent are not sent either, so a
+  misspelt one leaves its field required. The 1.0.0 overloads are unchanged and declare nothing
+  optional, so on a vault that implements this every field they send is required.
+- `FieldRequirements` — the declared field names, the optional subset and the required rest, and
+  the one definition of blank: absent, `null`, or whitespace only. `missingRequired`,
+  `isSatisfiedBy` and `committed` — the map to keep, `null` exactly when a required field is
+  missing, with blank optional fields dropped. A plain class rather than a data class, and its
+  `toString` prints counts only.
+- `FieldRequirementsVerdict` — `HONOURED`, `MISMATCHED`, `NOT_ACKNOWLEDGED`, `INCOMPLETE` and
+  `VIOLATED`. The first three mean every required field arrived non-blank and the last two mean
+  one did not, so the verdict splits exactly on what `committed` says. Callers should keep a
+  fallback branch: a later release may add a verdict.
+- `parseFieldRequirements` — the vault's side: the entry's field names and the declared optional
+  set, read off a share request. `null` exactly when `parseShareRequest` is, and every field
+  required when the declaration is absent or unreadable.
+- `parseAppliedOptionalFields` — the client's raw reading of the acknowledgement; `null` for none.
+- `checkFieldRequirements` — the client's verdict on a sign-up's answer against what it declared.
+  Named "check" because nothing in a share result is signed; the acknowledgement is as
+  trustworthy as the vault that sent it.
+- `createShareResultIntent` — an overload taking the declared `FieldRequirements`, which writes
+  the acknowledgement only when the payload satisfies them and otherwise omits it rather than
+  throwing. A vault therefore never makes a claim its own answer contradicts.
+
+### Vault behaviour you will see
+
+A vault that implements this requires every field a sign-up declares unless the sign-up named it
+optional — **including for an app built against 1.0.0**, which can name none. Users can no longer
+skip a field such an app asked for; they fill it in or back out. `parseShareResult` returns the
+same `ShareResult` with or without the acknowledgement, so such an app reads the answer exactly as
+before.
+
+### Compatibility
+
+- `LIM/api/lim.api` gains 29 lines and loses or changes none. Every existing call resolves as it
+  did, in Kotlin and in Java: the 1.0.0 positional trap on `createShareIntent` included, and a
+  four-argument call whose fourth argument the compiler has to infer — a literal null, or a
+  mocking library's any() — because the new overload has five parameters and no shorter form.
+- Two new wire keys; no existing key, action or encoding changes.
+- `PROTOCOL_VERSION` stays 2. Every vault echoes the version of the library it was built on, so the
+  number cannot say whether a vault implements this; the acknowledgement is the signal instead,
+  and the version keeps meaning what it meant to the query and login flows.
 
 ## 1.0.0 — 2026-10-10
 

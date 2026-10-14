@@ -14,7 +14,9 @@ package dev.eryalabs.lim
  *                       profile is queried and authenticated from now on.
  * @property fields      The stored typed fields as the vault echoed them, decoded from
  *                       [Utils.EXTRA_FIELDS_JSON]. Empty when the payload was absent or
- *                       malformed.
+ *                       malformed. If you declared optional fields, keep
+ *                       [FieldRequirements.committed] of this rather than this, and read the
+ *                       vault's acknowledgement with [Utils.checkFieldRequirements].
  * @property requestCode The correlation token echoed back by the vault, or `null` when absent
  *                       or blank — the vault only echoes one when the share was created with
  *                       the [Utils.createShareIntent] overload that carries one.

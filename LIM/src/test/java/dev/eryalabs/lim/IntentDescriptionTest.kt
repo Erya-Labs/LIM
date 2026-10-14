@@ -828,6 +828,58 @@ class IntentDescriptionTest {
     }
 
     /**
+     * The two optional-field lists *are* lists of field names, which is exactly what this line must
+     * not print — so each renders as a count of what the strict reader found, or `undecodable`, and
+     * never falls back to the generic renderer. `0 names` and `absent` are different on purpose:
+     * only the first was sent by a client that knew about required fields.
+     */
+    @Test
+    fun `the optional-field lists render as counts, and never as a name`() {
+        val probe = "SECRET_FIELD_NAME"
+        val probeEntry = Entry(
+            "profile-1",
+            linkedMapOf(probe to TypedField(""), "other" to TypedField("")),
+            PUBLIC_KEY,
+        )
+        val declaring = Utils.describeIntent(
+            Utils.createShareIntent(context, probeEntry, "req-1", setOf(probe), Utils.DEFAULT_ENDEAVOR_PACKAGE),
+        )
+        assertExtra(declaring, Utils.EXTRA_OPTIONAL_FIELDS, "1 name")
+        assertExtra(declaring, Utils.EXTRA_APPLIED_OPTIONAL_FIELDS, "absent")
+        assertFalse("a field name reached a log line: $declaring", probe in declaring)
+
+        val acknowledging = Utils.describeIntent(
+            Utils.createShareResultIntent(
+                PUBLIC_KEY,
+                mapOf(probe to TypedField("x"), "other" to TypedField("y")),
+                "req-1",
+                FieldRequirements(listOf(probe, "other"), listOf(probe, "other")),
+            ),
+        )
+        assertExtra(acknowledging, Utils.EXTRA_APPLIED_OPTIONAL_FIELDS, "2 names")
+        assertExtra(acknowledging, Utils.EXTRA_OPTIONAL_FIELDS, "absent")
+        assertFalse("a field name reached a log line: $acknowledging", probe in acknowledging)
+
+        for ((value, rendered) in listOf(
+            "[]" to "0 names",
+            """["a","a","b"]""" to "3 names",
+            "[$probe]" to "undecodable",
+            """{"$probe":1}""" to "undecodable",
+        )) {
+            for (key in listOf(Utils.EXTRA_OPTIONAL_FIELDS, Utils.EXTRA_APPLIED_OPTIONAL_FIELDS)) {
+                val description = Utils.describeIntent(resultIntent(key to value))
+                assertExtra(description, key, rendered)
+                assertFalse("a field name reached a log line: $description", probe in description)
+            }
+        }
+        assertEquals(
+            "neither list is a flow, so a declaration alone names none",
+            emptySet<String>(),
+            flowsIn(Utils.describeIntent(resultIntent(Utils.EXTRA_OPTIONAL_FIELDS to "[]"))),
+        )
+    }
+
+    /**
      * Advisory, the [Utils.validateEntry] precedent: describing an intent changes nothing about
      * what any parser accepts, so the same intent parses identically before and after.
      */
@@ -906,6 +958,8 @@ class IntentDescriptionTest {
             Utils.EXTRA_ALGORITHM,
             Utils.EXTRA_FIELDS_JSON,
             Utils.EXTRA_QUERY_RESULT_FIELDS,
+            Utils.EXTRA_OPTIONAL_FIELDS,
+            Utils.EXTRA_APPLIED_OPTIONAL_FIELDS,
             Utils.EXTRA_SHARE_REQUEST_CODE,
             Utils.EXTRA_PROTOCOL_VERSION,
         )

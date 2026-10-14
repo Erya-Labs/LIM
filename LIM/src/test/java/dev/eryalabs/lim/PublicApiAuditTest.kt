@@ -172,6 +172,41 @@ class PublicApiAuditTest {
         "Utils.encodeFields" to "FieldsCodecTest: round trip preserves every key, value and type",
         "Utils.decodeFields" to "FieldsCodecTest: round trip preserves every key, value and type",
         "Utils.decodeEntry" to "EntryCodecTest: round trip returns a well-formed entry unchanged",
+        // Required and optional fields: two wire keys, the vault's reader of the declaration, the
+        // client's raw reader of the acknowledgement and its verdict. `createShareIntent` and
+        // `createShareResultIntent` gained an overload each, under the keys already listed above.
+        "Utils.EXTRA_OPTIONAL_FIELDS" to "IntentBuilderTest: the required-fields extra keys match their wire literals",
+        "Utils.EXTRA_APPLIED_OPTIONAL_FIELDS" to "IntentBuilderTest: the required-fields extra keys match their wire literals",
+        "Utils.parseFieldRequirements" to "FieldRequirementsParsingTest: a declaration from the builder is read back in entry order",
+        "Utils.parseAppliedOptionalFields" to "ResultParsingTest: an acknowledgement is read back as the set the vault applied",
+        "Utils.checkFieldRequirements" to "FieldRequirementsVerdictTest: an acknowledgement of exactly the declared set over complete data is HONOURED",
+
+        // ── FieldRequirements ────────────────────────────────────────────
+        //
+        // A plain class, not a data class, so there is no `copy` and no `componentN` to audit: the
+        // members below are the whole of it.
+        "FieldRequirements.getFieldNames" to "FieldRequirementsTest: names are de-duplicated, ordered and intersected",
+        "FieldRequirements.getOptionalFields" to "FieldRequirementsTest: names are de-duplicated, ordered and intersected",
+        "FieldRequirements.getRequiredFields" to "FieldRequirementsTest: names are de-duplicated, ordered and intersected",
+        "FieldRequirements.missingRequired" to "FieldRequirementsTest: missingRequired treats every blank shape as missing and nothing else",
+        "FieldRequirements.isSatisfiedBy" to "FieldRequirementsTest: a blank optional value in the payload is not satisfied",
+        "FieldRequirements.committed" to "FieldRequirementsTest: committed drops blank optional fields and undeclared keys",
+        "FieldRequirements.equals" to "FieldRequirementsTest: equality is the ordered names and the optional set",
+        "FieldRequirements.hashCode" to "FieldRequirementsTest: equality is the ordered names and the optional set",
+        "FieldRequirements.toString" to "ToStringRedactionTest: field requirements toString prints counts and never a name",
+
+        // ── FieldRequirementsVerdict ─────────────────────────────────────
+        //
+        // The `StatementVerdict` rule: each constant is claimed by the test that proves
+        // `checkFieldRequirements` can return it.
+        "FieldRequirementsVerdict.HONOURED" to "FieldRequirementsVerdictTest: an acknowledgement of exactly the declared set over complete data is HONOURED",
+        "FieldRequirementsVerdict.MISMATCHED" to "FieldRequirementsVerdictTest: an acknowledgement of another set over complete data is MISMATCHED",
+        "FieldRequirementsVerdict.NOT_ACKNOWLEDGED" to "FieldRequirementsVerdictTest: complete data with no acknowledgement is NOT_ACKNOWLEDGED",
+        "FieldRequirementsVerdict.INCOMPLETE" to "FieldRequirementsVerdictTest: a missing required field with no acknowledgement is INCOMPLETE",
+        "FieldRequirementsVerdict.VIOLATED" to "FieldRequirementsVerdictTest: an acknowledgement over a missing required field is VIOLATED",
+        "FieldRequirementsVerdict.values" to "FieldRequirementsVerdictTest: the verdict enum exposes exactly the documented values in order",
+        "FieldRequirementsVerdict.valueOf" to "FieldRequirementsVerdictTest: the verdict enum exposes exactly the documented values in order",
+        "FieldRequirementsVerdict.getEntries" to "FieldRequirementsVerdictTest: the verdict enum exposes exactly the documented values in order",
 
         // ── FieldType ────────────────────────────────────────────────────
         "FieldType.INSTANCE" to "every FieldTypeTest case — Java's handle on the Kotlin object",
@@ -689,8 +724,11 @@ class PublicApiAuditTest {
         val expected = mapOf(
             "shareDataAction" to listOf(0, 1),
             "signChallengeAction" to listOf(0, 1),
-            // 2 generated, 3 the targetPackage overload, 4 the requestCode one. No second 3.
-            "createShareIntent" to listOf(2, 3, 4),
+            // 2 generated, 3 the targetPackage overload, 4 the requestCode one. No second 3. The
+            // required-fields overload adds its one arity, 5, and no other: with no defaults it
+            // has no generated four-parameter form, so no second 4 sits beside the requestCode
+            // one for an inferred fourth argument — `null`, a mock's `any()` — to be ambiguous with.
+            "createShareIntent" to listOf(2, 3, 4, 5),
             "shareEntry" to listOf(2, 3),
             "createQueryIntent" to listOf(3, 4),
             // T28's result builders: one required argument each, then the optionals. The
@@ -706,7 +744,9 @@ class PublicApiAuditTest {
             // is what T21's platform declaration clash turned on, and this list is the
             // measurement of that. The sign-challenge name reaches seven because its request
             // overload publishes three arities to the other two's two.
-            "createShareResultIntent" to listOf(1, 2, 2, 3, 3),
+            // The share name also carries the requirements-aware overload: one arity, 4, and no
+            // default anywhere in it.
+            "createShareResultIntent" to listOf(1, 2, 2, 3, 3, 4),
             "createQueryResultIntent" to listOf(1, 2, 2, 3, 3),
             "createSignChallengeResultIntent" to listOf(1, 2, 2, 3, 3, 4, 4),
             "generateNonce" to listOf(0, 1, 2),
@@ -760,7 +800,7 @@ class PublicApiAuditTest {
                     "QueryResult", "ShareResult", "SignChallengeResult",
                     "ShareRequest", "QueryRequest", "SignChallengeRequest",
                     "RotationStatement", "RecoveryAuthorization", "Revocation",
-                    "StatementVerdict",
+                    "StatementVerdict", "FieldRequirements", "FieldRequirementsVerdict",
                     "SignedStatement", "SignedStatement\$Rotate", "SignedStatement\$Recover",
                     "SignedStatement\$Revoke",
                 ),
@@ -1214,6 +1254,25 @@ class PublicApiAuditTest {
             "Entry.hashCode(): int",
             "Entry.toString(): String",
             "Entry.writeToParcel(Parcel, int): void",
+            // Required and optional fields. No `copy`, no `componentN`: a plain class, so its
+            // constructor's parameter list is not frozen the way a data class's would be.
+            "FieldRequirements.committed(Map<String, TypedField>): Map<String, TypedField>",
+            "FieldRequirements.equals(Object): boolean",
+            "FieldRequirements.getFieldNames(): List<String>",
+            "FieldRequirements.getOptionalFields(): Set<String>",
+            "FieldRequirements.getRequiredFields(): Set<String>",
+            "FieldRequirements.hashCode(): int",
+            "FieldRequirements.isSatisfiedBy(Map<String, TypedField>): boolean",
+            "FieldRequirements.missingRequired(Map<String, TypedField>): List<String>",
+            "FieldRequirements.toString(): String",
+            "FieldRequirementsVerdict.HONOURED: FieldRequirementsVerdict",
+            "FieldRequirementsVerdict.INCOMPLETE: FieldRequirementsVerdict",
+            "FieldRequirementsVerdict.MISMATCHED: FieldRequirementsVerdict",
+            "FieldRequirementsVerdict.NOT_ACKNOWLEDGED: FieldRequirementsVerdict",
+            "FieldRequirementsVerdict.VIOLATED: FieldRequirementsVerdict",
+            "FieldRequirementsVerdict.getEntries(): EnumEntries<FieldRequirementsVerdict>",
+            "FieldRequirementsVerdict.valueOf(String): FieldRequirementsVerdict",
+            "FieldRequirementsVerdict.values(): FieldRequirementsVerdict[]",
             "FieldType.BOOLEAN: String",
             "FieldType.DATE: String",
             "FieldType.DECIMAL: String",
@@ -1391,10 +1450,12 @@ class PublicApiAuditTest {
             "TypedField.writeToParcel(Parcel, int): void",
             "Utils.DEFAULT_ENDEAVOR_PACKAGE: String",
             "Utils.EXTRA_ALGORITHM: String",
+            "Utils.EXTRA_APPLIED_OPTIONAL_FIELDS: String",
             "Utils.EXTRA_ENTRY_JSON: String",
             "Utils.EXTRA_FIELDS_JSON: String",
             "Utils.EXTRA_NONCE: String",
             "Utils.EXTRA_NONCE_FORMAT: String",
+            "Utils.EXTRA_OPTIONAL_FIELDS: String",
             "Utils.EXTRA_PROTOCOL_VERSION: String",
             "Utils.EXTRA_PUBLIC_KEY: String",
             "Utils.EXTRA_QUERY_RESULT_FIELDS: String",
@@ -1408,6 +1469,9 @@ class PublicApiAuditTest {
             "Utils.STATEMENT_RECOVER_V1: String",
             "Utils.STATEMENT_REVOKE_V1: String",
             "Utils.STATEMENT_ROTATE_V1: String",
+            // The client's verdict on a sign-up's answer: requirements first, because they are
+            // the caller's own; the result second and nullable, because it arrived over IPC.
+            "Utils.checkFieldRequirements(FieldRequirements, Intent): FieldRequirementsVerdict",
             // T21 added `@JvmOverloads` to every defaulted function in `Utils` bar one, so each
             // now publishes its shorter arities alongside the full one a Kotlin caller gets.
             // Every line it added is a *new* arity; not one existing line moved, which is the
@@ -1438,12 +1502,18 @@ class PublicApiAuditTest {
             // and does not compile, so a Java caller still spells its `targetPackage` out.
             "Utils.createShareIntent(Context, Entry): Intent",
             "Utils.createShareIntent(Context, Entry, String): Intent",
+            // The required-fields overload, at its one arity: every parameter explicit, so no
+            // generated shorter form exists for a 1.0.0 four-argument call to collide with.
+            "Utils.createShareIntent(Context, Entry, String, Set<String>, String): Intent",
             "Utils.createShareIntent(Context, Entry, String, String): Intent",
             "Utils.createShareResultIntent(ShareRequest, String): Intent",
             "Utils.createShareResultIntent(ShareRequest, String, Map<String, TypedField>): Intent",
             "Utils.createShareResultIntent(String): Intent",
             "Utils.createShareResultIntent(String, Map<String, TypedField>): Intent",
             "Utils.createShareResultIntent(String, Map<String, TypedField>, String): Intent",
+            // The requirements-aware share result: every parameter explicit, so no `$default`
+            // and no shorter arity that a 1.0.0 three-argument call could resolve to.
+            "Utils.createShareResultIntent(String, Map<String, TypedField>, String, FieldRequirements): Intent",
             // T12 widened this with a defaulted `nonceFormat: String?` — an addition, which
             // stop rule 10 permits; the pre-T12 arity came back as a *generated* overload under
             // T21 rather than as the Kotlin signature (defaults compile to one method plus a
@@ -1483,6 +1553,8 @@ class PublicApiAuditTest {
             "Utils.liveAuthorizations(List<RecoveryAuthorization>, List<Revocation>): List<RecoveryAuthorization>",
             "Utils.matchesRequestCode(Intent, String): boolean",
             "Utils.nonceTimestamp(byte[]): Long",
+            "Utils.parseAppliedOptionalFields(Intent): Set<String>",
+            "Utils.parseFieldRequirements(Intent): FieldRequirements",
             "Utils.parseQueryRequest(Intent): QueryRequest",
             "Utils.parseQueryResult(Intent): QueryResult",
             "Utils.parseShareRequest(Intent): ShareRequest",

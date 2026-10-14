@@ -168,6 +168,97 @@ public class JavaInteropTest {
                 Utils.INSTANCE.parseShareRequest(tagged) != null);
     }
 
+    /**
+     * Required and optional fields as a Java integrator writes them: both constructors, the
+     * five-argument request — the package spelled out, because the overload has no defaults — the
+     * verdict in a {@code switch} with a {@code default}, {@code committed} as the profile to keep,
+     * and a vault's answer built with the requirements-aware result builder.
+     */
+    @Test
+    public void requiredFieldsAreCallableFromJava() {
+        Entry entry = entry();
+        FieldRequirements req =
+                new FieldRequirements(entry.getFields().keySet(), Collections.singleton("email"));
+        assertEquals(Collections.singleton("email"), req.getOptionalFields());
+        assertEquals(
+                "the one-argument constructor makes every field required",
+                entry.getFields().keySet(),
+                new FieldRequirements(entry.getFields().keySet()).getRequiredFields());
+
+        Intent request = Utils.INSTANCE.createShareIntent(
+                context, entry, REQUEST_CODE, req.getOptionalFields(), Utils.DEFAULT_ENDEAVOR_PACKAGE);
+        assertEquals(Utils.DEFAULT_ENDEAVOR_PACKAGE, request.getPackage());
+        assertEquals(REQUEST_CODE, request.getStringExtra(Utils.EXTRA_SHARE_REQUEST_CODE));
+        assertEquals("[\"email\"]", request.getStringExtra(Utils.EXTRA_OPTIONAL_FIELDS));
+
+        // The vault's side.
+        FieldRequirements read = Utils.INSTANCE.parseFieldRequirements(request);
+        assertEquals(req, read);
+        Map<String, TypedField> stored = new LinkedHashMap<>();
+        stored.put("name", new TypedField("Ada", FieldType.STRING));
+        Intent data = Utils.INSTANCE.createShareResultIntent(
+                "PUBLIC-KEY-BASE64", read.committed(stored), REQUEST_CODE, read);
+
+        // The client's side.
+        ShareResult result = Utils.INSTANCE.parseShareResult(data);
+        Map<String, TypedField> profile;
+        String outcome;
+        switch (Utils.INSTANCE.checkFieldRequirements(req, data)) {
+            case HONOURED:
+            case MISMATCHED:
+            case NOT_ACKNOWLEDGED:
+                profile = req.committed(result.getFields());
+                outcome = "created";
+                break;
+            case INCOMPLETE:
+                profile = null;
+                outcome = "incomplete " + req.missingRequired(result.getFields());
+                break;
+            default:
+                profile = null;
+                outcome = "reported";
+        }
+        assertEquals("created", outcome);
+        assertEquals(Collections.singleton("name"), profile.keySet());
+        assertEquals(Collections.singleton("email"), Utils.INSTANCE.parseAppliedOptionalFields(data));
+        assertEquals(
+                FieldRequirementsVerdict.INCOMPLETE,
+                Utils.INSTANCE.checkFieldRequirements(req, null));
+        assertNull(Utils.INSTANCE.parseFieldRequirements(null));
+        assertNull(Utils.INSTANCE.parseAppliedOptionalFields(null));
+    }
+
+    /**
+     * A four-argument request-code share whose fourth argument {@code javac} has to infer — a
+     * literal {@code null}, Mockito's {@code any()}, a generic getter — still has exactly one
+     * candidate, the 1.0.0 {@code (Context, Entry, String, String)}. The optional-fields overload
+     * publishes no four-parameter form, so nothing here is ambiguous: this file compiling is half
+     * the check, and the calls below show where they landed.
+     */
+    @Test
+    public void aFourthArgumentJavacMustInferStillBindsTheRequestCodeOverload() {
+        Entry entry = entry();
+        Intent inferred = Utils.INSTANCE.createShareIntent(context, entry, REQUEST_CODE, inferred("dev.other.vault"));
+        assertEquals("dev.other.vault", inferred.getPackage());
+        assertEquals(REQUEST_CODE, inferred.getStringExtra(Utils.EXTRA_SHARE_REQUEST_CODE));
+        assertFalse(inferred.hasExtra(Utils.EXTRA_OPTIONAL_FIELDS));
+
+        // A literal null compiled against 1.0.0 and threw, because no parameter there accepts one.
+        // It still compiles, and it still throws.
+        assertThrows(
+                NullPointerException.class,
+                () -> Utils.INSTANCE.createShareIntent(context, entry, REQUEST_CODE, null));
+        assertThrows(
+                NullPointerException.class,
+                () -> Utils.INSTANCE.createShareIntent(context, entry, null, null));
+    }
+
+    /** A value whose type {@code javac} infers from where it is used: Mockito's {@code any()} shape. */
+    @SuppressWarnings("unchecked")
+    private static <T> T inferred(Object value) {
+        return (T) value;
+    }
+
     @Test
     public void queryIntentIsCallableWithoutATargetPackage() {
         Intent shortForm = Utils.INSTANCE.createQueryIntent(context, "K-PUBLIC", REQUEST_CODE);

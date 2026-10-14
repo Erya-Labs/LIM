@@ -1322,6 +1322,130 @@ class DecoderFuzzTest {
     }
 
     /**
+     * The same corpus, into required fields' readers: the vault's [Utils.parseFieldRequirements],
+     * the client's [Utils.parseAppliedOptionalFields] and [Utils.checkFieldRequirements].
+     *
+     * Four properties, each over all three thousand payloads:
+     *
+     *  1. **`parseFieldRequirements` is `null` exactly when `parseShareRequest` is**, with the
+     *     payload as the entry *and* as the declaration — the differential the design asks for,
+     *     over inputs nobody designed. When it is not `null`, its names are the parsed entry's keys
+     *     in order and its optional set is a subset of them.
+     *  2. **Any name round-trips.** The payload as a field *name*, declared optional through the
+     *     builder, comes back as exactly that name — which is what "a reader accepts any valid JSON
+     *     escaping" has to mean for the strings this corpus holds: NUL, lone surrogates, quotes,
+     *     backslashes and sixteen kilobytes of them.
+     *  3. **The verdict splits exactly on the data.** With the payload as the result's fields and
+     *     as its acknowledgement, `committed(fields) != null` holds exactly for `HONOURED`,
+     *     `MISMATCHED` and `NOT_ACKNOWLEDGED`.
+     *  4. Nothing throws.
+     *
+     * The arm rides the existing corpus: nothing here edits the generator, so [CORPUS_DIGEST] does
+     * not move. The canonical declaration in (2) is built *from* each case rather than added to it.
+     */
+    @Test
+    fun `no mutated payload makes a requirements reader throw or disagree with the share parser`() {
+        val master = Random(MASTER_SEED)
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        // `name` and `age` required, `email` optional: the corpus's own field names, so a good
+        // share of the payloads satisfy them and both halves of property 3 occur.
+        val requirements = FieldRequirements(listOf("name", "age", "email"), setOf("email"))
+        var shareRequests = 0
+        var roundTrips = 0
+        var complete = 0
+        var incomplete = 0
+        val verdicts = mutableSetOf<FieldRequirementsVerdict>()
+
+        repeat(CASES) { index ->
+            val seed = master.nextLong()
+            val case = caseFor(seed)
+
+            fun bail(what: String, cause: Throwable? = null): Nothing =
+                throw AssertionError(report(what, index, seed, case), cause)
+
+            // (1) The payload as the entry and as the declaration, side by side.
+            val request = Intent().apply {
+                putExtra(Utils.EXTRA_ENTRY_JSON, case.text)
+                putExtra(Utils.EXTRA_OPTIONAL_FIELDS, case.text)
+            }
+            val share = try {
+                Utils.parseShareRequest(request)
+            } catch (t: Throwable) {
+                bail("parseShareRequest threw ${t.javaClass.name}", t)
+            }
+            val read = try {
+                Utils.parseFieldRequirements(request)
+            } catch (t: Throwable) {
+                bail("parseFieldRequirements threw ${t.javaClass.name}: ${t.message}", t)
+            }
+            if ((read == null) != (share == null)) {
+                bail("parseFieldRequirements is ${if (read == null) "" else "not "}null where parseShareRequest is not")
+            }
+            if (read != null && share != null) {
+                shareRequests++
+                if (read.fieldNames != share.entry.fields.keys.toList()) {
+                    bail("parseFieldRequirements' names are not the parsed entry's keys")
+                }
+                if (!read.fieldNames.containsAll(read.optionalFields)) {
+                    bail("parseFieldRequirements returned an optional name the entry does not declare")
+                }
+            }
+
+            // (2) The payload as a name, through the builder and back.
+            val named = Entry(
+                "profile-1",
+                linkedMapOf(case.text to TypedField(""), "name" to TypedField("")),
+                "PUBLIC-KEY-BASE64",
+            )
+            val declared = try {
+                Utils.parseFieldRequirements(
+                    Utils.createShareIntent(context, named, "req-1", setOf(case.text), Utils.DEFAULT_ENDEAVOR_PACKAGE),
+                )
+            } catch (t: Throwable) {
+                bail("a declaration naming the payload threw ${t.javaClass.name}: ${t.message}", t)
+            }
+            if (declared?.optionalFields != setOf(case.text)) {
+                bail("the payload as a field name did not round-trip; got ${declared?.optionalFields?.size} names")
+            }
+            roundTrips++
+
+            // (3) The payload as the answer's fields and as its acknowledgement.
+            val acknowledgement = when (index % 3) {
+                0 -> case.text
+                1 -> """["email"]"""
+                else -> null
+            }
+            val result = Intent().apply {
+                putExtra(Utils.EXTRA_FIELDS_JSON, case.text)
+                if (acknowledgement != null) putExtra(Utils.EXTRA_APPLIED_OPTIONAL_FIELDS, acknowledgement)
+            }
+            val verdict = try {
+                Utils.parseAppliedOptionalFields(result)
+                Utils.checkFieldRequirements(requirements, result)
+            } catch (t: Throwable) {
+                bail("checkFieldRequirements threw ${t.javaClass.name}: ${t.message}", t)
+            }
+            val dataComplete = requirements.committed(Utils.decodeFields(case.text)) != null
+            if (dataComplete != (verdict in COMPLETE_VERDICTS)) {
+                bail("checkFieldRequirements said $verdict but the data is ${if (dataComplete) "" else "in"}complete")
+            }
+            if (dataComplete) complete++ else incomplete++
+            verdicts += verdict
+        }
+
+        // Non-vacuity: the differential needs accepted requests to compare names on, and the
+        // partition needs both halves.
+        assertTrue("the corpus must produce some share requests; got $shareRequests", shareRequests > 100)
+        assertEquals("every payload must round-trip as a name", CASES, roundTrips)
+        assertTrue("some payloads must be complete data; got $complete", complete > 0)
+        assertTrue("…and some incomplete; got $incomplete", incomplete > 0)
+        assertTrue(
+            "an acknowledged and an unacknowledged verdict must both occur; got $verdicts",
+            FieldRequirementsVerdict.HONOURED in verdicts && FieldRequirementsVerdict.INCOMPLETE in verdicts,
+        )
+    }
+
+    /**
      * The reproducibility claim, pinned rather than described. `java.util.Random` is specified
      * bit-for-bit by the JDK, so this digest is the same on every machine and every run; if an
      * edit to the generator changes it, that is a deliberate act and this constant moves in the
@@ -1573,6 +1697,13 @@ class DecoderFuzzTest {
     companion object {
         /** Arbitrary; what matters is only that it never changes. */
         private const val MASTER_SEED = 0x4C494D20543801L
+
+        /** The verdicts under which every required field arrived non-blank. */
+        private val COMPLETE_VERDICTS = setOf(
+            FieldRequirementsVerdict.HONOURED,
+            FieldRequirementsVerdict.MISMATCHED,
+            FieldRequirementsVerdict.NOT_ACKNOWLEDGED,
+        )
         private const val KEY_MUTATION_SEED = 0x4C494D20543802L
         private const val CASES = 3000
         private const val KEY_MUTATIONS = 500

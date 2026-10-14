@@ -185,6 +185,27 @@ class NullArgumentTest {
                     it.hasExtra(Utils.EXTRA_SHARE_REQUEST_CODE) &&
                     !it.hasExtra(Utils.EXTRA_ALGORITHM)
             },
+        // Required fields: four tolerant positions and no more. The two readers take an unchecked
+        // IPC payload and fail closed to `null`, like the six parsers. The verdict's `result` is
+        // the same kind of payload, and a missing one is an answer carrying no fields — so with
+        // the sample requirements (`name` required) it is INCOMPLETE, a value and not a throw. And
+        // the requirements-aware share result's `requestCode` has no default but accepts `null`
+        // like its siblings', attaching nothing — while the acknowledgement, which the sample
+        // payload satisfies, is still written: the `null` changes the one extra it is about.
+        "parseFieldRequirements(Intent)#0" to Answer("null") { it == null },
+        "parseAppliedOptionalFields(Intent)#0" to Answer("null") { it == null },
+        "checkFieldRequirements(FieldRequirements, Intent)#1" to
+            Answer("${FieldRequirementsVerdict.INCOMPLETE}") { it == FieldRequirementsVerdict.INCOMPLETE },
+        "createShareResultIntent(String, Map<String, TypedField>, String, FieldRequirements)#2" to
+            Answer(
+                "an intent carrying its own extras and the acknowledgement, and no " +
+                    Utils.EXTRA_SHARE_REQUEST_CODE,
+            ) {
+                it is Intent && it.hasExtra(Utils.EXTRA_PUBLIC_KEY) &&
+                    it.hasExtra(Utils.EXTRA_FIELDS_JSON) &&
+                    it.hasExtra(Utils.EXTRA_APPLIED_OPTIONAL_FIELDS) &&
+                    !it.hasExtra(Utils.EXTRA_SHARE_REQUEST_CODE)
+            },
     )
 
     /**
@@ -251,6 +272,15 @@ class NullArgumentTest {
         SignChallengeRequest("PUBLIC-KEY-BASE64", nonce, "req-1", Utils.NONCE_FORMAT_TIMESTAMPED)
 
     /**
+     * Required fields' two new parameter types. The requirements declare [fields]' one name
+     * required, which is what makes the answers above legible: the sample payload satisfies them,
+     * so the requirements-aware builder writes its acknowledgement, and an answer with no fields at
+     * all is `INCOMPLETE` rather than `NOT_ACKNOWLEDGED`.
+     */
+    private val requirements = FieldRequirements(fields.keys)
+    private val optionalNames: Set<String> = setOf("name")
+
+    /**
      * One well-formed value per published parameter *type*.
      *
      * "Valid" here means only what this file needs it to mean: the call returns normally. That is
@@ -284,6 +314,8 @@ class NullArgumentTest {
             ShareRequest::class.java -> shareRequest
             QueryRequest::class.java -> queryRequest
             SignChallengeRequest::class.java -> signChallengeRequest
+            FieldRequirements::class.java -> requirements
+            Set::class.java -> optionalNames
             Map::class.java -> fields
             List::class.java -> sampleList(type)
             else -> throw AssertionError(

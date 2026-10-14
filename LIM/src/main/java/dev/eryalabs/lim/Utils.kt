@@ -5,12 +5,19 @@ import android.content.Context
 import android.content.Intent
 import android.util.Base64
 import com.google.gson.Gson
+import com.google.gson.Strictness
 import com.google.gson.reflect.TypeToken
+import com.google.gson.stream.JsonReader
+import com.google.gson.stream.JsonToken
+import com.google.gson.stream.JsonWriter
 import java.io.ByteArrayOutputStream
+import java.io.StringReader
+import java.io.StringWriter
 import java.security.KeyFactory
 import java.security.SecureRandom
 import java.security.Signature
 import java.security.spec.X509EncodedKeySpec
+import java.util.Collections
 
 /**
  * The client half of the LIM protocol: intent builders, result parsers, nonce and statement
@@ -25,12 +32,15 @@ import java.security.spec.X509EncodedKeySpec
  * not there. The entry points that *do* accept `null`, because they exist to be handed an
  * unchecked IPC payload, are exactly these: the `intent` of [parseShareRequest],
  * [parseQueryRequest], [parseSignChallengeRequest], [parseShareResult], [parseQueryResult],
- * [parseSignChallengeResult], [describeIntent] and [matchesRequestCode]; the text of
+ * [parseSignChallengeResult], [parseFieldRequirements], [parseAppliedOptionalFields],
+ * [describeIntent] and [matchesRequestCode]; the `result` of [checkFieldRequirements]; the text of
  * [decodeFields], [decodeEntry] and [parseSignedStatement]; [isStatementPreImage]'s `bytes`;
  * [createSignChallengeIntent]'s `nonceFormat`, whose `null` is the default and attaches no
  * declaration; and, on the same footing, the `requestCode` of all three result builders
- * ([createShareResultIntent], [createQueryResultIntent], [createSignChallengeResultIntent]) plus
- * the last one's `algorithm` — each defaulting to `null`, each attaching nothing when it is one.
+ * ([createShareResultIntent], [createQueryResultIntent], [createSignChallengeResultIntent]) —
+ * including the requirements-aware share overload, whose `requestCode` has no default but
+ * accepts `null` all the same — plus the last one's `algorithm`, each attaching nothing when it
+ * is `null`.
  * `NullArgumentTest` measures that split by calling every published parameter
  * position with `null`, so neither a widening nor a narrowing can happen quietly — it turns that
  * file's rows red. This paragraph is prose beside the check rather than the check itself, so it
@@ -84,9 +94,18 @@ object Utils {
      * The protocol generation this library speaks. Version 1 is the implicit legacy
      * protocol: nothing on the wire ever says "1", absence says it instead. Every outgoing
      * request carries this value under [EXTRA_PROTOCOL_VERSION], and a vault that
-     * understands it echoes its own version in the result — which is what finally lets a
-     * client tell "the vault honoured this" from "the vault ignored what it did not know",
-     * the question every future protocol addition has to be able to answer.
+     * understands it echoes its own version in the result — which lets a client tell a
+     * versioned vault from a legacy one that ignored the extra. That is all the echo can say:
+     * which vocabulary a vault speaks, never whether it honoured any particular request, for
+     * the reason the next paragraph gives.
+     *
+     * **The number marks vocabulary; a vault *behaviour* gets its own result-only
+     * acknowledgement.** Every builder here writes this library's constant, so the echo proves
+     * which version a vault was compiled against, not which of its behaviours it implements — a
+     * vault rebuilt on a newer library would claim a behaviour it never wired up. So a feature
+     * that changes what a vault *does* is acknowledged by an extra of its own that only the
+     * vault's answer carries. Required fields are the first: [EXTRA_APPLIED_OPTIONAL_FIELDS], read
+     * by [checkFieldRequirements], and this number stayed 2 when they arrived.
      */
     const val PROTOCOL_VERSION = 2
 
@@ -96,6 +115,10 @@ object Utils {
      * `vaultProtocolVersion`. A legacy vault ignores the extra and echoes nothing, so its
      * results parse exactly as before with a `null` version — never a default that fakes a
      * modern vault.
+     *
+     * What the echo is evidence of is the vocabulary a vault speaks, not that it honoured any
+     * particular extra — see [PROTOCOL_VERSION] for the rule, and [EXTRA_APPLIED_OPTIONAL_FIELDS]
+     * for the first behaviour acknowledged the other way.
      */
     const val EXTRA_PROTOCOL_VERSION = "extra_protocol_version"
 
@@ -197,6 +220,47 @@ object Utils {
      */
     const val EXTRA_FIELDS_JSON = "extra_fields_json"
 
+    /**
+     * The fields of a share request's [Entry] that the user may leave blank, written by the
+     * [createShareIntent] overload taking `optionalFields` and read by [parseFieldRequirements].
+     * **Every declared field not named here is required.**
+     *
+     * The value is one JSON array of JSON strings — `["phone","nickname"]` — each naming a key of
+     * the entry's `fields` map by exact string equality. The builder writes the given names that
+     * are fields of the entry as it is sent — a key whose [TypedField] is `null` is not encoded,
+     * so it is not one — in entry order and without duplicates, and writes `[]` when none
+     * survives; a reader accepts any valid JSON spelling and depends on none of that. Absent,
+     * blank, wrong-typed, unreadable or malformed all read as "nothing is optional", and so does
+     * `[]` — the two differ only on a [describeIntent] line. Malformed means anything but exactly
+     * one flat array of strings and nothing after it, read strictly, with nothing salvaged.
+     *
+     * It can only relax the requirements of the sender's own sign-up: it adds no field, no type and
+     * no value, and it never affects routing. No builder here writes it on a result and nothing
+     * here reads it from one — but a vault that answers by handing the request back can still
+     * carry it on a result, which is why the acknowledgement has a key of its own,
+     * [EXTRA_APPLIED_OPTIONAL_FIELDS].
+     */
+    const val EXTRA_OPTIONAL_FIELDS = "extra_optional_fields"
+
+    /**
+     * A vault's acknowledgement that it applied a sign-up's optional fields, carried on a
+     * successful share result only — written by the [createShareResultIntent] overload taking a
+     * [FieldRequirements], read by [parseAppliedOptionalFields] and [checkFieldRequirements].
+     *
+     * The value is the same JSON array of strings as [EXTRA_OPTIONAL_FIELDS], holding exactly the
+     * optional set the vault applied — `[]` when nothing was optional, which includes every client
+     * that sent no declaration. Its presence says that the vault read the declaration (or saw there
+     * was none), would not let the user save while a required field was blank, and dropped blank
+     * optional fields — and this library's builder writes it only when the payload beside it
+     * bears that out.
+     *
+     * **Deliberately a different key from the request's.** A vault that answers with
+     * `setResult(RESULT_OK, incomingIntent)` echoes [EXTRA_OPTIONAL_FIELDS] back, and that can never
+     * read as an acknowledgement. Absent, blank, wrong-typed, unreadable or malformed is no
+     * acknowledgement at all — which is what every vault built before this key existed sends.
+     */
+    const val EXTRA_APPLIED_OPTIONAL_FIELDS = "extra_applied_optional_fields"
+
     private const val SIGN_ALGORITHM = "SHA256withRSA"
     private const val ACTION_SHARE_DATA    = "ACTION_SHARE_DATA"
     private const val ACTION_SIGN_CHALLENGE = "ACTION_SIGN_CHALLENGE"
@@ -240,6 +304,11 @@ object Utils {
      * No validation happens here: an [Entry] with a blank `id` or `publicKey` is encoded
      * verbatim, and [decodeEntry] on the far side will reject it. Populate both before
      * sending.
+     *
+     * **On a vault that implements required fields, every field of [entry] is required.** This
+     * overload declares nothing optional, so the user cannot save while any of them is blank. To
+     * let them leave some empty, name those with the overload taking `optionalFields` — see
+     * [FieldRequirements] and [checkFieldRequirements].
      *
      * See `ClientIntegrationExampleTest` for this flow written end to end the way an integrator
      * writes it — sign-up, then query, then login, against one profile, with the refusal case
@@ -323,6 +392,10 @@ object Utils {
      * answer, and the [matchesRequestCode] check that keeps it from being read as the answer to a
      * different request. `docs/INTEGRATION.md` is the prose walkthrough of the same loop.
      *
+     * **On a vault that implements required fields, every field of [entry] is required**, as with
+     * the sibling overload: nothing is declared optional here. The overload that adds an
+     * `optionalFields` set after [requestCode] is the one that lets the user leave fields blank.
+     *
      * **Example**, verbatim from `docs/INTEGRATION.md`'s *Sign-up (share)* section — the same
      * block the sibling overload carries, because it is the call that resolves to **this** one:
      *
@@ -373,6 +446,114 @@ object Utils {
         targetPackage: String = DEFAULT_ENDEAVOR_PACKAGE,
     ): Intent = createShareIntent(context, entry, targetPackage).apply {
         putExtra(EXTRA_SHARE_REQUEST_CODE, requestCode)
+    }
+
+    /**
+     * Create a sign-up intent that names the fields of [entry] the user may leave blank —
+     * **every other declared field is required.**
+     *
+     * The intent is the request-code overload's, byte for byte — action, package, `CLEAR_TOP`,
+     * the entry payload, [requestCode] and the protocol version — plus one extra,
+     * [EXTRA_OPTIONAL_FIELDS], carrying the names of [optionalFields] that are fields of [entry]
+     * as it is encoded, in entry order and without duplicates. Nothing is validated and nothing
+     * throws: a name that is not a field of [entry] is simply not sent, so that field stays
+     * required, which is the direction that fails closed. A key whose [TypedField] is `null` —
+     * reachable from Java or a Gson-built template — is not encoded, so the vault never sees it
+     * and it is not named either.
+     *
+     * On the far side, a vault that implements required fields reads the declaration with
+     * [parseFieldRequirements] and acknowledges what it applied; read the answer with
+     * [checkFieldRequirements], and gate on [FieldRequirements.committed]. A vault that predates
+     * this ignores the extra: it may let the user skip any field, required ones included, or —
+     * like the interim Endeavor build — make them fill in every field, optional ones included.
+     * The verdict is how you find out. This needs a vault built on the release after 1.0.0.
+     *
+     * **Five arguments and no defaults, deliberately.** No call with fewer arguments can resolve
+     * here, so every call written against 1.0.0 still means what it meant:
+     * `createShareIntent(context, entry, "r")` still binds `targetPackage` (see the sibling
+     * overloads), and a four-argument call still reaches the request-code overload however its
+     * fourth argument is typed — a string, a literal `null`, or a type the compiler has to infer,
+     * such as a mocking library's `any()`. A default on [targetPackage] would have given this
+     * overload a four-argument form in Kotlin, and made that last call ambiguous there. Java would
+     * have met the same ambiguity, over a literal `null` as well as an inferred argument, only once
+     * `@JvmOverloads` published that form to it: a default alone gives Java nothing but the
+     * five-argument method. [optionalFields] is a `Set`, so a bare string cannot bind it either.
+     *
+     * **Example**, verbatim from `docs/INTEGRATION.md`'s *Required and optional fields* section:
+     *
+     * <!-- example: INTEGRATION.md#signup-optional-request -->
+     * ```kotlin
+     * // Every field you declare is required unless you name it here. Names match exactly, so
+     * // a misspelt name is simply not sent and that field stays required. All five arguments
+     * // are needed, the vault's package included: with no defaults, no shorter call can
+     * // resolve to this overload, so every call written before it still means what it did.
+     * val entry = Entry(
+     *     id = "signup-form",
+     *     fields = linkedMapOf(
+     *         "name" to TypedField(value = "", type = FieldType.STRING),
+     *         "email" to TypedField(value = "", type = FieldType.EMAIL),
+     *         "phone" to TypedField(value = "", type = FieldType.PHONE),
+     *     ),
+     *     publicKey = "no-key-yet",
+     * )
+     * val requirements = FieldRequirements(entry.fields.keys, setOf("phone"))
+     * val request = Utils.createShareIntent(
+     *     context,
+     *     entry,
+     *     SIGN_UP_REQUEST,
+     *     requirements.optionalFields,
+     *     Utils.DEFAULT_ENDEAVOR_PACKAGE,
+     * )
+     * // startActivityForResult(request, VAULT_RESULT)
+     * ```
+     *
+     * @param context        As the sibling overloads: read by nothing here and kept for the
+     *                       shape of the family. Pass the [Activity][android.app.Activity] you
+     *                       will launch from. Nothing is retained.
+     * @param entry          The profile to push, encoded as given and unvalidated. Its field keys
+     *                       — those whose value is not `null`, which are the ones encoded — are
+     *                       what [optionalFields] is matched against. Not modified.
+     * @param requestCode    Correlation token echoed back in the result intent. Required here,
+     *                       because a verdict is only worth reading on an answer you can match.
+     * @param optionalFields The field names the user may leave blank — usually
+     *                       [FieldRequirements.optionalFields]. Matched by exact string equality;
+     *                       unknown names and Java `null` elements are dropped. An empty set
+     *                       declares that every field is required, which a vault reads exactly as
+     *                       it reads no declaration at all. Not modified.
+     * @param targetPackage  Package name of the vault app — [DEFAULT_ENDEAVOR_PACKAGE] for
+     *                       Endeavor. Required, with no default, for the reason above.
+     */
+    fun createShareIntent(
+        context: Context,
+        entry: Entry,
+        requestCode: String,
+        optionalFields: Set<String>,
+        targetPackage: String,
+    ): Intent = createShareIntent(context, entry, requestCode, targetPackage).apply {
+        val declared = FieldRequirements(entry.encodedFieldNames(), optionalFields).optionalFields
+        putExtra(EXTRA_OPTIONAL_FIELDS, encodeNames(declared))
+    }
+
+    /**
+     * The field names an [Entry] a caller built puts on the wire, in its own order: the keys whose
+     * [TypedField] is not `null`, or none at all when `fields` itself is `null`.
+     *
+     * Neither `null` is excluded by what the compiler can see. Java honours no nullability, and an
+     * [Entry] built by Gson can carry a `null` `fields` (see [decodeEntry]); this is reached on the
+     * way *out*, where [validateEntry] takes the same precaution for the same reason. Gson does not
+     * encode a `null` map value, so a vault never sees that key, and a declaration naming it would
+     * name a field that is not on the wire.
+     */
+    @Suppress("SENSELESS_COMPARISON")
+    private fun Entry.encodedFieldNames(): Collection<String> {
+        val map: Map<String, TypedField>? = this.fields
+        if (map == null) return emptySet()
+        val encoded = ArrayList<String>(map.size)
+        for ((name, field) in map) {
+            val value: TypedField? = field
+            if (value != null) encoded += name
+        }
+        return encoded
     }
 
     /**
@@ -1853,6 +2034,11 @@ object Utils {
      * under different keys at different points in the protocol, and the flows' keys are not
      * interchangeable — the same separation [parseQueryResult] pins from its side.
      *
+     * [EXTRA_APPLIED_OPTIONAL_FIELDS] is not read here either, so a result parses to the same
+     * [ShareResult] with or without a vault's acknowledgement. If you declared optional fields,
+     * read the acknowledgement with [checkFieldRequirements] and keep
+     * [FieldRequirements.committed] of the fields rather than the fields as they came.
+     *
      * **Example**, verbatim from `docs/INTEGRATION.md`'s *Sign-up (share)* section:
      *
      * <!-- example: INTEGRATION.md#signup-result -->
@@ -1884,6 +2070,139 @@ object Utils {
         )
     }
 
+    /**
+     * Read the optional set a vault says it applied to a sign-up, from
+     * [EXTRA_APPLIED_OPTIONAL_FIELDS] — or `null` when the answer carries no acknowledgement.
+     *
+     * `null` is every vault that predates required fields, every one answering with the builder
+     * that writes none, and every one answering with the requirements-aware
+     * [createShareResultIntent] over a payload that does not satisfy the requirements it was
+     * given — a required field missing or blank, or a blank value left in — which that builder
+     * answers with no acknowledgement rather than a false one. So a vault that did read your
+     * declaration can still give `null`, and the answer cannot tell you which of the three it was.
+     * An absent, blank, wrong-typed, unreadable or malformed extra reads the same way, under the
+     * strict reading [EXTRA_OPTIONAL_FIELDS] describes. An empty set is different and means
+     * "acknowledged, nothing was optional".
+     *
+     * Most callers want [checkFieldRequirements], which compares this with what you declared and
+     * with what actually arrived. This is the raw reading, for a diagnostic or a test.
+     *
+     * **Example**, verbatim from `docs/INTEGRATION.md`'s *Testing your integration without a
+     * vault* section:
+     *
+     * <!-- example: INTEGRATION.md#testing-optional-fields -->
+     * ```kotlin
+     * // A vault that implements required fields reads your declaration off the request, stores
+     * // what the user filled in, and acknowledges the declaration only when what it stored
+     * // satisfies it. Build that answer and your handler meets the verdict it will really get:
+     * // here the user filled in both required fields and left the optional "phone" blank.
+     * val declared = Utils.parseFieldRequirements(request)!!
+     * val answer = Utils.createShareResultIntent(
+     *     FAKE_PUBLIC_KEY,
+     *     linkedMapOf(
+     *         "name" to TypedField(value = "Ada", type = FieldType.STRING),
+     *         "email" to TypedField(value = FAKE_EMAIL, type = FieldType.EMAIL),
+     *     ),
+     *     SIGN_UP_REQUEST,
+     *     declared,
+     * )
+     * val verdict = Utils.checkFieldRequirements(requirements, answer)
+     * // The optional set the vault says it applied. `null` means the answer acknowledges
+     * // nothing: a vault older than this release, one answering through the builder that
+     * // writes none, or one whose payload did not satisfy your declaration, with a required
+     * // field missing or a blank value left in.
+     * val applied = Utils.parseAppliedOptionalFields(answer)
+     * ```
+     *
+     * @param intent The result intent from `onActivityResult`, or `null` — nullable for the reason
+     *               [parseShareResult]'s is. Read, never retained.
+     * @return The names, de-duplicated and in the order they were sent, as a read-only set; or
+     *         `null` for no acknowledgement.
+     */
+    fun parseAppliedOptionalFields(intent: Intent?): Set<String>? {
+        if (intent == null) return null
+        val names = decodeNames(intent.presentStringExtra(EXTRA_APPLIED_OPTIONAL_FIELDS)) ?: return null
+        return Collections.unmodifiableSet(LinkedHashSet(names))
+    }
+
+    /**
+     * Read a sign-up's answer against the requirements you declared: did the vault honour your
+     * optional fields, and did every required field arrive?
+     *
+     * It reads the result's fields exactly as [parseShareResult] does and computes, with no trust
+     * in the vault, whether anything required is missing ([FieldRequirements.missingRequired]);
+     * then it reads the acknowledgement ([parseAppliedOptionalFields]):
+     *
+     * - no acknowledgement — [FieldRequirementsVerdict.NOT_ACKNOWLEDGED] when nothing required is
+     *   missing, [FieldRequirementsVerdict.INCOMPLETE] when something is;
+     * - an acknowledgement over a missing required field — [FieldRequirementsVerdict.VIOLATED];
+     * - an acknowledgement of exactly [FieldRequirements.optionalFields], compared as sets —
+     *   [FieldRequirementsVerdict.HONOURED];
+     * - any other acknowledged set — [FieldRequirementsVerdict.MISMATCHED].
+     *
+     * So the verdict splits exactly on whether the data is complete:
+     * `requirements.committed(result.fields) != null` holds for `HONOURED`, `MISMATCHED` and
+     * `NOT_ACKNOWLEDGED` and for nothing else, and it is the data — never the verdict, and never
+     * the protocol version — to gate an account on. A refusal (`RESULT_CANCELED`) carries no
+     * fields, so it reads as `INCOMPLETE`, or `NOT_ACKNOWLEDGED` when nothing was required:
+     * branch on the result code first, as for every flow.
+     *
+     * Named "check" and not "verify" on purpose: in this library *verify* means cryptography, and
+     * nothing in a share result is signed. The acknowledgement is exactly as trustworthy as the
+     * vault you addressed.
+     *
+     * Total: no answer a vault can send makes this throw.
+     *
+     * **Example**, verbatim from `docs/INTEGRATION.md`'s *Required and optional fields* section:
+     *
+     * <!-- example: INTEGRATION.md#signup-optional-result -->
+     * ```kotlin
+     * // In onActivityResult, once `resultCode` is RESULT_OK and the request code matches.
+     * fun onSignUpAnswer(data: Intent?) {
+     *     val result = Utils.parseShareResult(data) ?: return
+     *     // Keep the key whatever follows: the profile now exists in the vault, bound to you.
+     *     val accountKey = result.publicKey ?: return
+     *     // Gate on the data, never on a version number. `committed` is null exactly when a
+     *     // required field is missing or blank. It drops a blank optional field too, whether
+     *     // the vault left it out or, as an older vault may, sent it as an empty value.
+     *     val profile = requirements.committed(result.fields)
+     *     when (Utils.checkFieldRequirements(requirements, data)) {
+     *         FieldRequirementsVerdict.HONOURED,
+     *         FieldRequirementsVerdict.MISMATCHED,
+     *         FieldRequirementsVerdict.NOT_ACKNOWLEDGED -> createAccount(accountKey, profile!!)
+     *         FieldRequirementsVerdict.INCOMPLETE ->
+     *             accountIncomplete(accountKey, requirements.missingRequired(result.fields))
+     *         else -> reportVault(accountKey) // VIOLATED, and any verdict a later release adds
+     *     }
+     * }
+     * ```
+     *
+     * @param requirements What you declared when you sent the sign-up — the same object whose
+     *                     [FieldRequirements.optionalFields] you passed to [createShareIntent].
+     * @param result       The result intent from `onActivityResult`, or `null`, which reads as an
+     *                     answer carrying no fields and no acknowledgement. Read, never retained.
+     */
+    fun checkFieldRequirements(
+        requirements: FieldRequirements,
+        result: Intent?,
+    ): FieldRequirementsVerdict {
+        val fields = decodeFields(result?.presentStringExtra(EXTRA_FIELDS_JSON))
+        val missing = requirements.missingRequired(fields)
+        val applied = parseAppliedOptionalFields(result)
+        return when {
+            applied == null ->
+                if (missing.isEmpty()) {
+                    FieldRequirementsVerdict.NOT_ACKNOWLEDGED
+                } else {
+                    FieldRequirementsVerdict.INCOMPLETE
+                }
+
+            missing.isNotEmpty() -> FieldRequirementsVerdict.VIOLATED
+            applied == requirements.optionalFields -> FieldRequirementsVerdict.HONOURED
+            else -> FieldRequirementsVerdict.MISMATCHED
+        }
+    }
+
     // ── Result intents (the vault's side) ────────────────────────────────
     //
     // The parsers above pin what a result *means* arriving at a client; the three builders here
@@ -1892,9 +2211,12 @@ object Utils {
     // format existed here as four parsers' expectations and nothing else — every vault
     // hand-assembled its result intents, and the reference vault grew its own builder to do it.
     //
-    // No new extra key, no new action and no new constant: every literal below already exists
-    // above and is frozen by `IntentBuilderTest`. Three rules are shared, and each is something a
-    // hand-written `putExtra` line gets wrong eventually:
+    // No new action and no new constant: every literal below is declared above and frozen by
+    // `IntentBuilderTest`. One builder writes a key the first six did not —
+    // [EXTRA_APPLIED_OPTIONAL_FIELDS], the requirements-aware share overload's acknowledgement, and
+    // the first vault behaviour this protocol acknowledges with an extra of its own rather than
+    // with the version number. Three rules are shared, and each is something a hand-written
+    // `putExtra` line gets wrong eventually:
     //
     // 1. **No action and no package.** A result is `setResult`'s payload, delivered to whoever
     //    started the activity; both halves of this protocol work off extras alone and no parser
@@ -1905,10 +2227,11 @@ object Utils {
     //    means not calling `putExtra` at all — `putExtra(key, null as String?)` stores a null and
     //    leaves `hasExtra` returning `true`, which is a present extra by every other measure.
     // 3. **The version echo is unconditional**, and it is the point of these functions.
-    //    [EXTRA_PROTOCOL_VERSION] in a result is what lets a client tell a vault that honoured a
-    //    modern request from one that ignored what it did not know; a vault that forgets the echo
-    //    is read as a legacy vault, with nothing anywhere to fail. A vault that uses these cannot
-    //    forget it.
+    //    [EXTRA_PROTOCOL_VERSION] in a result is what lets a client tell a versioned vault from a
+    //    legacy one; a vault that forgets the echo is read as a legacy vault, with nothing
+    //    anywhere to fail. A vault that uses these cannot forget it. What the echo names is the
+    //    vocabulary, never whether a vault honoured a request — see [PROTOCOL_VERSION] for why a
+    //    behaviour gets an acknowledgement of its own.
 
     /**
      * Write [value] under [key], or nothing at all when it is absent or blank — rule 2 above.
@@ -1953,6 +2276,79 @@ object Utils {
         putExtra(EXTRA_FIELDS_JSON, encodeFields(fields))
         putPresentExtra(EXTRA_SHARE_REQUEST_CODE, requestCode)
         putExtra(EXTRA_PROTOCOL_VERSION, PROTOCOL_VERSION.toString())
+    }
+
+    /**
+     * Build a sign-up's result the way a vault implementing required fields answers — the
+     * three-argument builder's intent, plus the acknowledgement [EXTRA_APPLIED_OPTIONAL_FIELDS]
+     * **when, and only when, [fields] satisfies [requirements]**.
+     *
+     * The four extras of the sibling are written exactly as it writes them, with [fields] as
+     * given. The acknowledgement then names [FieldRequirements.optionalFields] — `[]` when
+     * nothing was optional — and it is written only if [FieldRequirements.isSatisfiedBy] is true
+     * of the payload: every required field non-blank, and no blank value anywhere in it. On a
+     * payload that falls short it is **omitted rather than thrown**, so a vault never crashes in
+     * front of a waiting client and never claims what its own answer contradicts; the client then
+     * reads `NOT_ACKNOWLEDGED` or `INCOMPLETE` instead of a false `HONOURED`.
+     *
+     * **[requirements] must come from the declared schema, never from the answer.** Use what
+     * [parseFieldRequirements] returned for the request, or the vault's own copy of it taken when
+     * the form was opened. Rebuilt from the keys about to be sent, the check above would pass by
+     * construction and the acknowledgement would mean nothing. Persist
+     * [FieldRequirements.committed] of the user's draft and pass that same map here: it drops blank
+     * optional fields, which is what the acknowledgement promises.
+     *
+     * Every parameter is explicit, so this adds no `$default` and no overload a three-argument call
+     * could resolve to. A refusal is still `setResult(Activity.RESULT_CANCELED, …)` with no
+     * acknowledgement, exactly as before.
+     *
+     * **Example**, verbatim from `docs/INTEGRATION.md`'s *Testing your integration without a
+     * vault* section — a client's test building the answer a vault sends:
+     *
+     * <!-- example: INTEGRATION.md#testing-optional-fields -->
+     * ```kotlin
+     * // A vault that implements required fields reads your declaration off the request, stores
+     * // what the user filled in, and acknowledges the declaration only when what it stored
+     * // satisfies it. Build that answer and your handler meets the verdict it will really get:
+     * // here the user filled in both required fields and left the optional "phone" blank.
+     * val declared = Utils.parseFieldRequirements(request)!!
+     * val answer = Utils.createShareResultIntent(
+     *     FAKE_PUBLIC_KEY,
+     *     linkedMapOf(
+     *         "name" to TypedField(value = "Ada", type = FieldType.STRING),
+     *         "email" to TypedField(value = FAKE_EMAIL, type = FieldType.EMAIL),
+     *     ),
+     *     SIGN_UP_REQUEST,
+     *     declared,
+     * )
+     * val verdict = Utils.checkFieldRequirements(requirements, answer)
+     * // The optional set the vault says it applied. `null` means the answer acknowledges
+     * // nothing: a vault older than this release, one answering through the builder that
+     * // writes none, or one whose payload did not satisfy your declaration, with a required
+     * // field missing or a blank value left in.
+     * val applied = Utils.parseAppliedOptionalFields(answer)
+     * ```
+     *
+     * @param publicKey    The key the profile was stored under, written to [EXTRA_PUBLIC_KEY]; a
+     *                     blank one is omitted (rule 2).
+     * @param fields       What the vault stored — [FieldRequirements.committed] of the user's draft
+     *                     — encoded with [encodeFields] under [EXTRA_FIELDS_JSON] and always
+     *                     written, `"{}"` included: a profile that is a key and nothing else is a
+     *                     legitimate answer when every field was optional and left blank.
+     * @param requestCode  The correlation token the request carried, echoed under
+     *                     [EXTRA_SHARE_REQUEST_CODE]. `null` or blank attaches nothing.
+     * @param requirements The requirements the request declared, as [parseFieldRequirements] read
+     *                     them. Read, never retained.
+     */
+    fun createShareResultIntent(
+        publicKey: String,
+        fields: Map<String, TypedField>,
+        requestCode: String?,
+        requirements: FieldRequirements,
+    ): Intent = createShareResultIntent(publicKey, fields, requestCode).apply {
+        if (requirements.isSatisfiedBy(fields)) {
+            putExtra(EXTRA_APPLIED_OPTIONAL_FIELDS, encodeNames(requirements.optionalFields))
+        }
     }
 
     /**
@@ -2182,6 +2578,71 @@ object Utils {
             requestCode = intent.presentStringExtra(EXTRA_SHARE_REQUEST_CODE),
             protocolVersion = intent.declaredProtocolVersion(),
         )
+    }
+
+    /**
+     * Read which of a share request's fields the user must fill in — the vault's half of the
+     * [createShareIntent] overload taking `optionalFields`.
+     *
+     * Returns `null` **exactly when [parseShareRequest] does**, because it is answered from that
+     * parse: the entry it reads the field names off is the one [parseShareRequest] decoded from
+     * the same intent, so a declaration can never be paired with an entry it did not travel with.
+     * Otherwise it returns `FieldRequirements(entry.fields.keys, declared)`, where `declared` is
+     * [EXTRA_OPTIONAL_FIELDS] read strictly — and empty when that extra is absent, blank,
+     * wrong-typed, unreadable, malformed or `[]`. So a missing or broken declaration means **every
+     * field is required**, for an old client and a new one alike; names the entry does not declare
+     * are dropped, duplicates collapse, the order is the entry's, matching is exact, and a blank
+     * field name is kept, as [parseShareRequest] keeps it — refusing one is the vault's policy to
+     * set.
+     *
+     * Nothing here bounds a size: the binder limit bounds the input, the declaration is read as a
+     * stream, and only the entry's own names survive it. Product limits belong to the vault.
+     * [ShareRequest] is untouched, so the same intent parses to an equal [ShareRequest] with or
+     * without a declaration on it; and the declaration never affects routing — a share is still a
+     * share by its entry payload alone.
+     *
+     * Show one form row per [FieldRequirements.fieldNames], gate Save on
+     * [FieldRequirements.missingRequired], store [FieldRequirements.committed], and answer with the
+     * [createShareResultIntent] overload taking these requirements, which acknowledges them only
+     * if what was stored satisfies them. When editing a profile already stored, there is no
+     * declaration to read: `FieldRequirements(stored.fields.keys)` keeps every stored field
+     * required.
+     *
+     * **Example**, verbatim from `docs/INTEGRATION.md`'s *Testing your integration without a
+     * vault* section, which reads a request the way a vault does:
+     *
+     * <!-- example: INTEGRATION.md#testing-optional-fields -->
+     * ```kotlin
+     * // A vault that implements required fields reads your declaration off the request, stores
+     * // what the user filled in, and acknowledges the declaration only when what it stored
+     * // satisfies it. Build that answer and your handler meets the verdict it will really get:
+     * // here the user filled in both required fields and left the optional "phone" blank.
+     * val declared = Utils.parseFieldRequirements(request)!!
+     * val answer = Utils.createShareResultIntent(
+     *     FAKE_PUBLIC_KEY,
+     *     linkedMapOf(
+     *         "name" to TypedField(value = "Ada", type = FieldType.STRING),
+     *         "email" to TypedField(value = FAKE_EMAIL, type = FieldType.EMAIL),
+     *     ),
+     *     SIGN_UP_REQUEST,
+     *     declared,
+     * )
+     * val verdict = Utils.checkFieldRequirements(requirements, answer)
+     * // The optional set the vault says it applied. `null` means the answer acknowledges
+     * // nothing: a vault older than this release, one answering through the builder that
+     * // writes none, or one whose payload did not satisfy your declaration, with a required
+     * // field missing or a blank value left in.
+     * val applied = Utils.parseAppliedOptionalFields(answer)
+     * ```
+     *
+     * @param intent The incoming request intent, or `null` — nullable and fail-closed for the
+     *               reason [parseShareRequest]'s is, and read rather than retained.
+     */
+    fun parseFieldRequirements(intent: Intent?): FieldRequirements? {
+        if (intent == null) return null
+        val request = parseShareRequest(intent) ?: return null
+        val declared = decodeNames(intent.presentStringExtra(EXTRA_OPTIONAL_FIELDS)).orEmpty()
+        return FieldRequirements(request.entry.fields.keys, declared)
     }
 
     /**
@@ -2495,8 +2956,9 @@ object Utils {
      * payload, then the public key — carried by the query and sign-challenge requests and by the
      * share and query results, though *not* by a sign-challenge result, which proves possession
      * with a signature instead (see [EXTRA_PUBLIC_KEY]) — then the rest of the sign-challenge
-     * flow's values, then the two field payloads, then the correlation token and the version
-     * declaration.
+     * flow's values, then the two field payloads, then the sign-up's two optional-field lists —
+     * the request's declaration and the result's acknowledgement — then the correlation token and
+     * the version declaration.
      *
      * All of them are listed on every line, including the absent ones. A diagnostic that only
      * mentioned what was present could not answer the question it exists for, which is almost
@@ -2511,6 +2973,8 @@ object Utils {
         EXTRA_ALGORITHM,
         EXTRA_FIELDS_JSON,
         EXTRA_QUERY_RESULT_FIELDS,
+        EXTRA_OPTIONAL_FIELDS,
+        EXTRA_APPLIED_OPTIONAL_FIELDS,
         EXTRA_SHARE_REQUEST_CODE,
         EXTRA_PROTOCOL_VERSION,
     )
@@ -2669,6 +3133,13 @@ object Utils {
      * would carry a list of the field names a service asked about, which is precisely the kind of
      * thing this function must not print by accident. `IntentDescriptionTest` pins that no listed
      * key reaches this fallback.
+     *
+     * The sign-up's two optional-field lists are that case, met: they *are* lists of field names,
+     * so they render as a count of what the strict reader found — `0 names`, `1 name`, `3 names`,
+     * duplicates included, as sent — or `undecodable`, and never as a name. `0 names` against
+     * `absent` is the one thing the line can tell a vault about a client: a declaration of nothing
+     * and no declaration mean the same, but only one of them was sent by a client that knew about
+     * required fields.
      */
     private fun describedValue(key: String, raw: String): String = when (key) {
         EXTRA_ENTRY_JSON ->
@@ -2682,6 +3153,9 @@ object Utils {
 
         EXTRA_FIELDS_JSON, EXTRA_QUERY_RESULT_FIELDS -> fieldCount(decodeFields(raw).size)
 
+        EXTRA_OPTIONAL_FIELDS, EXTRA_APPLIED_OPTIONAL_FIELDS ->
+            decodeNames(raw)?.let { nameCount(it.size) } ?: DESCRIBE_UNDECODABLE
+
         EXTRA_NONCE_FORMAT, EXTRA_ALGORITHM, EXTRA_PROTOCOL_VERSION, EXTRA_SHARE_REQUEST_CODE ->
             describedText(raw)
 
@@ -2690,6 +3164,9 @@ object Utils {
 
     /** `1 field`, `3 fields`. Prose, because the line is for a person to read. */
     private fun fieldCount(count: Int): String = if (count == 1) "1 field" else "$count fields"
+
+    /** `0 names`, `1 name`, `3 names` — [fieldCount]'s rule for the two optional-field lists. */
+    private fun nameCount(count: Int): String = if (count == 1) "1 name" else "$count names"
 
     /** A short sender-chosen token, quoted and capped at [DESCRIBE_TEXT_CHARS]. */
     private fun describedText(text: String): String {
@@ -2811,6 +3288,60 @@ object Utils {
                 .toMap(LinkedHashMap())
         } catch (_: Exception) {
             emptyMap()
+        }
+    }
+
+    // ── Optional-field names (de)serialization ────────────────────────────
+    //
+    // The two optional-field lists, [EXTRA_OPTIONAL_FIELDS] and [EXTRA_APPLIED_OPTIONAL_FIELDS],
+    // share one encoding: a JSON array of JSON strings. Written through Gson's own `JsonWriter`
+    // with HTML-safe escaping, which is byte for byte what `Gson().toJson(list)` writes — so a
+    // name is escaped exactly as the entry payload escapes it — and read through its streaming
+    // `JsonReader`. Neither reflects over a type of this library's, so neither needs a keep rule.
+
+    /** [names] as a JSON array of strings, in the order given. `[]` for none. */
+    private fun encodeNames(names: Collection<String>): String {
+        val out = StringWriter()
+        JsonWriter(out).use { writer ->
+            writer.isHtmlSafe = true
+            writer.beginArray()
+            names.forEach { writer.value(it) }
+            writer.endArray()
+        }
+        return out.toString()
+    }
+
+    /**
+     * Read [json] as exactly one flat array of strings, or `null` for anything else.
+     *
+     * **Strict, streaming and all-or-nothing**, because the text arrived from another app. The
+     * reader runs at `Strictness.STRICT`, so the lenient spellings — `[a]`, `['a']`, a trailing
+     * comma, a comment — are refused rather than repaired. An element that is not a string (a
+     * number, a boolean, `null`, an object or a nested array) refuses the whole document and
+     * salvages nothing, and so does anything after the closing bracket. It is a loop rather than a
+     * recursion: a nested `[[[…` is refused at the first element, so depth costs nothing. Every
+     * exception out of the reader is a refusal.
+     *
+     * Duplicates and order are left to the caller: [parseFieldRequirements] intersects the names
+     * with the entry's, [parseAppliedOptionalFields] collapses duplicates, and [describeIntent]
+     * counts what was sent.
+     */
+    private fun decodeNames(json: String?): List<String>? {
+        if (json == null) return null
+        return try {
+            val reader = JsonReader(StringReader(json))
+            reader.strictness = Strictness.STRICT
+            val names = ArrayList<String>()
+            reader.beginArray()
+            while (reader.hasNext()) {
+                if (reader.peek() != JsonToken.STRING) return null
+                names += reader.nextString()
+            }
+            reader.endArray()
+            if (reader.peek() != JsonToken.END_DOCUMENT) return null
+            names
+        } catch (_: Exception) {
+            null
         }
     }
 

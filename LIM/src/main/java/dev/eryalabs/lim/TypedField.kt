@@ -23,7 +23,13 @@ import kotlinx.parcelize.Parcelize
  * @property value The field's value, always a [String] whatever [type] says, and the user's
  *                 personal data: it is what [toString] redacts and what this library exists to
  *                 keep on the device. Empty is legitimate — a client sends empty values on a
- *                 sign-up and the user fills them in inside the vault.
+ *                 sign-up and the user fills them in inside the vault. The requirements-aware
+ *                 [Utils.createShareResultIntent] writes its acknowledgement only over a payload
+ *                 with no blank value, on the one definition of blank [FieldRequirements] holds —
+ *                 but that is a property of that builder, not of every answer carrying an
+ *                 acknowledgement: the acknowledgement is unsigned and no reader enforces it, so
+ *                 keep [FieldRequirements.committed] of an answer's fields rather than relying
+ *                 on it.
  * @property type  The declared datatype, as one of [FieldType]'s constants or any other string a
  *                 peer chose. Metadata for the receiving app to interpret the value by, never
  *                 validation: a field declared [FieldType.INTEGER] whose value is `"forty-seven"`

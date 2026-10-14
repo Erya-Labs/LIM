@@ -270,6 +270,30 @@ class PublishedSurfaceFuzzTest {
     private fun hostileSignChallengeRequest(rnd: Random) =
         SignChallengeRequest(text(rnd), text(rnd).toByteArray(), text(rnd), text(rnd), long(rnd).toInt())
 
+    /**
+     * A set of field names, drawn from the corpus — and every third one carrying a `null`, which
+     * the signature forbids and Java can pass. Required fields' `optionalFields` is one; a client
+     * chooses it, but it names fields of an entry another app may have sent.
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun hostileNames(rnd: Random): Set<String> {
+        val names = linkedSetOf<String?>(text(rnd), text(rnd))
+        if (rnd.nextInt(3) == 0) names += null
+        return names as Set<String>
+    }
+
+    /**
+     * Requirements as a vault might hold them: corpus names, some declared optional, and the same
+     * Java `null` the constructor documents skipping. Built through the published constructor,
+     * which is the only way one exists.
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun hostileRequirements(rnd: Random): FieldRequirements {
+        val names = arrayListOf<String?>(text(rnd), text(rnd), text(rnd))
+        if (rnd.nextInt(3) == 0) names += null
+        return FieldRequirements(names as List<String>, hostileNames(rnd))
+    }
+
     private fun rawOf(type: Type): Class<*>? = when (type) {
         is ParameterizedType -> type.rawType as? Class<*>
         is Class<*> -> type
@@ -303,6 +327,8 @@ class PublishedSurfaceFuzzTest {
             return (type as? ParameterizedType)?.actualTypeArguments?.toList() ==
                 listOf<Type>(String::class.java, TypedField::class.java)
         }
+        // Required fields' `Set<String>` of optional names; a set of anything else is uncovered.
+        if (raw == Set::class.java) return elementOf(type) == String::class.java
         return raw in COVERED_TYPES
     }
 
@@ -323,6 +349,8 @@ class PublishedSurfaceFuzzTest {
             ShareRequest::class.java -> hostileShareRequest(rnd)
             QueryRequest::class.java -> hostileQueryRequest(rnd)
             SignChallengeRequest::class.java -> hostileSignChallengeRequest(rnd)
+            FieldRequirements::class.java -> hostileRequirements(rnd)
+            Set::class.java -> hostileNames(rnd)
             Map::class.java -> hostileFields(rnd)
             Intent::class.java -> intentFor(intentShapes[rnd.nextInt(intentShapes.size)], text(rnd))
             List::class.java -> hostileList(type, rnd)
@@ -915,6 +943,63 @@ class PublishedSurfaceFuzzTest {
         )
     }
 
+    // ── FieldRequirements, member by member ──────────────────────────────
+
+    /**
+     * The one published type outside [Utils] whose methods take hostile input: a vault builds a
+     * [FieldRequirements] out of names another app sent and then hands it the user's draft, and a
+     * client hands it the fields a vault answered with. The enumeration above is of [Utils]'s
+     * methods, so this arm calls every member of this one directly, over the same corpus, with its
+     * own seed so that the draw sequence above is not moved by it.
+     *
+     * Nothing may throw, and four invariants must hold of whatever comes back: the optional set is
+     * a subset of the declared names and the required set is the rest; `committed` is `null`
+     * exactly when `missingRequired` is non-empty, and keeps only declared names when it is not;
+     * and `toString` is counts and nothing else.
+     */
+    @Test
+    fun `every FieldRequirements member survives hostile names and hostile drafts`() {
+        val rnd = Random(MASTER_SEED xor 0x4652L)
+        var committedSome = 0
+        var refusedSome = 0
+        val shape = Regex("""FieldRequirements\(fields=\d+, optional=\d+\)""")
+
+        repeat(FIELD_REQUIREMENTS_DRAWS) { draw ->
+            val requirements = hostileRequirements(rnd)
+            val other = hostileRequirements(rnd)
+            // Half the drafts are the corpus's own mixed field map; the other half answer the
+            // declared names with corpus values, blanks included, which is what a vault's form
+            // produces — without them a draft would almost never satisfy anything.
+            val draft = if (draw % 2 == 0) {
+                hostileFields(rnd)
+            } else {
+                requirements.fieldNames.associateWith { TypedField(text(rnd), text(rnd)) }
+            }
+            fun where() = "draw #$draw: $requirements over draft keys ${draft.keys.map(::printable)}"
+
+            val outcome = runCatching {
+                val names = requirements.fieldNames
+                assertTrue(where(), names.toSet().containsAll(requirements.optionalFields))
+                assertEquals(where(), names.toSet() - requirements.optionalFields, requirements.requiredFields)
+                assertEquals(where(), names.distinct(), names)
+
+                val missing = requirements.missingRequired(draft)
+                val committed = requirements.committed(draft)
+                assertEquals(where(), missing.isNotEmpty(), committed == null)
+                if (committed == null) refusedSome++ else committedSome++
+                committed?.keys?.forEach { assertTrue(where(), it in names) }
+                requirements.isSatisfiedBy(draft)
+                requirements.equals(other)
+                requirements.hashCode()
+                assertTrue(where(), shape.matches(requirements.toString()))
+            }
+            assertTrue("${where()} threw ${outcome.exceptionOrNull()}", outcome.isSuccess)
+        }
+
+        assertTrue("no draw committed, so the non-null half went unchecked", committedSome > 0)
+        assertTrue("no draw was refused, so the null half went unchecked", refusedSome > 0)
+    }
+
     // ── Negative controls ────────────────────────────────────────────────
 
     /**
@@ -1057,6 +1142,9 @@ class PublishedSurfaceFuzzTest {
          */
         private const val DRAWS = 8
 
+        /** Draws for the [FieldRequirements] arm, which is one type rather than a whole surface. */
+        private const val FIELD_REQUIREMENTS_DRAWS = 400
+
         private const val PAYLOAD_PREVIEW = 120
         private const val HEX = "0123456789abcdef"
 
@@ -1100,6 +1188,9 @@ class PublishedSurfaceFuzzTest {
             ShareRequest::class.java,
             QueryRequest::class.java,
             SignChallengeRequest::class.java,
+            // Required fields: the requirements a vault read and a client declared. `Set` is
+            // checked by element type in [covered], like `List` and `Map`.
+            FieldRequirements::class.java,
             Map::class.java,
             Intent::class.java,
             List::class.java,
@@ -1170,6 +1261,7 @@ class PublishedSurfaceFuzzTest {
             "createQueryIntent(Context, String, String, String)#0",
             "createShareIntent(Context, Entry)#0",
             "createShareIntent(Context, Entry, String)#0",
+            "createShareIntent(Context, Entry, String, Set<String>, String)#0",
             "createShareIntent(Context, Entry, String, String)#0",
             "createSignChallengeIntent(Context, String, byte[], String)#0",
             "createSignChallengeIntent(Context, String, byte[], String, String)#0",

@@ -587,16 +587,19 @@ class KDocCoverageTest {
         )
 
         // The overload pair is the reason a key carries a rendered parameter list at all, so it is
-        // asserted rather than assumed: both must be seen, and seen separately.
+        // asserted rather than assumed: both must be seen, and seen separately. A third joined them
+        // with required fields — the one taking `optionalFields` — and it is listed here for the
+        // same reason, so that neither 1.0.0 overload's doc can vouch for it.
         val shareIntents = onDisk().functions
             .filter { it.name == "createShareIntent" }
             .map { it.key }
             .sorted()
         assertEquals(
-            "both `createShareIntent` overloads must be seen as separate members, or the " +
-                "documented one vouches for the other; found $shareIntents",
+            "all three `createShareIntent` overloads must be seen as separate members, or a " +
+                "documented one vouches for another; found $shareIntents",
             listOf(
                 "Utils.createShareIntent(Context, Entry, String)",
+                "Utils.createShareIntent(Context, Entry, String, Set<String>, String)",
                 "Utils.createShareIntent(Context, Entry, String, String)",
             ),
             shareIntents,
@@ -2309,7 +2312,8 @@ class KDocCoverageTest {
          *
          * [MINIMUM_SOURCES] is the one set *at* the measured value rather than below it, on
          * purpose: a source file disappearing from the published package is worth a failure, while
-         * adding one is not.
+         * adding one is not. It moved from 16 to 18 when `FieldRequirements.kt` and
+         * `FieldRequirementsVerdict.kt` arrived, to stay at the measured value.
          *
          * [MINIMUM_LINKS] was measured the same way and is worth showing the arithmetic for,
          * because a floor transcribed from a planning document is a floor nobody measured. `grep`
@@ -2321,7 +2325,7 @@ class KDocCoverageTest {
          * the four `[label][target]` pairs rather than both halves: 675 − 4 + 7 − 4 = **674**,
          * which is what the run prints. 33 of them go to [EXTERNAL].
          */
-        private const val MINIMUM_SOURCES = 16
+        private const val MINIMUM_SOURCES = 18
         private const val MINIMUM_TYPES = 15
         private const val MINIMUM_FUNCTIONS = 38
         private const val MINIMUM_PARAMETERS = 85

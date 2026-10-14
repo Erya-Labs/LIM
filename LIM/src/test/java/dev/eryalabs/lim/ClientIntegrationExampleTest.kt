@@ -227,8 +227,8 @@ class ClientIntegrationExampleTest {
          *
          * **Hand-built on purpose, and the one intent in this fixture that is.** Every result
          * builder in this library writes `extra_protocol_version` unconditionally — that echo is
-         * the point of them, since it is what lets a client tell a vault that honoured a modern
-         * request from one that ignored what it did not know. A refusal honoured nothing, so
+         * the point of them, since it is what lets a client tell a versioned vault from a legacy
+         * one that ignored what it did not know. A refusal honoured nothing, so
          * routing one through a builder would attach a protocol version to a refusal: a change to
          * the wire, not a tidy-up. There is no refusal builder to call, and whether there should
          * be one is drafted under "Blocked on human" because it is a protocol decision. The
@@ -673,6 +673,125 @@ class ClientIntegrationExampleTest {
             Activity.RESULT_OK,
             vault.handle(Utils.createSignChallengeIntent(context, accountKey, nonce, LOGIN_CODE)).resultCode,
         )
+    }
+
+    // ── Sign-up with an optional field ─────────────────────────────────────
+
+    /**
+     * A vault's sign-up form, as far as required fields go: what the user typed into it, and
+     * whether the vault implements required fields.
+     *
+     * Implementing them means LIM's three calls and nothing else — [Utils.parseFieldRequirements]
+     * on the way in, Save blocked on [FieldRequirements.missingRequired], and
+     * [FieldRequirements.committed] answered through the requirements-aware
+     * [Utils.createShareResultIntent]. Not implementing them is the vault every device may still
+     * have: nothing required, blank fields dropped, and the 1.0.0 builder.
+     */
+    private class SignUpVault(
+        keyPair: KeyPair,
+        private val typed: Map<String, String>,
+        private val implementsRequiredFields: Boolean,
+    ) {
+        val publicKey: String = Base64.encodeToString(keyPair.public.encoded, Base64.NO_WRAP)
+
+        fun handle(request: Intent): VaultAnswer {
+            val share = Utils.parseShareRequest(request) ?: return VaultAnswer(Activity.RESULT_CANCELED, null)
+            val draft = share.entry.fields.mapValues { (name, declared) ->
+                TypedField(typed[name] ?: "", declared.type)
+            }
+            if (!implementsRequiredFields) {
+                val stored = draft.filterValues { it.value.isNotBlank() }
+                return VaultAnswer(
+                    Activity.RESULT_OK,
+                    Utils.createShareResultIntent(publicKey, stored, share.requestCode),
+                )
+            }
+            val requirements = Utils.parseFieldRequirements(request)
+                ?: return VaultAnswer(Activity.RESULT_CANCELED, null)
+            if (requirements.missingRequired(draft).isNotEmpty()) {
+                // Save stays blocked; the user backs out, and the client hears a refusal.
+                return VaultAnswer(
+                    Activity.RESULT_CANCELED,
+                    Intent().apply { share.requestCode?.let { putExtra(Utils.EXTRA_SHARE_REQUEST_CODE, it) } },
+                )
+            }
+            return VaultAnswer(
+                Activity.RESULT_OK,
+                Utils.createShareResultIntent(
+                    publicKey,
+                    requirements.committed(draft)!!,
+                    share.requestCode,
+                    requirements,
+                ),
+            )
+        }
+    }
+
+    /**
+     * Sign-up with `phone` named optional, against both kinds of vault. A vault implementing
+     * required fields lets the user leave `phone` blank, drops it, refuses to save while `email` is
+     * blank, and answers `HONOURED`. A vault that predates them lets the user skip `email` too,
+     * and the client finds out from `INCOMPLETE`, naming `email` — and keeps the key anyway,
+     * because the profile exists and is bound to it.
+     */
+    @Test
+    fun `a sign-up with an optional field, against a vault that implements required fields and one that does not`() {
+        val service = Service()
+        val entry = Entry(
+            id = "signup-form-1",
+            fields = linkedMapOf(
+                "name" to TypedField(value = "", type = FieldType.STRING),
+                "email" to TypedField(value = "", type = FieldType.EMAIL),
+                "phone" to TypedField(value = "", type = FieldType.PHONE),
+            ),
+            publicKey = NO_KEY_YET,
+        )
+        val requirements = FieldRequirements(entry.fields.keys, setOf("phone"))
+        val request = Utils.createShareIntent(
+            context,
+            entry,
+            SIGN_UP_CODE,
+            requirements.optionalFields,
+            Utils.DEFAULT_ENDEAVOR_PACKAGE,
+        )
+        val everything = mapOf("name" to SENTINEL_NAME, "email" to SHARED_EMAIL)
+
+        // ── A vault that implements required fields ──────────────────────
+        val modern = SignUpVault(profileKeyPair, everything, implementsRequiredFields = true)
+        val answer = modern.handle(request)
+        assertEquals(Activity.RESULT_OK, answer.resultCode)
+        assertTrue(Utils.matchesRequestCode(answer.data, SIGN_UP_CODE))
+        assertEquals(FieldRequirementsVerdict.HONOURED, Utils.checkFieldRequirements(requirements, answer.data))
+        val result = Utils.parseShareResult(answer.data)!!
+        assertEquals(
+            "the blank optional field was dropped, not stored as an empty value",
+            listOf("name", "email"),
+            result.fields.keys.toList(),
+        )
+        assertEquals(result.fields, requirements.committed(result.fields))
+        assertNotNull(service.signUp(result))
+        assertEquals(modern.publicKey, result.publicKey)
+
+        // The same vault will not let the user save with a required field blank.
+        val blocked = SignUpVault(profileKeyPair, mapOf("name" to SENTINEL_NAME), implementsRequiredFields = true)
+            .handle(request)
+        assertEquals(Activity.RESULT_CANCELED, blocked.resultCode)
+        assertTrue("the refusal is still correlated", Utils.matchesRequestCode(blocked.data, SIGN_UP_CODE))
+        assertNull("…and acknowledges nothing", Utils.parseAppliedOptionalFields(blocked.data))
+
+        // ── A vault that predates them ───────────────────────────────────
+        val older = SignUpVault(otherProfileKeyPair, mapOf("name" to "Grace"), implementsRequiredFields = false)
+        val skipped = older.handle(request)
+        assertEquals("an older vault lets the user skip a required field", Activity.RESULT_OK, skipped.resultCode)
+        assertEquals(FieldRequirementsVerdict.INCOMPLETE, Utils.checkFieldRequirements(requirements, skipped.data))
+        val partial = Utils.parseShareResult(skipped.data)!!
+        assertEquals(listOf("email"), requirements.missingRequired(partial.fields))
+        assertNull("there is no complete profile to keep", requirements.committed(partial.fields))
+        assertNotNull(
+            "…but the key is kept all the same: the profile exists in the vault and is bound to it",
+            service.signUp(partial),
+        )
+        assertEquals("account-2", service.accountFor(older.publicKey))
     }
 
     // ── Shared setup ─────────────────────────────────────────────────────

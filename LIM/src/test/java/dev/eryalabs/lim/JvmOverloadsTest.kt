@@ -109,4 +109,118 @@ class JvmOverloadsTest {
         )
         assertTrue(Utils.matchesRequestCode(intended, "req-1"))
     }
+
+    // ── The required-fields overload ─────────────────────────────────────
+
+    /**
+     * A third overload arrived with required fields, and the hazard above must mean exactly what it
+     * meant: the bare three-argument call still binds `targetPackage` and declares nothing, and a
+     * bare fourth *string* still binds the 1.0.0 request-code overload. Only five arguments with a
+     * `Set` in fourth place reach the new one — by position or by name — because it has no
+     * defaults at all and no string can bind its `optionalFields`.
+     */
+    @Test
+    fun `the 1_0_0 calls resolve as they did, and only five arguments reach the optional-fields overload`() {
+        val bare = Utils.createShareIntent(context, entry, "req-1")
+        assertEquals("req-1", bare.getPackage())
+        assertFalse(bare.hasExtra(Utils.EXTRA_OPTIONAL_FIELDS))
+
+        val named = Utils.createShareIntent(context, entry, requestCode = "req-1")
+        assertEquals("req-1", named.getStringExtra(Utils.EXTRA_SHARE_REQUEST_CODE))
+        assertFalse("the named 1.0.0 call declares nothing", named.hasExtra(Utils.EXTRA_OPTIONAL_FIELDS))
+
+        val fourthString = Utils.createShareIntent(context, entry, "req-1", "dev.other.vault")
+        assertEquals("dev.other.vault", fourthString.getPackage())
+        assertEquals("req-1", fourthString.getStringExtra(Utils.EXTRA_SHARE_REQUEST_CODE))
+        assertFalse(fourthString.hasExtra(Utils.EXTRA_OPTIONAL_FIELDS))
+
+        val positional = Utils.createShareIntent(context, entry, "req-1", setOf("name"), "dev.other.vault")
+        val byName = Utils.createShareIntent(
+            context,
+            entry,
+            requestCode = "req-1",
+            optionalFields = setOf("name"),
+            targetPackage = "dev.other.vault",
+        )
+        for (intent in listOf(positional, byName)) {
+            assertEquals("dev.other.vault", intent.getPackage())
+            assertEquals("req-1", intent.getStringExtra(Utils.EXTRA_SHARE_REQUEST_CODE))
+            assertEquals("""["name"]""", intent.getStringExtra(Utils.EXTRA_OPTIONAL_FIELDS))
+        }
+    }
+
+    /**
+     * A fourth argument whose type the compiler has to infer — the shape of MockK's and
+     * mockito-kotlin's `any()`, a generic getter, `TODO()` — still binds the 1.0.0 request-code
+     * overload. With a default on the new overload's `targetPackage` it had a four-argument form
+     * too, `String` and `Set<String>` were equally good guesses, and every one of these calls was
+     * a compile error against a library that promised every 1.0.0 call resolves as it did.
+     *
+     * So this test is half compile-time: if a four-argument form of the new overload ever comes
+     * back, this file stops compiling. The runtime half checks the call landed where it should —
+     * the fourth argument became the package, and nothing was declared optional.
+     */
+    @Test
+    fun `a fourth argument of inferred type still binds the 1_0_0 request-code overload`() {
+        val generic = Utils.createShareIntent(context, entry, "req-1", inferred("dev.other.vault"))
+        val reified = Utils.createShareIntent(context, entry, "req-1", matcherLike("dev.other.vault"))
+        val allInferred = Utils.createShareIntent(
+            matcherLike(context),
+            matcherLike(entry),
+            matcherLike("req-1"),
+            matcherLike("dev.other.vault"),
+        )
+        for (intent in listOf(generic, reified, allInferred)) {
+            assertEquals("dev.other.vault", intent.getPackage())
+            assertEquals("req-1", intent.getStringExtra(Utils.EXTRA_SHARE_REQUEST_CODE))
+            assertFalse(intent.hasExtra(Utils.EXTRA_OPTIONAL_FIELDS))
+        }
+
+        // `Nothing` is a subtype of both candidates' fourth type, so it is the sharpest probe of
+        // all: it compiles only while exactly one four-argument candidate exists.
+        val thrown = runCatching { Utils.createShareIntent(context, entry, "req-1", TODO("no package")) }
+        assertTrue(thrown.exceptionOrNull() is NotImplementedError)
+    }
+
+    /**
+     * Measured by reflection, since Kotlin cannot see generated forms: the new overload publishes
+     * exactly one JVM method, its full arity, and no `$default` bridge — so no four-parameter
+     * `(Context, Entry, String, Set)` exists for `javac` to weigh against the 1.0.0
+     * `(Context, Entry, String, String)` either.
+     */
+    @Test
+    fun `the optional-fields overload publishes one JVM method and no shorter form`() {
+        val type = Utils::class.java
+        val contextType = android.content.Context::class.java
+        val entryType = Entry::class.java
+        val string = String::class.java
+        val set = Set::class.java
+
+        assertNotNull(type.getMethod("createShareIntent", contextType, entryType, string, set, string))
+        val withASet = type.declaredMethods
+            .filter { it.name.startsWith("createShareIntent") && set in it.parameterTypes }
+            .map { method -> method.name + method.parameterTypes.joinToString(", ", "(", ")") { it.simpleName } }
+        assertEquals(
+            "the five-parameter method and nothing else may take a Set",
+            listOf("createShareIntent(Context, Entry, String, Set, String)"),
+            withASet,
+        )
+        assertNotNull(
+            "1.0.0's request-code overload is still there",
+            type.getMethod("createShareIntent", contextType, entryType, string, string),
+        )
+        assertNotNull(
+            "…and its targetPackage one",
+            type.getMethod("createShareIntent", contextType, entryType, string),
+        )
+    }
+
+    private companion object {
+        /** A value whose type is inferred from where it is used: a generic getter's shape. */
+        @Suppress("UNCHECKED_CAST")
+        fun <T> inferred(value: Any): T = value as T
+
+        /** MockK's and mockito-kotlin's `any()` shape — reified, and inferred all the same. */
+        inline fun <reified T : Any> matcherLike(value: Any): T = value as T
+    }
 }

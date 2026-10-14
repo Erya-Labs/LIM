@@ -162,6 +162,117 @@ class GuideExamplesTest {
         )
     }
 
+    /**
+     * *Required and optional fields*: one field named optional, a vault implementing required
+     * fields that lets the user leave it blank, and the handler the guide prints.
+     *
+     * [RequiredFieldsVault] answers the first call. The user has typed a name and an email and
+     * nothing for `phone`, so the vault stores the two and drops the third, and the handler
+     * creates the account from [FieldRequirements.committed] with the verdict `HONOURED`. The
+     * three controls run the **same** handler against the answers it has to survive: a vault
+     * built before required fields, which acknowledges nothing (`NOT_ACKNOWLEDGED`, and its blank
+     * `phone` dropped by `committed` rather than stored as `""`); the same vault where the user
+     * skipped a required field (`INCOMPLETE`, naming it); and an answer that hand-writes the
+     * acknowledgement over that incomplete payload (`VIOLATED`). Every assertion is outside the
+     * regions.
+     */
+    @Test
+    fun `a sign-up can leave named fields optional and reads what the vault did with them`() {
+        // region snippet:signup-optional-request
+        // Every field you declare is required unless you name it here. Names match exactly, so
+        // a misspelt name is simply not sent and that field stays required. All five arguments
+        // are needed, the vault's package included: with no defaults, no shorter call can
+        // resolve to this overload, so every call written before it still means what it did.
+        val entry = Entry(
+            id = "signup-form",
+            fields = linkedMapOf(
+                "name" to TypedField(value = "", type = FieldType.STRING),
+                "email" to TypedField(value = "", type = FieldType.EMAIL),
+                "phone" to TypedField(value = "", type = FieldType.PHONE),
+            ),
+            publicKey = "no-key-yet",
+        )
+        val requirements = FieldRequirements(entry.fields.keys, setOf("phone"))
+        val request = Utils.createShareIntent(
+            context,
+            entry,
+            SIGN_UP_REQUEST,
+            requirements.optionalFields,
+            Utils.DEFAULT_ENDEAVOR_PACKAGE,
+        )
+        // startActivityForResult(request, VAULT_RESULT)
+        // endregion snippet:signup-optional-request
+
+        val answer = RequiredFieldsVault(vaultKeyPair, PROFILE).answer(request)
+        val delivered = answer.data
+
+        // region snippet:signup-optional-result
+        // In onActivityResult, once `resultCode` is RESULT_OK and the request code matches.
+        fun onSignUpAnswer(data: Intent?) {
+            val result = Utils.parseShareResult(data) ?: return
+            // Keep the key whatever follows: the profile now exists in the vault, bound to you.
+            val accountKey = result.publicKey ?: return
+            // Gate on the data, never on a version number. `committed` is null exactly when a
+            // required field is missing or blank. It drops a blank optional field too, whether
+            // the vault left it out or, as an older vault may, sent it as an empty value.
+            val profile = requirements.committed(result.fields)
+            when (Utils.checkFieldRequirements(requirements, data)) {
+                FieldRequirementsVerdict.HONOURED,
+                FieldRequirementsVerdict.MISMATCHED,
+                FieldRequirementsVerdict.NOT_ACKNOWLEDGED -> createAccount(accountKey, profile!!)
+                FieldRequirementsVerdict.INCOMPLETE ->
+                    accountIncomplete(accountKey, requirements.missingRequired(result.fields))
+                else -> reportVault(accountKey) // VIOLATED, and any verdict a later release adds
+            }
+        }
+        // endregion snippet:signup-optional-result
+
+        onSignUpAnswer(delivered)
+        assertEquals(Activity.RESULT_OK, answer.resultCode)
+        assertTrue("the request names the optional field", request.hasExtra(Utils.EXTRA_OPTIONAL_FIELDS))
+        assertEquals(
+            "a vault implementing required fields stores what was filled in, and the handler " +
+                "creates the account from exactly that",
+            listOf("created [name, email]"),
+            signUpOutcomes,
+        )
+        assertEquals(
+            FieldRequirementsVerdict.HONOURED,
+            Utils.checkFieldRequirements(requirements, delivered),
+        )
+        assertFalse(
+            "phone was left blank, so it is absent rather than an empty value",
+            "phone" in Utils.parseShareResult(delivered)!!.fields,
+        )
+
+        // An older vault answers the same request: no acknowledgement, and its blank `phone` comes
+        // back as an empty value, which `committed` drops rather than keeps.
+        signUpOutcomes.clear()
+        val older = FixtureVault(vaultKeyPair, PROFILE).answer(request).data
+        assertEquals("", Utils.parseShareResult(older)!!.fields["phone"]?.value)
+        onSignUpAnswer(older)
+        assertEquals(listOf("created [name, email]"), signUpOutcomes)
+        assertEquals(
+            FieldRequirementsVerdict.NOT_ACKNOWLEDGED,
+            Utils.checkFieldRequirements(requirements, older),
+        )
+
+        // The same older vault where the user skipped a field that was required.
+        signUpOutcomes.clear()
+        val skipped = FixtureVault(
+            vaultKeyPair,
+            linkedMapOf("name" to TypedField("Ada", FieldType.STRING)),
+        ).answer(request).data
+        onSignUpAnswer(skipped)
+        assertEquals(listOf("incomplete [email]"), signUpOutcomes)
+
+        // An acknowledgement nobody's builder would write over that payload.
+        signUpOutcomes.clear()
+        val forged = skipped!!.apply { putExtra(Utils.EXTRA_APPLIED_OPTIONAL_FIELDS, """["phone"]""") }
+        onSignUpAnswer(forged)
+        assertEquals(listOf("reported"), signUpOutcomes)
+    }
+
     // ── Query ────────────────────────────────────────────────────────────
 
     @Test
@@ -486,7 +597,104 @@ class GuideExamplesTest {
         )
     }
 
+    /**
+     * The same section's third block: the answer a vault implementing required fields sends,
+     * minted in an integrator's own test with the vault-side functions this library publishes.
+     *
+     * The request and the requirements are the ones *Required and optional fields* builds, set up
+     * outside the region because the guide has already shown them. What the region cannot assert
+     * about itself is asserted below it: the verdict is `HONOURED`, the applied set is the one the
+     * client declared, and the same builder over a payload missing a required field writes no
+     * acknowledgement at all — so the verdict the test sees is the one a real vault produces, not
+     * one the builder hands out regardless.
+     */
+    @Test
+    fun `an integrator meets the optional-field verdict their handler will get, with no vault`() {
+        val entry = optionalPhoneEntry()
+        val requirements = FieldRequirements(entry.fields.keys, setOf("phone"))
+        val request = Utils.createShareIntent(
+            context,
+            entry,
+            SIGN_UP_REQUEST,
+            requirements.optionalFields,
+            Utils.DEFAULT_ENDEAVOR_PACKAGE,
+        )
+
+        // region snippet:testing-optional-fields
+        // A vault that implements required fields reads your declaration off the request, stores
+        // what the user filled in, and acknowledges the declaration only when what it stored
+        // satisfies it. Build that answer and your handler meets the verdict it will really get:
+        // here the user filled in both required fields and left the optional "phone" blank.
+        val declared = Utils.parseFieldRequirements(request)!!
+        val answer = Utils.createShareResultIntent(
+            FAKE_PUBLIC_KEY,
+            linkedMapOf(
+                "name" to TypedField(value = "Ada", type = FieldType.STRING),
+                "email" to TypedField(value = FAKE_EMAIL, type = FieldType.EMAIL),
+            ),
+            SIGN_UP_REQUEST,
+            declared,
+        )
+        val verdict = Utils.checkFieldRequirements(requirements, answer)
+        // The optional set the vault says it applied. `null` means the answer acknowledges
+        // nothing: a vault older than this release, one answering through the builder that
+        // writes none, or one whose payload did not satisfy your declaration, with a required
+        // field missing or a blank value left in.
+        val applied = Utils.parseAppliedOptionalFields(answer)
+        // endregion snippet:testing-optional-fields
+
+        assertEquals("the vault read what the client declared", requirements, declared)
+        assertEquals(FieldRequirementsVerdict.HONOURED, verdict)
+        assertEquals(setOf("phone"), applied)
+        assertTrue(Utils.matchesRequestCode(answer, SIGN_UP_REQUEST))
+
+        val missingAName = Utils.createShareResultIntent(
+            FAKE_PUBLIC_KEY,
+            linkedMapOf("email" to TypedField(value = FAKE_EMAIL, type = FieldType.EMAIL)),
+            SIGN_UP_REQUEST,
+            declared,
+        )
+        assertNull(
+            "control: over a payload missing a required field the same builder acknowledges " +
+                "nothing, so the HONOURED above was earned rather than handed out",
+            Utils.parseAppliedOptionalFields(missingAName),
+        )
+        assertEquals(
+            FieldRequirementsVerdict.INCOMPLETE,
+            Utils.checkFieldRequirements(requirements, missingAName),
+        )
+    }
+
     // ── Shared setup, all of it outside the regions ───────────────────────
+
+    /** What *Required and optional fields*' handler did, one line per call. */
+    private val signUpOutcomes = mutableListOf<String>()
+
+    /** The handler's three outcomes, recorded so the test can say which one it took. */
+    private fun createAccount(accountKey: String, profile: Map<String, TypedField>) {
+        accounts.getOrPut(accountKey) { "account-${accounts.size + 1}" }
+        signUpOutcomes += "created ${profile.keys.toList()}"
+    }
+
+    private fun accountIncomplete(accountKey: String, missing: List<String>) {
+        accounts.getOrPut(accountKey) { "account-${accounts.size + 1}" }
+        signUpOutcomes += "incomplete $missing"
+    }
+
+    private fun reportVault(@Suppress("UNUSED_PARAMETER") accountKey: String) {
+        signUpOutcomes += "reported"
+    }
+
+    /** The guide's optional-field sign-up entry, for the test that does not re-print it. */
+    private fun optionalPhoneEntry() = Entry(
+        id = "signup-form",
+        fields = linkedMapOf(
+            "name" to TypedField(value = "", type = FieldType.STRING),
+            "email" to TypedField(value = "", type = FieldType.EMAIL),
+            "phone" to TypedField(value = "", type = FieldType.PHONE),
+        ),
+        publicKey = "no-key-yet",
+    )
 
     /** The entry a client pushes on sign-up: field keys and types, no values, no key of its own. */
     private fun pushedEntry() = Entry(
@@ -650,6 +858,47 @@ class GuideExamplesTest {
             Activity.RESULT_CANCELED,
             Intent().apply { requestCode?.let { putExtra(Utils.EXTRA_SHARE_REQUEST_CODE, it) } },
         )
+    }
+
+    /**
+     * Just enough of a vault implementing required fields for *Required and optional fields* to
+     * have something to talk to — the sign-up half only, which is all that section shows.
+     *
+     * What the user typed is [profile]; a declared field it has no value for is one the user left
+     * blank. The vault reads the declaration with [Utils.parseFieldRequirements], keeps Save
+     * blocked while a required field is blank (the user backs out, and the client sees a refusal),
+     * stores [FieldRequirements.committed], and answers through the requirements-aware builder.
+     * `ClientIntegrationExampleTest` and `RequirementsCompatibilityMatrixTest` hold the fuller
+     * versions of this.
+     */
+    private class RequiredFieldsVault(
+        keyPair: KeyPair,
+        private val profile: Map<String, TypedField>,
+    ) {
+        private val publicKey: String = Base64.encodeToString(keyPair.public.encoded, Base64.NO_WRAP)
+
+        fun answer(request: Intent): VaultAnswer {
+            val share = Utils.parseShareRequest(request)
+                ?: return VaultAnswer(Activity.RESULT_CANCELED, null)
+            val requirements = Utils.parseFieldRequirements(request)
+                ?: return VaultAnswer(Activity.RESULT_CANCELED, null)
+            val draft = requirements.fieldNames.associateWith { name ->
+                TypedField(profile[name]?.value ?: "", share.entry.fields.getValue(name).type)
+            }
+            if (requirements.missingRequired(draft).isNotEmpty()) {
+                return VaultAnswer(
+                    Activity.RESULT_CANCELED,
+                    Intent().apply {
+                        share.requestCode?.let { putExtra(Utils.EXTRA_SHARE_REQUEST_CODE, it) }
+                    },
+                )
+            }
+            val stored = requirements.committed(draft)!!
+            return VaultAnswer(
+                Activity.RESULT_OK,
+                Utils.createShareResultIntent(publicKey, stored, share.requestCode, requirements),
+            )
+        }
     }
 
     companion object {

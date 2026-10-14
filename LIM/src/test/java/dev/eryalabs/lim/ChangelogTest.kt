@@ -1,6 +1,7 @@
 package dev.eryalabs.lim
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -16,7 +17,8 @@ import java.lang.reflect.Modifier
  *
  *  - **Complete.** Every published function and constant on [Utils], every published type in
  *    `dev.eryalabs.lim`, and both published top-level members of `Redaction.kt` must be named in
- *    the release section. A new public member reddens this file until somebody writes the line.
+ *    some `## ` section — the union of them all, `## Unreleased` included. A new public member
+ *    reddens this file until somebody writes the line.
  *  - **Not stale.** Every `Utils.<member>` the file names must still be a member of [Utils], and
  *    every published name it cites in a code span must still exist. A changelog naming a member
  *    that was renamed is worse than one that is short: the short one is merely incomplete, the
@@ -230,7 +232,7 @@ class ChangelogTest {
         .map { (_, name) -> name }
         .sorted()
 
-    /** The whole census: the names the changelog's release section has to contain. */
+    /** The whole census: the names the changelog's version sections have to contain. */
     private fun census(): List<String> =
         (utilsFunctions() + utilsConstants() + publishedTypes() + redactionMembers())
             .distinct()
@@ -242,21 +244,63 @@ class ChangelogTest {
      * The release section's body: from the `##` heading that names the declared version to the
      * next `##` heading, or the end of the file.
      *
-     * The completeness check runs against this rather than against the whole file on purpose. The
-     * preamble explains why a first changelog has no changes in it; a member named only there
-     * would be mentioned without being *described*, which is not what the census is asking for.
+     * What still reads only this: the date-and-tag rule and `the release section is grouped by
+     * flow`, which are claims about the version the build declares. The census and the lead check
+     * read [everySection] instead — see there for why that was widened, and what it costs.
      */
-    private fun releaseSection(): String {
-        val lines = changelogFile().readLines()
-        val start = lines.indexOfFirst { it.startsWith("## ") && mentions(it, declaredVersion()) }
+    private fun releaseSection(): String = releaseSectionIn(changelogFile().readLines(), declaredVersion())
+
+    /** [releaseSection] over any text, so the widening's control can run it over a fixture. */
+    private fun releaseSectionIn(lines: List<String>, version: String): String {
+        val start = lines.indexOfFirst { it.startsWith("## ") && mentions(it, version) }
         assertTrue(
-            "no `## ` heading in $CHANGELOG_PATH names version ${declaredVersion()}, which is " +
+            "no `## ` heading in $CHANGELOG_PATH names version $version, which is " +
                 "what ${moduleBuildFile().absolutePath} declares in its coordinates(...) call",
             start >= 0,
         )
         val rest = lines.drop(start + 1)
         val end = rest.indexOfFirst { it.startsWith("## ") }
         return (if (end < 0) rest else rest.take(end)).joinToString("\n")
+    }
+
+    /**
+     * The body of **every** `## ` section, joined — what the census and the lead check read.
+     *
+     * **A declared widening, and the reason is mechanical rather than a preference.** Until the
+     * required-fields work, both read [releaseSection] alone, which is the section named by the
+     * build's `coordinates(...)` version. A member added after a release has nowhere to be
+     * described there: the declared version's section is the *released* one, a dated record of
+     * what shipped, and it must not grow a bullet for something that did not ship in it. Bumping
+     * the coordinates instead would not help either, because the new version's section would
+     * then have to repeat every name the old one already describes. So new members go under a
+     * `## Unreleased` heading, and the two checks read the union.
+     *
+     * **What that costs, recorded rather than implied.** A name can now satisfy the census or
+     * lead a bullet in *any* version's section, so "the current section describes it" has become
+     * "some section describes it". The preamble is still excluded — a name mentioned only there
+     * is mentioned without being described — and the per-version claims, the date-and-tag rule
+     * and the grouping check, still read the declared version's section alone.
+     * `a name present only in an Unreleased section is found by the census` is the control.
+     *
+     * Joined with a blank line between sections, so the last bullet of one cannot swallow the
+     * first line of the next as a continuation.
+     */
+    private fun everySection(): String = sectionsIn(changelogFile().readLines())
+
+    /** [everySection] over any text. */
+    private fun sectionsIn(lines: List<String>): String {
+        val bodies = mutableListOf<String>()
+        var current: MutableList<String>? = null
+        for (line in lines) {
+            if (line.startsWith("## ")) {
+                current?.let { bodies += it.joinToString("\n") }
+                current = mutableListOf()
+            } else {
+                current?.add(line)
+            }
+        }
+        current?.let { bodies += it.joinToString("\n") }
+        return bodies.joinToString("\n\n")
     }
 
     /** The `##` headings, which is where a version lives; `###` group headings are not these. */
@@ -295,13 +339,14 @@ class ChangelogTest {
 
     @Test
     fun `every published name is described in the changelog`() {
-        val section = releaseSection()
+        val section = everySection()
         val census = census()
         val missing = census.filterNot { mentions(section, it) }
 
         assertEquals(
-            "these published names appear nowhere in $CHANGELOG_PATH's ${declaredVersion()} " +
-                "section. A changelog that omits a member is a changelog an integrator cannot " +
+            "these published names appear in no `## ` section of $CHANGELOG_PATH — not the " +
+                "${declaredVersion()} one and not `## Unreleased`, which is where a member added " +
+                "since that release belongs. A changelog that omits a member is a changelog an integrator cannot " +
                 "use to find it — write the line; do not shorten this census. Names are matched " +
                 "on word boundaries, so mentioning EXTRA_PROTOCOL_VERSION does not cover " +
                 "PROTOCOL_VERSION. The file to edit is ${changelogFile().absolutePath}",
@@ -317,7 +362,7 @@ class ChangelogTest {
         val types = publishedTypes()
         val redaction = redactionMembers()
         val census = census()
-        val matched = census.count { mentions(releaseSection(), it) }
+        val matched = census.count { mentions(everySection(), it) }
 
         println(
             "CHANGELOG.md: ${census.size} census names matched $matched times over " +
@@ -519,18 +564,21 @@ class ChangelogTest {
      * Bullets are **joined from their continuation lines** before the em dash is looked for. A
      * line-oriented version of this read only a bullet's first physical line, which silently
      * excluded `parseSignedStatement` — the one citation in this document that wraps — and that is
-     * precisely the kind of name this test is for. And they are read out of [releaseSection]
-     * rather than the whole file, so that once a second version section exists a function cannot
-     * satisfy this from a historical entry while the current one only mentions it in passing.
+     * precisely the kind of name this test is for. They are read out of [everySection] rather than
+     * the whole file, so the preamble can lead nothing — and out of every section rather than
+     * [releaseSection] alone since the required-fields work, a declared widening whose reason and
+     * cost [everySection] records: a function added after a release leads a bullet under
+     * `## Unreleased`, and a function may now satisfy this from a historical entry while the
+     * current one only mentions it in passing.
      */
     @Test
     fun `every published function leads a bullet that still resolves`() {
-        val leads = leads(releaseSection())
+        val leads = leads(everySection())
         val cited = citations(leads.joinToString("\n"))
 
         println("CHANGELOG.md: ${leads.size} bullet leads citing ${cited.size} names: $cited")
         assertEquals(
-            "these published functions lead no bullet in $CHANGELOG_PATH's release section. Being " +
+            "these published functions lead no bullet in any `## ` section of $CHANGELOG_PATH. Being " +
                 "mentioned somewhere in it is not enough: a name in a paragraph cannot be told " +
                 "from prose, so it is the one shape the stale direction below cannot police. " +
                 "Give each a lead — ``- `name` — what it does`` — alone or beside its siblings",
@@ -855,6 +903,63 @@ class ChangelogTest {
             ),
             bullets(fixture),
         )
+    }
+
+    /**
+     * The control for [everySection]'s widening: a name described only under `## Unreleased` is
+     * found by the census and leads a bullet, a name only in the preamble is found by neither, and
+     * the declared version's own section — what the date-and-tag rule and the grouping check still
+     * read — does not see the Unreleased name at all.
+     *
+     * The last half is what keeps the widening from being a quiet replacement of [releaseSection]:
+     * if [everySection] had simply become the whole file, or [releaseSectionIn] had started
+     * reading past the next heading, one of the three would fail.
+     */
+    @Test
+    fun `a name present only in an Unreleased section is found by the census`() {
+        val fixture = listOf(
+            "# Changelog",
+            "",
+            "A preamble naming `preambleOnly`, which no section describes.",
+            "",
+            "## Unreleased",
+            "",
+            "### Share",
+            "",
+            "- `unreleasedOnly` — added after the last release.",
+            "## 1.0.0 — 2026-10-10",
+            "",
+            "- `releasedName` — what shipped.",
+        )
+
+        val every = sectionsIn(fixture)
+        assertTrue("an Unreleased-only name must be found", mentions(every, "unreleasedOnly"))
+        assertTrue("…and so must a released one", mentions(every, "releasedName"))
+        assertFalse("a preamble-only name must not be", mentions(every, "preambleOnly"))
+        assertEquals(
+            "the lead check reads the same union, and only bullet leads count",
+            setOf("unreleasedOnly", "releasedName"),
+            citations(leads(every).joinToString("\n")).toSet(),
+        )
+
+        val released = releaseSectionIn(fixture, "1.0.0")
+        assertTrue("the declared version's section still holds its own", mentions(released, "releasedName"))
+        assertFalse(
+            "…and nothing from Unreleased: the per-version checks are not widened",
+            mentions(released, "unreleasedOnly"),
+        )
+        // The other order: an Unreleased section *after* the released one must stop it, too.
+        val releasedFirst = listOf(
+            "## 1.0.0 — 2026-10-10",
+            "- `releasedName` — what shipped.",
+            "## Unreleased",
+            "- `unreleasedOnly` — added after the last release.",
+        )
+        assertFalse(
+            "a section ends at the next `## ` heading, whichever order the two come in",
+            mentions(releaseSectionIn(releasedFirst, "1.0.0"), "unreleasedOnly"),
+        )
+        assertTrue(mentions(sectionsIn(releasedFirst), "unreleasedOnly"))
     }
 
     /**
