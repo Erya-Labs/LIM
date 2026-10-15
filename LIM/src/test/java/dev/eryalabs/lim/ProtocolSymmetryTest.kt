@@ -45,9 +45,10 @@ import java.lang.reflect.Modifier
  *   "written" quietly means "written in the call I happened to write", and an unsupplied
  *   `algorithm` would make `EXTRA_ALGORITHM` look unwritten when the builder writes it perfectly.
  * - **Read** — a differential. Build a complete well-formed intent for the flow that carries the
- *   extra, parse it with all six published parsers for a baseline, build the same intent **without
- *   that one extra**, and parse again. The extra is read if any of the six answers changed. That is
- *   a measurement of the parsers' actual behaviour, and it needs no privileged access to them.
+ *   extra, parse it with all eight published parsers for a baseline, build the same intent
+ *   **without that one extra**, and parse again. The extra is read if any of the eight answers
+ *   changed. That is a measurement of the parsers' actual behaviour, and it needs no privileged
+ *   access to them.
  *
  * The carrier intent for each extra is not a hand-written table — it is the first builder in
  * [builders] whose output actually carries the key. A hand table would go stale; derived, a new
@@ -215,11 +216,12 @@ class ProtocolSymmetryTest {
     /**
      * The eight published parsers, in a fixed order, applied to the same intent.
      *
-     * Order matters only for reproducibility; what matters for the property is that all six are
+     * Order matters only for reproducibility; what matters for the property is that all eight are
      * here, which [the enumeration and the table meet their floors] pins by count. Every one of the
-     * six parsed types compares by content — `SignChallengeRequest` and `SignChallengeResult`
-     * override `equals` precisely because a data class would compare their arrays by identity — so
-     * list equality below is a comparison of answers and not of references.
+     * eight parsed types compares by content — `SignChallengeRequest` and `SignChallengeResult`
+     * override `equals` precisely because a data class would compare their arrays by identity,
+     * `FieldRequirements` declares its own equality, and the acknowledgement is a plain read-only
+     * set — so list equality below is a comparison of answers and not of references.
      */
     private fun parseAll(intent: Intent): List<Any?> = listOf(
         Utils.parseShareRequest(intent),
@@ -228,8 +230,7 @@ class ProtocolSymmetryTest {
         Utils.parseShareResult(intent),
         Utils.parseQueryResult(intent),
         Utils.parseSignChallengeResult(intent),
-        // Required fields' two readers. Both compare by content — `FieldRequirements` declares its
-        // own equality, and the acknowledgement is a plain read-only set.
+        // Required fields' two readers.
         Utils.parseFieldRequirements(intent),
         Utils.parseAppliedOptionalFields(intent),
     )
@@ -642,9 +643,9 @@ class ProtocolSymmetryTest {
      * The published parsers, by name, read off [Utils] rather than counted from [parseAll]'s
      * length — a single-`Intent`-parameter `parse*` function is what one is.
      *
-     * Deliberately *not* used to invoke them: reflection would make the six calls in [parseAll]
+     * Deliberately *not* used to invoke them: reflection would make the eight calls in [parseAll]
      * uniform and unreadable, and the list there is the thing a reader should be able to check by
-     * eye. This is only the census that notices a seventh.
+     * eye. This is only the census that notices a ninth.
      */
     private val publishedParserNames: Set<String> = Utils::class.java.declaredMethods
         .filter { method ->

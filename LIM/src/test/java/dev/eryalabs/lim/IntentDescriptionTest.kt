@@ -61,12 +61,12 @@ class IntentDescriptionTest {
      * A result intent assembled extra by extra, from [Utils]'s own `EXTRA_*` constants rather than
      * from hand-spelled names. The three request flows below go through the production builders.
      *
-     * **Not because there is no result builder.** There are six — [Utils.createShareResultIntent]
+     * **Not because there is no result builder.** There are seven — [Utils.createShareResultIntent]
      * and its siblings, which `ClientIntegrationExampleTest`'s in-test vault answers all three
      * scenes with. They are bypassed here because this file's subject is what [Utils.describeIntent]
      * says about two shapes **no result builder** can make: a blank
      * [Utils.EXTRA_SHARE_REQUEST_CODE], which [Utils.createShareResultIntent] and its siblings
-     * omit rather than write, and a blank or absent [Utils.EXTRA_PROTOCOL_VERSION], which all six
+     * omit rather than write, and a blank or absent [Utils.EXTRA_PROTOCOL_VERSION], which all seven
      * write and always as a number. Going through a result builder could reach neither, and this
      * is the only place `blank` and `absent` are told apart *from each other* — which is the whole
      * reason those two states are named separately at all.

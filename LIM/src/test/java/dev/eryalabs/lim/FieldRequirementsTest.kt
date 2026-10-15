@@ -16,9 +16,13 @@ import java.util.TreeSet
  * result can carry, and which side of the line it falls on.
  *
  * The line itself, stated once so the table can be read against it: **absent, `null`, or
- * Kotlin-`isBlank`** is blank — a no-break space included — and nothing else is. A zero-width
- * space is *not* blank, and neither are `"0"` and `"false"`: required means "the user put
- * something here", never "the user put something valid here". Nothing is trimmed or rewritten.
+ * Kotlin-`isBlank`** is blank, and nothing else is. Kotlin's whitespace is `Character.isWhitespace`
+ * *or* `Character.isSpaceChar`, so every Unicode space separator is blank and so are the line and
+ * paragraph separators — a no-break space, the figure and narrow no-break spaces Java's own
+ * `isWhitespace` leaves out, and the ideographic space a Japanese keyboard types among them. A
+ * zero-width space is *not* blank, nor is a next-line control or a byte-order mark, and neither
+ * are `"0"` and `"false"`: required means "the user put something here", never "the user put
+ * something valid here". Nothing is trimmed or rewritten.
  *
  * No Robolectric: the class is plain Kotlin over JDK collections, and a [TypedField] is constructed
  * without touching anything Android implements.
@@ -138,11 +142,31 @@ class FieldRequirementsTest {
      * blank" nor "nothing is" can pass. And over every declared type: blank never depends on
      * [TypedField.type], so a rule that read an empty yes/no as "false", or an empty number as
      * zero, would turn a row of this table red.
+     *
+     * **Pinned from both sides beyond ASCII**, because the likely ways to get this wrong draw the
+     * line a little narrower or a little wider than Kotlin does, not nowhere near it. While the
+     * only non-ASCII row was the no-break space, four such checks passed the whole suite. Two are
+     * narrower: ASCII whitespace plus the no-break space, and Java's `Character.isWhitespace` plus
+     * the no-break space. The first reads a field holding nothing but an ideographic space as
+     * filled, the second a figure or narrow no-break space. A vault built on either would let that
+     * field through Save and acknowledge it, and a client on this release would read the same
+     * answer as VIOLATED, which is the disagreement this class exists to rule out. Two are wider:
+     * Unicode's White_Space property (and so Java's `(?U)\s`), which counts a next-line control,
+     * U+0085, and Kotlin's whitespace plus a byte-order mark. Kotlin counts neither, so either
+     * would refuse a value a client on this release calls filled. Every row asks
+     * [FieldRequirements.isSatisfiedBy] as well, since that is what the requirements-aware builder
+     * consults before it acknowledges.
      */
     @Test
     fun `missingRequired treats every blank shape as missing and nothing else`() {
-        val nbsp = 0x00A0.toChar().toString()
-        val zeroWidthSpace = 0x200B.toChar().toString()
+        fun char(code: Int) = code.toChar().toString()
+        val nbsp = char(0x00A0)
+        val zeroWidthSpace = char(0x200B)
+        val ideographicSpace = char(0x3000)
+        val figureSpace = char(0x2007)
+        val narrowNoBreakSpace = char(0x202F)
+        val lineSeparator = char(0x2028)
+        val nextLine = char(0x0085)
         val only = FieldRequirements(listOf("f"))
         // Every type this library names, and one a peer made up.
         val types = FieldType.KNOWN + "Colour"
@@ -154,6 +178,15 @@ class FieldRequirementsTest {
             "spaces" to "  ",
             "tab and newline" to "\t\n",
             "no-break space only" to nbsp + nbsp,
+            "an ideographic space, as a Japanese keyboard types one" to ideographicSpace,
+            "an em space" to char(0x2003),
+            "a figure space" to figureSpace,
+            "a narrow no-break space" to narrowNoBreakSpace,
+            "an Ogham space mark" to char(0x1680),
+            "a medium mathematical space" to char(0x205F),
+            "a line separator" to lineSeparator,
+            "a paragraph separator" to char(0x2029),
+            "every kind at once" to " \t" + nbsp + ideographicSpace + narrowNoBreakSpace + lineSeparator,
         )
         val blank = linkedMapOf<String, Map<String, TypedField>>(
             "absent" to emptyMap(),
@@ -167,18 +200,37 @@ class FieldRequirementsTest {
             "zero" to "0",
             "false" to "false",
             "a zero-width space" to zeroWidthSpace,
+            "a next-line control" to nextLine,
+            "a byte-order mark" to char(0xFEFF),
             "padded" to "  x  ",
+            "padded with ideographic spaces" to ideographicSpace + "x" + ideographicSpace,
+        )
+
+        // What makes those rows worth having: each sits where another definition of whitespace
+        // draws the line differently from Kotlin's. Were one of these to stop holding, its row
+        // would no longer tell the two apart.
+        for (code in listOf(0x00A0, 0x2007, 0x202F)) {
+            assertFalse(
+                "precondition: Java's Character.isWhitespace leaves out U+%04X".format(code),
+                Character.isWhitespace(code),
+            )
+        }
+        assertTrue(
+            "precondition: Unicode's White_Space, which Java's (?U)\\s matches, counts U+0085",
+            Regex("(?U)\\s").matches(nextLine),
         )
 
         assertTrue("the table covers a yes/no field", blank.keys.any { it.endsWith("as ${FieldType.BOOLEAN}") })
         blank.forEach { (shape, values) ->
             assertEquals("$shape must be missing", listOf("f"), only.missingRequired(values))
             assertNull("$shape must not commit", only.committed(values))
+            assertFalse("$shape must not satisfy, so nothing is acknowledged", only.isSatisfiedBy(values))
         }
         for (type in types) {
             present.forEach { (shape, value) ->
                 val values = mapOf("f" to TypedField(value, type))
                 assertEquals("$shape, as $type, must be present", emptyList<String>(), only.missingRequired(values))
+                assertTrue("$shape, as $type, must satisfy", only.isSatisfiedBy(values))
                 assertEquals(
                     "$shape, as $type, is kept exactly as given — never trimmed or rewritten",
                     value,

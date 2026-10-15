@@ -18,7 +18,10 @@ import java.util.Collections
  *
  * **Blank, defined once.** A value is blank when its [TypedField] is absent or `null`, when its
  * [TypedField.value] is `null` (the `Unsafe` hazard [Utils.decodeEntry] documents), or when the
- * value is Kotlin-`isBlank` — whitespace only, a no-break space included. A zero-width space is
+ * value is Kotlin-`isBlank` — whitespace only, by Kotlin's measure: every Unicode space
+ * separator, the no-break spaces and the ideographic space included, and the line and paragraph
+ * separators. That is wider than Java's `String.isBlank`, which leaves the no-break spaces out,
+ * so a vault gates Save on this class rather than on a check of its own. A zero-width space is
  * *not* blank, and neither are `"0"` or `"false"`: required means "the user put something here",
  * not "the user put something valid here". This library never trims or rewrites a value; a
  * vault that trims its form's input does so before handing the draft in. A yes/no question the

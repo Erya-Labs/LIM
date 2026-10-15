@@ -74,9 +74,11 @@ import java.util.Collections
 object Utils {
 
     /**
-     * Endeavor's package name — the reference vault, and the `targetPackage` default of every
-     * *request* builder here. The six result builders take no package and write none: a result is
-     * `setResult`'s payload, delivered to whoever started the activity.
+     * Endeavor's package name — the reference vault, and the `targetPackage` default of the
+     * *request* builders here. One request builder has no default: the [createShareIntent]
+     * overload that takes `optionalFields` makes its caller pass the package, this constant for
+     * Endeavor, for the reason its own KDoc gives. No result builder takes a package or writes
+     * one: a result is `setResult`'s payload, delivered to whoever started the activity.
      *
      * It is a default rather than a hardcoding: LIM is a protocol, not an app pairing, so any
      * vault that speaks it can be addressed by passing its own package instead. Note what the
@@ -2205,14 +2207,14 @@ object Utils {
 
     // ── Result intents (the vault's side) ────────────────────────────────
     //
-    // The parsers above pin what a result *means* arriving at a client; the three builders here
+    // The parsers above pin what a result *means* arriving at a client; the four builders here
     // pin what one *looks like* leaving a vault. Until now this library wrote six of the ten
     // extras the protocol defines and only read the other four, so the result half of the wire
     // format existed here as four parsers' expectations and nothing else — every vault
     // hand-assembled its result intents, and the reference vault grew its own builder to do it.
     //
     // No new action and no new constant: every literal below is declared above and frozen by
-    // `IntentBuilderTest`. One builder writes a key the first six did not —
+    // `IntentBuilderTest`. One builder writes a key no 1.0.0 builder did —
     // [EXTRA_APPLIED_OPTIONAL_FIELDS], the requirements-aware share overload's acknowledgement, and
     // the first vault behaviour this protocol acknowledges with an extra of its own rather than
     // with the version number. Three rules are shared, and each is something a hand-written
@@ -2439,11 +2441,14 @@ object Utils {
 
     // ── Answering a parsed request ───────────────────────────────────────
     //
-    // The three builders above take a request code as a string, so a vault that parsed a request
+    // The four builders above take a request code as a string, so a vault that parsed a request
     // with [parseShareRequest] and friends still carries the correlation token across to the
     // result by hand — and that token is the one extra which must survive both a refusal and an
     // answer. [matchesRequestCode] already names what a dropped line costs: "the accident is not
     // a crash — it is acting on a disclosure meant for a different request."
+    //
+    // The requirements-aware share builder has no overload here: a vault answering through it
+    // passes [ShareRequest.requestCode] itself, beside the requirements it read off the request.
     //
     // **The request is read, never retained.** The only value these overloads take off a request
     // is the correlation token. Not its public key, not its entry, not its field names — those
