@@ -414,6 +414,55 @@ bad answer logs somebody in.
 
 ---
 
+## Surviving process death
+
+While the vault's consent dialog is in the foreground, your app is in the background — and Android
+may kill it there. The activity that comes back is a new object, and `isVerified` takes **the exact
+bytes you sent**, so the challenge has to outlive the process that minted it. *Mint the challenge
+and keep it*, above, means keep it where a restart can find it.
+
+<!-- snippet: GuideExamplesTest.kt#saved-state -->
+```kotlin
+// While the vault's dialog is up your activity is in the background, where Android may
+// kill it. What comes back is a new object: the field you kept the challenge in is
+// empty, and `isVerified` takes the exact bytes you sent, so a challenge you regenerate
+// instead verifies nothing. Save it.
+fun saveLoginState(outState: Bundle, challenge: ByteArray, requestCode: String) {
+    outState.putByteArray(STATE_CHALLENGE, challenge)
+    // Only if your app mints a correlation token per request rather than declaring one
+    // as a constant — a constant is back in your code without ever being saved.
+    outState.putString(STATE_REQUEST_CODE, requestCode)
+}
+
+// In onCreate, or onRestoreInstanceState, before any answer is handled. A null is an
+// activity that had no login in flight, which is not a failure.
+fun restoreChallenge(savedInstanceState: Bundle?): ByteArray? =
+    savedInstanceState?.getByteArray(STATE_CHALLENGE)
+```
+
+`STATE_CHALLENGE` and `STATE_REQUEST_CODE` are your app's own keys, like the request codes: nothing
+in this library reads them and no wire format is involved.
+
+Saving the challenge answers one clause of the login handler, not both. A restored challenge
+satisfies `isVerified`, and it goes on ageing while your activity is dead: an app resumed from
+recents an hour later restores a perfectly good challenge that `isNonceFresh` refuses. That is the
+window doing its job, not a bug — but it means the recovery path to write is *mint a new challenge
+and ask again*, never *accept it anyway*.
+
+The test behind this block writes the `Bundle` to a `Parcel` and reads it back out, which is what
+Android does to saved state, and then asserts the contrast this section exists for: the vault's
+answer verifies against the challenge that came back, does **not** verify against a freshly
+generated one, and the restored bytes are still fresh. What it deliberately does not assert is the
+request code — the guide's request codes are constants, so that line is there for an app that mints
+a correlation token per request, and no test here can make a claim about an app that does not exist.
+
+This fails intermittently or not at all on a developer's desk, so do not wait for it to happen.
+Turn on *Don't keep activities* in Developer options, or rotate the device while the vault's dialog
+is up, and run your login once. Either one recreates the activity, and it is the cheapest honest
+test of this page you can run.
+
+---
+
 ## When the user says no
 
 Consent can be refused, and an integration that has not handled it has not been written. A refusal

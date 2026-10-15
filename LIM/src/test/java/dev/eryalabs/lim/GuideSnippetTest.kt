@@ -1561,6 +1561,7 @@ class GuideSnippetTest {
             "Sign-up (share)",
             "Query",
             "Login (sign-challenge)",
+            "Surviving process death",
             "When the user says no",
             "Rules you must not break",
             "Testing your integration without a vault",

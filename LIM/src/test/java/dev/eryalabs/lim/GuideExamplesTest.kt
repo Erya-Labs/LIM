@@ -6,12 +6,16 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.Bundle
+import android.os.Parcel
 import android.util.Base64
 import android.util.Log
 import androidx.test.core.app.ApplicationProvider
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.BeforeClass
@@ -450,6 +454,137 @@ class GuideExamplesTest {
             "a share answer carrying a public key authenticates nobody, and nothing is thrown",
             loginSucceeded(Activity.RESULT_OK, wrongFlow, storedPublicKey, nonce),
         )
+    }
+
+    // ── Surviving process death ───────────────────────────────────────────
+
+    /**
+     * The wall that is invisible on a desk and routine in the field: while the vault's consent
+     * dialog is in the foreground the client app is in the background, and Android may kill it.
+     *
+     * [SignChallengeResult.isVerified] takes **the exact bytes that were sent**, so an activity
+     * that kept its challenge in a field comes back to nothing and one that regenerates comes back
+     * to the wrong bytes. Either way the login fails, intermittently and only on some devices —
+     * the class of bug an afternoon integration never finds and blames the library for.
+     *
+     * **The death is a real one, not a hand-off.** The `Bundle` is written to a [Parcel] and read
+     * back out of it — `EntryParcelTest:21-29`'s shape, for the same reason — and the assertions
+     * below check that it travelled as bytes rather than as a reference. Passing the same `Bundle`
+     * object along would satisfy every other assertion here and prove nothing at all.
+     *
+     * What the section argues is the **contrast**, so both halves are asserted: the vault's answer
+     * verifies against the challenge that survived, and does not verify against a freshly generated
+     * one. `SignatureVerificationTest` owns the full behaviour of that call; what is new here is
+     * only that the bytes a saved `Bundle` gives back are still the bytes it proves.
+     *
+     * **Saved state answers one clause of the login handler and not the other.** A restored
+     * challenge satisfies `isVerified`; it carries its own timestamp, so it goes on ageing while
+     * the activity is dead and `isNonceFresh` can still refuse it. Both directions are asserted,
+     * with the clock injected rather than waited for: the challenge this test restores is fresh
+     * now, and the *same* restored bytes judged an hour later verify and are refused anyway. That
+     * pairing is what backs the section's sentence about an app resumed from recents.
+     *
+     * The restored request code is deliberately **not** asserted, and the guide says so: the
+     * guide's own request codes are constants, so the `putString` line is there for an app that
+     * *mints* a correlation token per request, and no test here can make a claim about an app that
+     * does not exist. What that leaves unpinned is the line's own mechanics — a save under the
+     * wrong key would reach the guide unnoticed — which is recorded in T48's Progress entry as a
+     * planning candidate rather than widened into here.
+     */
+    @Test
+    fun `a challenge that outlives the process still verifies, and a regenerated one never does`() {
+        val storedPublicKey = signUpOnTheFixtureVault()
+        val nonce = Utils.generateNonce()
+        val request = Utils.createSignChallengeIntent(
+            context,
+            storedPublicKey,
+            nonce,
+            LOGIN_REQUEST,
+            nonceFormat = Utils.NONCE_FORMAT_TIMESTAMPED,
+        )
+
+        // region snippet:saved-state
+        // While the vault's dialog is up your activity is in the background, where Android may
+        // kill it. What comes back is a new object: the field you kept the challenge in is
+        // empty, and `isVerified` takes the exact bytes you sent, so a challenge you regenerate
+        // instead verifies nothing. Save it.
+        fun saveLoginState(outState: Bundle, challenge: ByteArray, requestCode: String) {
+            outState.putByteArray(STATE_CHALLENGE, challenge)
+            // Only if your app mints a correlation token per request rather than declaring one
+            // as a constant — a constant is back in your code without ever being saved.
+            outState.putString(STATE_REQUEST_CODE, requestCode)
+        }
+
+        // In onCreate, or onRestoreInstanceState, before any answer is handled. A null is an
+        // activity that had no login in flight, which is not a failure.
+        fun restoreChallenge(savedInstanceState: Bundle?): ByteArray? =
+            savedInstanceState?.getByteArray(STATE_CHALLENGE)
+        // endregion snippet:saved-state
+
+        val outState = Bundle().also { saveLoginState(it, nonce, LOGIN_REQUEST) }
+        val parcel = Parcel.obtain()
+        val revived = try {
+            parcel.writeBundle(outState)
+            assertTrue(
+                "precondition: saved state has to leave as bytes. The bound is the challenge's " +
+                    "own length rather than zero, because an empty Bundle also writes a magic " +
+                    "number and a count and would satisfy `> 0` — what rules out a hand-off is " +
+                    "the identity check further down, not this line",
+                parcel.dataSize() > nonce.size,
+            )
+            parcel.setDataPosition(0)
+            parcel.readBundle()
+        } finally {
+            parcel.recycle()
+        }
+        assertNotNull("precondition: …and come back as a Bundle", revived)
+
+        val restored = restoreChallenge(revived)
+        assertNotNull("the challenge outlived the process that minted it", restored)
+        assertNotSame(
+            "…and it came back through the parcel rather than by reference: a test that handed " +
+                "the same Bundle object along would pass every assertion here and prove nothing",
+            nonce,
+            restored,
+        )
+        assertArrayEquals("…as the very same bytes, which is all that matters", nonce, restored)
+
+        val answer = vault.answer(request)
+        val result = Utils.parseSignChallengeResult(answer.data)
+        assertNotNull("precondition: the vault signed the challenge", result)
+        assertTrue(
+            "the answer verifies against the challenge that survived: saved state answers the " +
+                "`isVerified` clause of the login handler, which is the one process death breaks",
+            result!!.isVerified(storedPublicKey, restored!!),
+        )
+        assertFalse(
+            "and against a freshly generated challenge it verifies nothing — the hazard an " +
+                "activity that regenerates instead of restoring walks into, and the whole " +
+                "argument of the section",
+            result.isVerified(storedPublicKey, Utils.generateNonce()),
+        )
+        assertTrue(
+            "…and the restored bytes still have to clear the *other* clause: a challenge carries " +
+                "its own timestamp, so surviving the process does not stop it ageing out. This " +
+                "one is seconds old, so it clears the window the handler applies",
+            Utils.isNonceFresh(restored, maxAgeMillis = 60_000L),
+        )
+        assertFalse(
+            "…while the same restored bytes, judged an hour later, verify and are refused anyway. " +
+                "The clock is injected rather than waited for, and this is the pairing that makes " +
+                "the section's sentence about recents an assertion instead of a promise",
+            Utils.isNonceFresh(
+                restored,
+                maxAgeMillis = 60_000L,
+                now = System.currentTimeMillis() + 3_600_000L,
+            ),
+        )
+
+        assertNull(
+            "an activity that had no login in flight restores nothing rather than throwing",
+            restoreChallenge(Bundle()),
+        )
+        assertNull("…and neither does one recreated with no saved state at all", restoreChallenge(null))
     }
 
     // ── When the user says no ─────────────────────────────────────────────
@@ -1012,6 +1147,15 @@ class GuideExamplesTest {
         private const val SIGN_UP_REQUEST = "signup-1"
         private const val QUERY_REQUEST = "query-1"
         private const val LOGIN_REQUEST = "login-1"
+
+        /**
+         * An app's own saved-state keys, which is all they are: nothing in this library reads
+         * them, and no wire format is involved. Spelled out here rather than in the region for the
+         * reason the request codes are — a snippet shows an integrator's code, and these are the
+         * one part of it their own app names.
+         */
+        private const val STATE_CHALLENGE = "login-challenge"
+        private const val STATE_REQUEST_CODE = "login-request-code"
 
         private const val SIGN_ALGORITHM = "SHA256withRSA"
 
