@@ -6,12 +6,14 @@ import com.google.gson.Gson
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.BeforeClass
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.io.File
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.Signature
@@ -44,6 +46,76 @@ class EntryValidationTest {
 
         /** A genuine key, encoded the way the vault encodes one. */
         private fun realKey(): String = Base64.encodeToString(keyPair.public.encoded, Base64.DEFAULT)
+
+        /** The document the sign-up entry is read out of, rather than copied from. */
+        private const val GUIDE_PATH = "docs/INTEGRATION.md"
+
+        /** The marker above the guide's sign-up block — the one block this test reads. */
+        private const val SIGN_UP_MARKER = "<!-- snippet: GuideExamplesTest.kt#signup-request -->"
+
+        /** A `publicKey = "…"` assignment, however it is spaced. */
+        private val PUBLIC_KEY_ASSIGNMENT = Regex("publicKey\\s*=\\s*\"([^\"]*)\"")
+
+        /** An `id = "…"` assignment, with the word boundary that keeps it off other names. */
+        private val ID_ASSIGNMENT = Regex("\\bid\\s*=\\s*\"([^\"]*)\"")
+
+        /** One entry of the field map the block builds: name, value and declared type. */
+        private val FIELD_ENTRY =
+            Regex("\"([^\"]*)\"\\s+to\\s+TypedField\\(value = \"([^\"]*)\", type = FieldType\\.(\\w+)\\)")
+
+        /** Every mention of the type, however the call after it is spelled. */
+        private val TYPED_FIELD_MENTION = Regex("TypedField")
+
+        /** A fixture document: the real marker, a closed Kotlin fence, and [body]. */
+        private fun markedBlock(body: String) = "$SIGN_UP_MARKER\n```kotlin\n$body\n```\n"
+
+        /** A sign-up block the parser must read whole — the template the fixtures below bend. */
+        private val FIXTURE_BODY = """
+            val entry = Entry(
+                id = "signup-form",
+                fields = linkedMapOf(
+                    "name" to TypedField(value = "", type = FieldType.STRING),
+                ),
+                publicKey = "no-key-yet",
+            )
+        """.trimIndent()
+
+        /** The same block reflowed onto one line — two fields the parser must both read. */
+        private val FIXTURE_ONE_LINE =
+            "val entry = Entry(id = \"signup-form\", fields = linkedMapOf(" +
+                "\"name\" to TypedField(value = \"\", type = FieldType.STRING), " +
+                "\"email\" to TypedField(value = \"\", type = FieldType.EMAIL)), " +
+                "publicKey = \"no-key-yet\")"
+
+        /**
+         * Documents the locator must refuse, each keyed by the phrase its failure has to carry.
+         * One defect each, so the phrase identifies which clause fired rather than merely
+         * proving that something did.
+         *
+         * The first carries a perfectly good sign-up block and fails only because nothing says
+         * it is the sign-up one. The last two are the field-map drifts: a block that builds no
+         * field at all, which would otherwise reach [Utils.validateEntry] as `fields is empty`,
+         * and a block with one field spelled a way [FIELD_ENTRY] does not read, which is the
+         * silent drop the count in `fieldsIn` exists to catch — the two take different branches
+         * of that guard and their phrases say which.
+         */
+        private val LOCATOR_FIXTURES = listOf(
+            "no line" to markedBlock(FIXTURE_BODY).replace(SIGN_UP_MARKER, "<!-- snippet: Other.kt#x -->"),
+            "no fenced block" to "$SIGN_UP_MARKER\nprose, and no block under it at all\n",
+            "never closed" to "$SIGN_UP_MARKER\n```kotlin\n$FIXTURE_BODY\n",
+            "found 0" to markedBlock(FIXTURE_BODY.replace("    publicKey = \"no-key-yet\",\n", "")),
+            "found 2" to markedBlock("$FIXTURE_BODY\nval other = entry.copy(publicKey = \"no-key-either\")"),
+            "in 0 place(s) and this read 0" to markedBlock(
+                "val entry = Entry(id = \"signup-form\", fields = emptyMap(), publicKey = \"no-key-yet\")",
+            ),
+            "in 2 place(s) and this read 1" to markedBlock(
+                FIXTURE_BODY.replace(
+                    "        \"name\" to TypedField(value = \"\", type = FieldType.STRING),",
+                    "        \"name\" to TypedField(value = \"\", type = FieldType.STRING),\n" +
+                        "        \"email\" to TypedField(\"\", FieldType.EMAIL),",
+                ),
+            ),
+        )
     }
 
     private val fields = linkedMapOf(
@@ -408,6 +480,264 @@ class EntryValidationTest {
             assertTrue("validateEntry should flag $it", Utils.validateEntry(entry(publicKey = it)).isNotEmpty())
             assertFalse("verifySignature should refuse $it", Utils.verifySignature(it, nonce, signature()))
         }
+    }
+
+    // ── The one entry every integration builds first ─────────────────────
+
+    /**
+     * The sign-up entry the guide prints reports a problem, and that is the expected answer.
+     *
+     * `publicKey` is a slot the vault fills, so a sign-up sends a placeholder — and the
+     * placeholder the documents print is not in the Base64 alphabet, so this reports it. The
+     * entry is **read off `docs/INTEGRATION.md`** rather than copied in, so the pin re-measures
+     * what the guide actually tells an integrator to send: change the placeholder in the document
+     * to something that is valid Base64, or empty the field map the block builds, and this test
+     * says so instead of agreeing with a copy of yesterday's block.
+     *
+     * The two controls are what make the assertion about the placeholder rather than about the
+     * entry. The same entry with a genuine key reports nothing, so neither the id nor the blank
+     * field values is the cause; and a placeholder that *is* valid Base64 falls at the RSA gate
+     * behind it instead, so the problem reported here is the alphabet rule and not a rule about
+     * placeholders.
+     *
+     * The locator's own failures are asserted too, each against the message it must produce. A
+     * scanner that silently finds nothing passes for ever, and this one's whole subject is a
+     * handful of lines in a file it does not own.
+     */
+    @Test
+    fun `the sign-up entry the guide prints reports exactly the placeholder problem`() {
+        val entry = signUpEntryIn(guideText(), GUIDE_PATH)
+        println(
+            "EntryValidationTest: the block under `$SIGN_UP_MARKER` in $GUIDE_PATH builds " +
+                "id = \"${entry.id}\", publicKey = \"${entry.publicKey}\", fields " +
+                entry.fields.entries.joinToString(", ", "[", "]") { (name, field) ->
+                    "\"$name\": ${field.type} = \"${field.value}\""
+                },
+        )
+
+        assertEquals(
+            "the entry the guide tells every integrator to send first reports this one problem",
+            listOf("publicKey is not valid Base64"),
+            Utils.validateEntry(entry),
+        )
+
+        assertEquals(
+            "control: the same entry with a genuine key reports nothing, so the placeholder is " +
+                "the cause and not the id or the blank field values",
+            emptyList<String>(),
+            Utils.validateEntry(entry.copy(publicKey = realKey())),
+        )
+        assertEquals(
+            "control: a placeholder that is valid Base64 falls at the RSA gate instead, so the " +
+                "assertion above is about the alphabet rule and not about placeholders",
+            listOf("publicKey is not an RSA public key"),
+            Utils.validateEntry(entry.copy(publicKey = "bm8ta2V5LXlldA==")),
+        )
+
+        assertEquals(
+            "control: the fixture template itself parses, so each fixture below fails for its " +
+                "own defect and not because the parser cannot read the template",
+            Entry(
+                id = "signup-form",
+                fields = linkedMapOf("name" to TypedField(value = "", type = FieldType.STRING)),
+                publicKey = "no-key-yet",
+            ),
+            signUpEntryIn(markedBlock(FIXTURE_BODY), "fixture"),
+        )
+        assertEquals(
+            "control: two fields on one line are both read, so the count that guards against a " +
+                "dropped field is not satisfied by reading one of them",
+            setOf("name", "email"),
+            signUpEntryIn(markedBlock(FIXTURE_ONE_LINE), "fixture").fields.keys,
+        )
+        LOCATOR_FIXTURES.forEach { (named, fixture) ->
+            val failure = runCatching { signUpEntryIn(fixture, "fixture") }.exceptionOrNull()
+            assertNotNull("the locator must fail loudly on:\n$fixture", failure)
+            assertTrue(
+                "the failure must say `$named`, and said: ${failure?.message}",
+                failure?.message?.contains(named) == true,
+            )
+        }
+    }
+
+    /**
+     * The other half of the same fact, measured rather than argued: the entry this reports a
+     * problem for is the entry a sign-up sends, and nothing on the way to the vault's parser
+     * objects to it.
+     *
+     * [Utils.createShareIntent] encodes it, [Utils.decodeEntry] accepts the payload, and
+     * [Utils.parseShareRequest] — the vault's half of the request — hands it over with the
+     * placeholder intact. What that pins is the client-side path only; what a vault does with the
+     * entry afterwards is the vault's, and the key the client keeps is the one the *result*
+     * carries ([ShareResult.publicKey]), never the slot it sent.
+     *
+     * The control is the asymmetry that keeps this from being a restatement of the test above: a
+     * *blank* slot is refused outright by [Utils.decodeEntry] and so never reaches a vault at all
+     * (`EntryCodecTest.a blank id or public key decodes to null`), which is what the guide's
+     * sign-up block means by "a blank one is encoded here and then refused on arrival". The
+     * placeholder is reported and travels; a blank is reported differently and does not.
+     */
+    @Test
+    fun `the sign-up entry reaches the vault's parser with its placeholder intact`() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val entry = signUpEntryIn(guideText(), GUIDE_PATH)
+        assertEquals(
+            "precondition: this is the entry the test above reports on",
+            listOf("publicKey is not valid Base64"),
+            Utils.validateEntry(entry),
+        )
+
+        val request = Utils.createShareIntent(context, entry)
+        val payload = request.getStringExtra(Utils.EXTRA_ENTRY_JSON)
+        assertNotNull("createShareIntent must encode the sign-up entry", payload)
+        assertEquals("decodeEntry must accept its payload", entry, Utils.decodeEntry(payload))
+
+        val parsed = Utils.parseShareRequest(request)
+        assertNotNull("the vault's request parser must accept the sign-up request", parsed)
+        assertEquals(
+            "the placeholder arrives as it was sent — it is the slot, not an identifier",
+            entry.publicKey,
+            parsed!!.entry.publicKey,
+        )
+        assertEquals("and the rest of the entry with it", entry, parsed.entry)
+
+        val blank = Utils.createShareIntent(context, entry.copy(publicKey = ""))
+        assertEquals(
+            "control: a blank slot is reported by a different problem",
+            listOf("publicKey is missing or blank"),
+            Utils.validateEntry(entry.copy(publicKey = "")),
+        )
+        assertNull(
+            "control: and is refused on arrival, so it never reaches a vault",
+            Utils.parseShareRequest(blank),
+        )
+        assertNull(
+            "control: because the payload itself does not decode",
+            Utils.decodeEntry(blank.getStringExtra(Utils.EXTRA_ENTRY_JSON)),
+        )
+    }
+
+    /**
+     * The entry the guide's `signup-request` block builds, parsed out of [markdown].
+     *
+     * Everything that decides what [Utils.validateEntry] reports is read from the document —
+     * the id, every field name, and the `publicKey` slot — because a hand-copied shape lets the
+     * guide drift while the pin stays green on an entry nobody is told to send.
+     *
+     * Fails naming [where] and what it looked for when the marker is absent, when the block
+     * under it is unfenced or never closed, when the block assigns no `id` or no `publicKey` or
+     * builds no field, and when two lines disagree about a value — every way this could
+     * otherwise find nothing and report success.
+     */
+    private fun signUpEntryIn(markdown: String, where: String): Entry {
+        val block = signUpBlock(markdown, where)
+        return Entry(
+            id = soleValueOf(ID_ASSIGNMENT, "id", block, where),
+            fields = fieldsIn(block, where),
+            publicKey = soleValueOf(PUBLIC_KEY_ASSIGNMENT, "publicKey", block, where),
+        )
+    }
+
+    /** The lines inside the fenced block under [SIGN_UP_MARKER], or an [AssertionError]. */
+    private fun signUpBlock(markdown: String, where: String): List<String> {
+        val lines = markdown.lines()
+        val marker = lines.indexOfFirst { it.trim() == SIGN_UP_MARKER }
+        if (marker < 0) {
+            throw AssertionError(
+                "$where: no line `$SIGN_UP_MARKER`, so the sign-up block this test measures the " +
+                    "entry out of is not there",
+            )
+        }
+        val open = (marker + 1 until lines.size).firstOrNull { lines[it].trim().startsWith("```") }
+            ?: throw AssertionError("$where: `$SIGN_UP_MARKER` is followed by no fenced block")
+        val close = (open + 1 until lines.size).firstOrNull { lines[it].trim() == "```" }
+            ?: throw AssertionError("$where: the block under `$SIGN_UP_MARKER` is never closed")
+        return lines.subList(open + 1, close)
+    }
+
+    /** The one value [block] assigns to [named], or an [AssertionError] saying how many it found. */
+    private fun soleValueOf(
+        assignment: Regex,
+        named: String,
+        block: List<String>,
+        where: String,
+    ): String {
+        val assigned = block.mapNotNull { assignment.find(it)?.groupValues?.get(1) }.distinct()
+        if (assigned.size != 1) {
+            throw AssertionError(
+                "$where: looked for exactly one distinct `$named = \"…\"` in the block under " +
+                    "`$SIGN_UP_MARKER` and found ${assigned.size} $assigned",
+            )
+        }
+        return assigned.single()
+    }
+
+    /**
+     * The fields [block] builds, in the order it builds them.
+     *
+     * A `TypedField` spelled some way this regex does not read would otherwise vanish from the
+     * entry and quietly weaken the pin, so the count is checked against how many times the type
+     * is named at all — and an empty map fails rather than being validated as "fields is empty".
+     *
+     * Counted by occurrence rather than by line, and read with `findAll` rather than `find`, so
+     * that two fields written on one line are both parsed instead of one being dropped past a
+     * guard that a line-wise count would have satisfied. The guide puts one field per line
+     * today; the claim above should not depend on it.
+     */
+    private fun fieldsIn(block: List<String>, where: String): Map<String, TypedField> {
+        val named = block.sumOf { line -> TYPED_FIELD_MENTION.findAll(line).count() }
+        val parsed = block.flatMap { FIELD_ENTRY.findAll(it) }.associate { match ->
+            val (name, value, type) = match.destructured
+            name to TypedField(value = value, type = fieldTypeNamed(type, where))
+        }
+        if (parsed.isEmpty() || parsed.size != named) {
+            throw AssertionError(
+                "$where: the block under `$SIGN_UP_MARKER` names `TypedField` in $named place(s) " +
+                    "and this read ${parsed.size} field(s) ${parsed.keys} off it — a field " +
+                    "spelled a way this does not read would be dropped from the pin",
+            )
+        }
+        return parsed
+    }
+
+    /**
+     * The wire value of the `FieldType.`[name] the block writes.
+     *
+     * [FieldType] is constants rather than an enum, so the name has to be resolved against the
+     * published object — which also means a block naming a type this library does not have
+     * fails here instead of being read as something else.
+     */
+    private fun fieldTypeNamed(name: String, where: String): String =
+        runCatching { FieldType::class.java.getField(name).get(null) as String }.getOrNull()
+            ?: throw AssertionError(
+                "$where: the block under `$SIGN_UP_MARKER` names `FieldType.$name`, which this " +
+                    "library does not publish",
+            )
+
+    /**
+     * `docs/INTEGRATION.md`, located by walking up from the working directory.
+     *
+     * `GuideSnippetTest`'s walk-up, for its reason: the working directory of a Gradle unit test
+     * is the module directory, but that is a default rather than a promise. If no ancestor holds
+     * the guide the test fails naming every absolute path it tried, because a pin that reads a
+     * document must never pass by failing to find it.
+     */
+    private fun guideText(): String {
+        val workingDirectory = File(".").absoluteFile.normalize()
+        val tried = mutableListOf<File>()
+        var directory: File? = workingDirectory
+        while (directory != null) {
+            for (candidate in listOf(File(directory, GUIDE_PATH), File(directory, "LIM/$GUIDE_PATH"))) {
+                tried += candidate
+                if (candidate.exists()) return candidate.readText()
+            }
+            directory = directory.parentFile
+        }
+        throw AssertionError(
+            "cannot find `$GUIDE_PATH` — this test reads the placeholder out of the guide and " +
+                "must not be silently skipped. Working directory: $workingDirectory. Tried:\n" +
+                tried.map { it.absolutePath }.distinct().joinToString("\n"),
+        )
     }
 
     // ── Advisory only: nothing about the protocol may have changed ───────

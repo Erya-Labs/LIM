@@ -2794,8 +2794,19 @@ object Utils {
 
     /**
      * Report every reason [entry] looks wrong, one human-readable problem per issue, so a
-     * client can tell the user what to fix *before* sending it to a vault that will simply
-     * refuse. An empty list means nothing here looks wrong.
+     * client can tell the user what to fix *before* sending it. An empty list means nothing
+     * here looks wrong.
+     *
+     * **This is advice about an entry that carries a real key, and a sign-up entry does not.**
+     * The entry this library's own examples build at sign-up carries `publicKey = "no-key-yet"`,
+     * a placeholder, because the vault is what mints the keypair — and it reports exactly one
+     * problem here, `publicKey is not valid Base64`, on an entry that has to be sent anyway:
+     * [createShareIntent] encodes it, [decodeEntry] accepts the payload, and [parseShareRequest]
+     * hands the vault the placeholder intact. The key the client ends up with is the one the
+     * vault mints and returns as [ShareResult.publicKey], never the slot it sent. So at sign-up
+     * that one report is the expected answer rather than a prediction about the far side.
+     * `publicKey is missing or blank` is the report a sign-up should act on: a blank slot does
+     * not decode, so it is refused on arrival rather than answered.
      *
      * Checked: a missing or blank `id`; a missing or blank `publicKey`; a `publicKey` that
      * is not valid Base64; a `publicKey` whose bytes do not parse as an RSA public key; an
