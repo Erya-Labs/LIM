@@ -422,6 +422,16 @@ val request = Utils.createSignChallengeIntent(
 // startActivityForResult(request, VAULT_RESULT)
 ```
 
+Mint the challenge with `generateNonce` and nothing else: `isNonceFresh` reads the first eight
+bytes of whatever it is handed as a big-endian timestamp, so forty bytes of your own are refused by
+the freshness clause even when a vault signs them and the signature verifies against your stored
+key — unless those eight bytes happen to spell a recent time. And never pass
+`NONCE_FORMAT_TIMESTAMPED` for a nonce you did not mint with `generateNonce` — the declaration is
+what a vault reads the timestamp on the strength of, so declaring it over bytes of your own puts a
+false claim on the wire; `GuideExamplesTest`'s *login proves the holder of the stored key is
+present, and refuses eight answers* measures both, printing the timestamp the refusing bytes imply
+beside the refusal.
+
 <!-- snippet: GuideExamplesTest.kt#login-result -->
 ```kotlin
 // In onActivityResult — and a function, not four lines inline, because this is the one

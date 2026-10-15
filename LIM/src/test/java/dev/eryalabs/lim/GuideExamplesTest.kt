@@ -658,12 +658,13 @@ class GuideExamplesTest {
      * Login is the one flow that proves something, so it is the one flow whose handler being
      * green on the happy path alone would be an authentication bypass rather than a gap.
      *
-     * The guide's `login-result` block is therefore a **function**, and this test drives it nine
-     * times: twice on an answer it must accept, and seven times on one it must refuse — an expired
+     * The guide's `login-result` block is therefore a **function**, and this test drives it ten
+     * times: twice on an answer it must accept, and eight times on one it must refuse — an expired
      * challenge, another account's stored key, an answer from a different flow that parses as
      * something else, a result code that is not `RESULT_OK`, no intent at all, a genuine answer
-     * replayed against a challenge it did not answer, and a genuine answer to a *different login
-     * request* of this same service. As straight-line code in a region it could only ever be run
+     * replayed against a challenge it did not answer, a genuine answer to a *different login
+     * request* of this same service, and a genuine answer to a challenge the integrator minted
+     * themselves. As straight-line code in a region it could only ever be run
      * once, on the answer it was always going to accept; re-running it meant copying it, which
      * pins nothing.
      *
@@ -697,6 +698,39 @@ class GuideExamplesTest {
      * answer to *this* challenge", and the second is the whole reason a nonce exists. Both nonces
      * are asserted fresh, so that refusal is the signature and not the window.
      *
+     * **Refusal 8 is the one no device, clock or retry can ever turn into a success**, and it is
+     * the first-week failure the guide's own prose now warns about: a challenge the integrator
+     * minted themselves rather than with [Utils.generateNonce]. [Utils.isNonceFresh] reads the
+     * first eight bytes of whatever it is handed as a big-endian millisecond timestamp — its own
+     * `@param` says exactly that — so forty bytes of an integrator's choosing are signed by this
+     * test's vault, verify against the stored key, correlate, and are refused by the freshness
+     * clause anyway. It is attributable by construction, refusal 7's way: the other three clauses
+     * are each asserted true over the very arguments the refusing call is given.
+     *
+     * **Those bytes are fixed rather than random, and that is the substance of the refusal.**
+     * Forty random bytes are refused with overwhelming probability but not by construction, and
+     * "almost always refused" and "refused, and here is the timestamp that refuses it" are
+     * different claims — only the second is a pin. Forty `0x5A` bytes spell
+     * [HAND_ROLLED_TIMESTAMP] and nothing else, so the number is printed and asserted rather than
+     * the behaviour averaged.
+     *
+     * **A noise header is not itself new, and the narrow claim is the one worth making.**
+     * `NonceTest` already owns the unit-level behaviour over arrays nobody signed: the
+     * short-nonce case (`:261-265`), the big-endian anchor (`:243-246`), and — nearest to this
+     * one — `extreme timestamps fail closed` (`:186-221`), which hands [Utils.isNonceFresh]
+     * full-length 40-byte nonces whose headers were laid out by hand. What is new here is the
+     * rest of it: a hand-rolled challenge really signed by the account's key, correlating,
+     * verifying, and refused by the *published handler* anyway — plus the declaration below.
+     *
+     * **The second half is the peer obligation, and it is the half nothing else pins.** The same
+     * request declares [Utils.NONCE_FORMAT_TIMESTAMPED] over those bytes, so the declaration is
+     * *false on the wire* while being perfectly well formed — and [Utils.nonceTimestamp]'s KDoc
+     * tells a vault to trust the value exactly when the sender declared it. A vault applying its
+     * own freshness policy is then reading noise as a time because the client said it could. The
+     * minted request is asserted beside it as the honest pairing: the same literal, over a
+     * timestamp that is real and inside the client's own window. What a vault *should* do about a
+     * declaration it cannot trust is the standing peer-freshness question, not this test's.
+     *
      * The other two flows' blocks are deliberately left as they are. A share or a query answer is
      * data a user consented to disclose; a login answer is a proof, and the refusal paths worth
      * executing are the ones where accepting a bad answer authenticates somebody.
@@ -706,7 +740,7 @@ class GuideExamplesTest {
      * What is new here is only that the *published handler*, as printed, refuses.
      */
     @Test
-    fun `login proves the holder of the stored key is present, and refuses seven answers`() {
+    fun `login proves the holder of the stored key is present, and refuses eight answers`() {
         val storedPublicKey = signUpOnTheFixtureVault()
 
         // region snippet:login-request
@@ -939,6 +973,112 @@ class GuideExamplesTest {
             "…and yet the answer to another request logs nobody in: three clauses measured true " +
                 "on these arguments leave the correlation as the clause that refused",
             loginSucceeded(Activity.RESULT_OK, otherRequest.data, storedPublicKey, nonce),
+        )
+
+        // Refusal 8: a challenge of the integrator's own forty bytes rather than
+        // `generateNonce`'s. `isNonceFresh` reads the first eight bytes of whatever it is handed
+        // as a big-endian millisecond timestamp, so there is nothing to find and it finds one
+        // anyway — and this is the first-week failure "my login never succeeds", landing on a
+        // clause nobody is looking at.
+        //
+        // The array is **fixed, not random**, and that is the point: forty random bytes are
+        // refused with overwhelming probability but not by construction, and only "refused, and
+        // here is the timestamp that refuses it" is a pin. Forty `0x5A` bytes spell exactly one
+        // "time", asserted below and printed, and it is ~206 million years from now — so no
+        // device, clock or retry can ever make this call true.
+        val handRolled = ByteArray(40) { 0x5A }
+        assertFalse(
+            "precondition: these bytes are not a signed statement's pre-image, so the fixture " +
+                "vault signs them rather than refusing them as one — the refusal below is the " +
+                "client's freshness clause and not the vault's signing-oracle guard",
+            Utils.isStatementPreImage(handRolled),
+        )
+        assertEquals(
+            "the header these bytes spell, read out of them rather than asserted loosely",
+            HAND_ROLLED_TIMESTAMP,
+            Utils.nonceTimestamp(handRolled),
+        )
+        println(
+            "GuideExamplesTest: a hand-rolled 40-byte challenge of 0x5A declares the timestamp " +
+                "$HAND_ROLLED_TIMESTAMP ms, which is in the future and therefore never fresh",
+        )
+        assertFalse(
+            "…which is why the freshness clause can never be satisfied by it: the window is " +
+                "measured against a timestamp the client's own clock cannot postdate",
+            Utils.isNonceFresh(handRolled, maxAgeMillis = 60_000L),
+        )
+
+        // Declared `NONCE_FORMAT_TIMESTAMPED` on purpose: an integrator who hand-rolls the
+        // challenge is exactly the one who copies the declaration across with it, and that is
+        // the second half of this — a well-formed claim about a layout the bytes do not have.
+        val handRolledRequest = Utils.createSignChallengeIntent(
+            context,
+            storedPublicKey,
+            handRolled,
+            LOGIN_REQUEST,
+            nonceFormat = Utils.NONCE_FORMAT_TIMESTAMPED,
+        )
+        val handRolledAnswer = vault.answer(handRolledRequest)
+        assertEquals(
+            "precondition: the vault signed it — *these* bytes are refused by nothing on the " +
+                "vault side (a hand-rolled challenge that happened to be a statement pre-image " +
+                "would be, which is what the assertion above rules out), so the client's own " +
+                "freshness clause is the only place this answer can fail",
+            Activity.RESULT_OK,
+            handRolledAnswer.resultCode,
+        )
+        assertTrue(
+            "the correlation clause is satisfied: this is the answer to this very request",
+            Utils.matchesRequestCode(handRolledAnswer.data, LOGIN_REQUEST),
+        )
+        assertTrue(
+            "the verify clause is satisfied: a genuine signature, by the key this service " +
+                "stores, over exactly the bytes it sent",
+            Utils.parseSignChallengeResult(handRolledAnswer.data)!!.isVerified(storedPublicKey, handRolled),
+        )
+        assertFalse(
+            "…and yet a challenge the integrator minted themselves logs nobody in, for ever: " +
+                "`RESULT_OK` above and three clauses measured true on these very arguments " +
+                "leave the freshness clause as the one that refused",
+            loginSucceeded(
+                handRolledAnswer.resultCode,
+                handRolledAnswer.data,
+                storedPublicKey,
+                handRolled,
+            ),
+        )
+
+        // And the claim the request puts on the wire, which is the part a vault acts on.
+        // `nonceTimestamp`'s KDoc tells a peer to trust the header *exactly when* the sender
+        // declared this literal — so a declaration over bytes that carry no timestamp hands a
+        // vault noise to apply its own freshness policy to, with the protocol's own permission.
+        assertEquals(
+            "the hand-rolled request declares the timestamped layout, read back off the wire",
+            Utils.NONCE_FORMAT_TIMESTAMPED,
+            handRolledRequest.getStringExtra(Utils.EXTRA_NONCE_FORMAT),
+        )
+        assertEquals(
+            "…over a nonce whose declared timestamp is the far-off constant above: the " +
+                "declaration is false on the wire while being perfectly well formed",
+            HAND_ROLLED_TIMESTAMP,
+            Utils.nonceTimestamp(Utils.parseSignChallengeRequest(handRolledRequest)!!.nonce),
+        )
+
+        // The honest pairing, without which the refusal above could be the signing path, the
+        // request code or the fixture rather than the eight bytes: the same request shape over a
+        // `generateNonce` challenge declares the same literal, and the timestamp a vault reads on
+        // the strength of it is a real one, inside this client's own window.
+        assertEquals(
+            "the minted request declares the same literal",
+            Utils.NONCE_FORMAT_TIMESTAMPED,
+            request.getStringExtra(Utils.EXTRA_NONCE_FORMAT),
+        )
+        assertTrue(
+            "and the nonce it declares really does carry a timestamp inside the block's window",
+            Utils.isNonceFresh(
+                Utils.parseSignChallengeRequest(request)!!.nonce,
+                maxAgeMillis = 60_000L,
+            ),
         )
     }
 
@@ -1775,6 +1915,18 @@ class GuideExamplesTest {
         private const val STATE_REQUEST_CODE = "login-request-code"
 
         private const val SIGN_ALGORITHM = "SHA256withRSA"
+
+        /**
+         * The "time" a hand-rolled challenge of forty `0x5A` bytes declares: `0x5A5A5A5A5A5A5A5A`
+         * milliseconds since the epoch, which is roughly 206 million years from now.
+         *
+         * Spelled as a constant rather than computed, so the login test's assertion reads the
+         * value out of the bytes and compares it against a number written down independently. It
+         * is what makes refusal 8 a pin instead of a probability: [Utils.isNonceFresh] refuses
+         * *this* nonce because its header is a future timestamp, not because forty arbitrary
+         * bytes usually fail.
+         */
+        private const val HAND_ROLLED_TIMESTAMP = 6_510_615_555_426_900_570L
 
         /**
          * The stand-in key an integrator's own test puts in a built answer.
