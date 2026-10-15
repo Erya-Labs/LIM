@@ -749,6 +749,14 @@ class ChangelogTest {
      * tag of its version exists, and says `unreleased` exactly when one does not. Never both, never
      * neither.
      *
+     * **One exception: the tagged commit itself.** A release is tagged at the commit that declares
+     * it, and the release date is only known once Maven Central records it, so that commit's
+     * heading still says `unreleased`, as 1.0.0's did. Its tests then run a second time, at publish,
+     * from a checkout of the tag, where the tag already exists. Without the exception the rule
+     * fails the very commit being released, and the release script refuses to stage it. So
+     * `unreleased` is still allowed while HEAD *is* the tagged commit; every commit after it must
+     * carry the date. Where git cannot say what the tag points at, the date is required.
+     *
      * **Asked of git, not read out of `.git/`.** Tags may be loose files or packed into one file,
      * and in a worktree `.git` is itself a file pointing elsewhere; git resolves all of that. It is
      * not declared as a Gradle input for the same reason - no `.git` path is stable across clones and
@@ -780,7 +788,7 @@ class ChangelogTest {
             dated || unreleased,
         )
         when (tagExists(version)) {
-            true -> assertTrue(
+            true -> if (tagIsHead(version) != true) assertTrue(
                 "git tag $version exists, so $version was released: its heading must carry the " +
                     "release date, not `$UNRELEASED`. Found: \"$heading\"",
                 dated,
@@ -808,6 +816,31 @@ class ChangelogTest {
         assertEquals("tag 0.1.0 must be found", true, first)
         assertEquals("tag 1.0.0 must be found", true, tagExists("1.0.0"))
         assertEquals("an invented tag must not be found", false, tagExists("0.0.0-never-tagged"))
+        // The exception's query must not answer "this is the tagged commit" for a tag far behind
+        // HEAD, or for no tag at all: either would excuse every undated heading.
+        assertEquals("tag 0.1.0 is not HEAD", false, tagIsHead("0.1.0"))
+        assertEquals("an invented tag is not HEAD", null, tagIsHead("0.0.0-never-tagged"))
+    }
+
+    /**
+     * Whether the tag named exactly [name] points at the commit checked out (HEAD), or null when git
+     * cannot say: no such tag, or no git at all.
+     */
+    private fun tagIsHead(name: String): Boolean? {
+        val tagged = gitCommit("refs/tags/$name^{commit}") ?: return null
+        val head = gitCommit("HEAD") ?: return null
+        return tagged == head
+    }
+
+    /** The full commit id git resolves [rev] to, or null when it cannot. */
+    private fun gitCommit(rev: String): String? = try {
+        val process = ProcessBuilder("git", "rev-parse", "--verify", "--quiet", rev)
+            .directory(changelogFile().absoluteFile.parentFile)
+            .start()
+        val output = process.inputStream.bufferedReader().readText().trim()
+        if (process.waitFor() != 0 || output.isEmpty()) null else output
+    } catch (e: java.io.IOException) {
+        null
     }
 
     /**
