@@ -404,7 +404,13 @@ real query answer.
 
 Login is the one flow that proves something. You generate a random challenge, the vault signs it
 with the profile's private key, and you verify the signature against the public key you already
-hold. Nothing leaves the device but a signature.
+hold. The private key never leaves the vault and this library has no network leg of any kind — but
+the answer is not only a signature: it carries whatever the vault chose to disclose, and an answer
+built with this library writes a field payload every time, so disclosing nothing reaches you as an
+empty payload rather than as no payload at all. Treat `SignChallengeResult.fields` as data you did
+not ask for rather than as a profile update — and as unverified data besides, until `isVerified`
+has returned `true`. `GuideExamplesTest`'s *a login answer carries the whole stored profile beside
+the proof* reads that payload off the answer this section's own fixture vault returns.
 
 The order is the whole lesson: generate, keep, verify against what you already had.
 

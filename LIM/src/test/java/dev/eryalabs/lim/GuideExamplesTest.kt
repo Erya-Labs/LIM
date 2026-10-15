@@ -1083,6 +1083,131 @@ class GuideExamplesTest {
         )
     }
 
+    /**
+     * What else a login answer carries, measured rather than assumed — and the reason the section
+     * above no longer ends "Nothing leaves the device but a signature."
+     *
+     * [Utils.createSignChallengeResultIntent] writes [Utils.EXTRA_FIELDS_JSON] unconditionally, and
+     * [FixtureVault.sign] — the vault that answers the guide's own login scene — hands it the whole
+     * stored profile. So the answer the printed handler verifies carries `name` and `email` with
+     * their real values, and an integrator who read that sentence the way it is written would store
+     * or log personal data they never asked for.
+     *
+     * **Narrow on two axes, which is what makes it new.** A sign-challenge result's fields are read
+     * elsewhere: `ResultBuilderTest:486` round-trips a field map through the builder, `:269-289`
+     * pins the empty case, `DecoderFuzzTest:502-503` reads them under fuzz. The claim here is
+     * smaller — **no test read the fields of the login answer in this guide's own scene** (the ten
+     * `loginSucceeded` calls above branch on four clauses, none of which touches the payload), and
+     * **nothing anywhere said that a login, as the page teaches it, discloses the stored profile**.
+     * [SignChallengeResult]'s class KDoc has always described the data correctly; it was the page
+     * that contradicted it.
+     *
+     * **The whole [TypedField] is compared, never `fields["email"]?.value`, and the reason is the
+     * opposite of the obvious one.** [TypedField.toString] *is* the redacted rendering, so a failed
+     * comparison of `TypedField`s prints a type and a length while a failed comparison of raw
+     * `String`s prints the address verbatim into the build log. The sign-up test at the top of this
+     * file compares the raw value and has exactly that property; this one does not copy it.
+     *
+     * **The control is the share answer, not the empty payload.** The same scene's *share* answer
+     * carries the same profile under the same extra key, which is what makes "a login is a proof,
+     * not a disclosure" a statement about the request rather than a false one about the wire: a
+     * share asked for those fields and a login did not. That the payload is written even for an
+     * empty map is already bought by `ResultBuilderTest`'s *an empty fields map is still an answer*
+     * (`:269-289`) and is cited rather than re-measured.
+     *
+     * **How much of this file depends on a login answer carrying data, measured.** Make
+     * [FixtureVault.sign] pass `emptyMap()` instead of `held.fields` and **two** tests redden: this
+     * one, and *a sign-up can leave named fields optional…*, whose misuse case feeds a login answer
+     * to the sign-up handler and reads `NOT_ACKNOWLEDGED` off its payload — `INCOMPLETE` once the
+     * payload is gone. Neither is a login: the ten `loginSucceeded` calls and all eight refusals
+     * above stay green under that mutation, because no clause of the published login handler reads
+     * a field. That is why the sentence this test corrects survived as long as it did.
+     *
+     * **The limit, and it is the whole limit.** This measures this repository's [FixtureVault] and
+     * this library's builder. It is not a claim about what any particular vault discloses in the
+     * field — LIM cannot enforce a vault's behaviour — and it takes no position on whether a vault
+     * *should* disclose on a login, which is a standing question for a human.
+     */
+    @Test
+    fun `a login answer carries the whole stored profile beside the proof`() {
+        // One sign-up, used twice: the login below and the share answer it is compared against
+        // come out of the same vault and the same stored profile.
+        val shareAnswer = shareAnswerFrom(vault)
+        val storedPublicKey = Utils.parseShareResult(shareAnswer)?.publicKey
+        assertNotNull("precondition: the fixture vault must answer a sign-up", storedPublicKey)
+
+        val nonce = Utils.generateNonce()
+        val answer = vault.answer(
+            Utils.createSignChallengeIntent(
+                context,
+                storedPublicKey!!,
+                nonce,
+                LOGIN_REQUEST,
+                nonceFormat = Utils.NONCE_FORMAT_TIMESTAMPED,
+            ),
+        )
+        assertEquals(
+            "precondition: the vault answered the challenge",
+            Activity.RESULT_OK,
+            answer.resultCode,
+        )
+
+        // The login answer carries a field payload at all — asserted on the extra, because a
+        // parsed empty map and an absent payload are the same reading on the way out.
+        assertTrue(
+            "a login answer carries a field payload, under the share result's own key",
+            answer.data!!.hasExtra(Utils.EXTRA_FIELDS_JSON),
+        )
+
+        // …and it is the whole stored profile, read out of the answer rather than asserted
+        // loosely: the names come back as a list and are compared against the profile the vault
+        // holds, so a disclosure of one field or of three fails here.
+        val parsed = Utils.parseSignChallengeResult(answer.data)
+        assertNotNull("precondition: the login answer parses", parsed)
+        assertEquals(
+            "a login discloses every field the vault stored, though the challenge asked for none",
+            PROFILE.keys.toList(),
+            parsed!!.fields.keys.toList(),
+        )
+
+        // One value arrives intact. The whole `TypedField` is compared, not its `value`:
+        // `TypedField.toString` is the redacted rendering, so this comparison prints a length on
+        // failure where a raw-String one would print the address.
+        assertEquals(
+            "…carrying the value the user typed, not a placeholder or a blank",
+            TypedField(PROFILE_EMAIL, FieldType.EMAIL),
+            parsed.fields["email"],
+        )
+
+        // And the proof is untouched: a disclosure riding along with a genuine login, not a
+        // broken answer that happens to carry data.
+        assertTrue(
+            "the same answer still verifies against the stored key and the challenge sent",
+            parsed.isVerified(storedPublicKey, nonce),
+        )
+
+        // The control. The share answer from the same sign-up carries the same payload under the
+        // same key, so what separates the two flows is not the wire but the request: a share
+        // asked for those fields and a login did not.
+        assertEquals(
+            "control: the share answer discloses the same fields under the same key, so the " +
+                "difference a login makes is in what was asked for, never in what is sent",
+            parsed.fields,
+            Utils.parseShareResult(shareAnswer)!!.fields,
+        )
+
+        // A restatement of `ResultBuilderTest`'s *an empty fields map is still an answer*
+        // (`:269-289`), kept for readability and not this test's evidence. It is why a vault
+        // cannot opt out of the payload by omission: on this wire "disclosed nothing" and "sent
+        // no payload" are the same answer.
+        assertEquals(
+            "restatement, pinned elsewhere: the payload is written even for an empty map",
+            "{}",
+            Utils.createSignChallengeResultIntent(parsed.signature)
+                .getStringExtra(Utils.EXTRA_FIELDS_JSON),
+        )
+    }
+
     // ── Surviving process death ───────────────────────────────────────────
 
     /**

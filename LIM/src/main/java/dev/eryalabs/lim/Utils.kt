@@ -2432,7 +2432,10 @@ object Utils {
      *                    [EXTRA_FIELDS_JSON] — the same key the share result uses, and the
      *                    sign-challenge flow's own. Always written, even for an empty map; a
      *                    garbled payload costs the client the disclosure but not the proof, which
-     *                    stands on its own.
+     *                    stands on its own. `GuideExamplesTest`'s *a login answer carries the whole
+     *                    stored profile beside the proof* reads that payload off a real login
+     *                    answer, which is where to see what "always" costs: a vault cannot opt out
+     *                    by omission, so disclosing nothing means sending an empty payload.
      * @param requestCode Echoed under [EXTRA_SHARE_REQUEST_CODE]; `null` or blank attaches
      *                    nothing.
      * @param algorithm   What the vault signed with, written to [EXTRA_ALGORITHM] when non-null
