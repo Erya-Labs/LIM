@@ -1072,4 +1072,129 @@ class ResultBuilderTest {
         assertEquals(setOf("EMAIL", "age"), Utils.parseShareResult(intent)!!.fields.keys)
         assertEquals(FieldRequirementsVerdict.INCOMPLETE, Utils.checkFieldRequirements(requirements, intent))
     }
+
+    /**
+     * **An acknowledgement vouches for what the declaration asked for, not for what the answer
+     * contains.** `isSatisfiedBy` is `requiredFields.none { isBlank(exact[it]) } &&
+     * exact.values.none { isBlank(it) }` (`FieldRequirements.kt:158-161`), so a key the client
+     * never declared does not withhold satisfaction as long as it carries something — only a
+     * *blank* value does, declared or not (`FieldRequirementsTest:302` and `:298` pin the pair at
+     * unit level). The requirements-aware builder writes its acknowledgement on exactly that
+     * predicate (`Utils.kt:2373-2375`), so a vault that answers the guide's three-field sign-up
+     * with a fourth field of its own gets acknowledged, and the client reads `HONOURED`
+     * (`Utils.kt:2225`) over an answer carrying a name it never sent.
+     *
+     * The consequence, and the reason this is a test and not a remark: a handler that stores
+     * `result.fields` keeps that extra field, and the handler `docs/INTEGRATION.md` prints does
+     * not, because its `val profile = requirements.committed(result.fields)` (`:266`) drops every
+     * key the declaration lacks. That is the property [FieldRequirements.committed]'s `@param`
+     * already claims (`FieldRequirements.kt:172-177`); what is new here is measuring it in the
+     * one place an acknowledgement is vouching for the answer.
+     *
+     * Not covered by the three near neighbours, each narrower in a different way.
+     * `no acknowledgement is written over a payload that does not satisfy the requirements`
+     * (`:1018-1028`) is a required field missing, a required field blank, and a blank optional
+     * kept — none carries a name the declaration does not have.
+     * `a case-insensitive payload whose keys lack a required field is not acknowledged`
+     * (`:1062-1074`) *does* hand this builder a payload whose `"EMAIL"` the declaration lacks,
+     * but that payload is *missing* `email`, so it never reaches an acknowledgement and the
+     * verdict is `INCOMPLETE`: there the undeclared key arrives **instead of** a required one,
+     * here it arrives **beside** a complete payload, and only the second reaches `HONOURED`.
+     * `FieldRequirementsVerdictTest`'s sweep (`:258-300`) does vary the declaration so a payload
+     * field goes undeclared and does call `checkFieldRequirements` (`:284`), but it hand-builds
+     * its intents with `putExtra` rather than through a builder, and asserts only
+     * `verdict in COMPLETE_VERDICTS` (`:290`) rather than a specific verdict for a given input.
+     * Its closing `assertEquals(values().toSet(), seen)` (`:295-299`) pins that every verdict
+     * occurs somewhere in the sweep, which is a different claim. And the *query* flow already
+     * has the over-disclosing case — `overDisclosingVault()` (`GuideExamplesTest:1950`, used at
+     * `:601`) — while the *sign-up* flow cannot: `FixtureVault.store` builds its payload from
+     * `request.entry.fields` (`:2095`) and `RequiredFieldsVault` from `requirements.fieldNames`
+     * (`:2178`), so neither sign-up fixture in this repository is able to over-disclose.
+     *
+     * Key sets are compared as **sets** throughout, deliberately: [FieldRequirements.committed]
+     * returns the declared fields in `fieldNames` order while a parsed payload is in the vault's
+     * order, and this test is about *which* keys survive, not about their order.
+     */
+    @Test
+    fun `an acknowledged answer can carry a field the declaration never had`() {
+        // The guide's sign-up declaration, `docs/INTEGRATION.md:232-241`: three names, `phone`
+        // optional.
+        val declared = FieldRequirements(listOf("name", "email", "phone"), setOf("phone"))
+        val declaredKeys = setOf("name", "email", "phone")
+        val overDisclosed = linkedMapOf(
+            "name" to TypedField("Ada", FieldType.STRING),
+            "email" to TypedField("ada@example.com", FieldType.EMAIL),
+            "phone" to TypedField("+44 20 7946 0958", FieldType.PHONE),
+            "address" to TypedField("12 Marylebone Road", FieldType.STRING),
+        )
+
+        assertTrue(
+            "precondition: an undeclared non-blank key does not withhold satisfaction",
+            declared.isSatisfiedBy(overDisclosed),
+        )
+
+        val answer = Utils.createShareResultIntent(publicKey, overDisclosed, "req-9", declared)
+
+        assertEquals(
+            "the acknowledgement names the declared optional set",
+            """["phone"]""",
+            answer.getStringExtra("extra_applied_optional_fields"),
+        )
+        assertEquals(
+            "and the client reads it as honoured",
+            FieldRequirementsVerdict.HONOURED,
+            Utils.checkFieldRequirements(declared, answer),
+        )
+        val disclosed = Utils.parseShareResult(answer)!!.fields
+        assertTrue(
+            "the honoured answer carries a name the declaration never had",
+            disclosed.containsKey("address"),
+        )
+        assertEquals(
+            "committed keeps the declared names and nothing else — the line the guide prints",
+            declaredKeys,
+            declared.committed(disclosed)!!.keys,
+        )
+
+        // The mirror: one stray field the vault forgot to drop, and the same 1.1.0 vault reads as
+        // one that predates the release — the cause `docs/INTEGRATION.md:289-291` describes
+        // without naming it.
+        val strayBlank = overDisclosed + ("address" to TypedField("", FieldType.STRING))
+
+        assertFalse(
+            "a blank undeclared value does withhold satisfaction",
+            declared.isSatisfiedBy(strayBlank),
+        )
+
+        val unacknowledged = Utils.createShareResultIntent(publicKey, strayBlank, "req-9", declared)
+
+        assertFalse(
+            "so no acknowledgement is written",
+            unacknowledged.hasExtra("extra_applied_optional_fields"),
+        )
+        assertEquals(
+            "and a 1.1.0 vault reads as one that predates the release",
+            FieldRequirementsVerdict.NOT_ACKNOWLEDGED,
+            Utils.checkFieldRequirements(declared, unacknowledged),
+        )
+        assertEquals(
+            "committed is unmoved either way",
+            declaredKeys,
+            declared.committed(Utils.parseShareResult(unacknowledged)!!.fields)!!.keys,
+        )
+
+        // Control: the same declaration over the same payload *minus* the undeclared name. Still
+        // honoured, and now the two key sets coincide — which is what makes the divergence above a
+        // property of the undeclared field rather than of the flow.
+        val tidy = Utils.createShareResultIntent(publicKey, overDisclosed - "address", "req-9", declared)
+
+        assertEquals(
+            "control: a payload of exactly the declared fields is honoured too",
+            FieldRequirementsVerdict.HONOURED,
+            Utils.checkFieldRequirements(declared, tidy),
+        )
+        val tidyFields = Utils.parseShareResult(tidy)!!.fields
+        assertEquals("control: nothing to drop", declaredKeys, tidyFields.keys)
+        assertEquals("control: so the two key sets coincide", tidyFields.keys, declared.committed(tidyFields)!!.keys)
+    }
 }

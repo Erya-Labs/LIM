@@ -281,7 +281,9 @@ create the account from.
 
 - `HONOURED` — the vault acknowledged exactly your optional set, and the data is complete. That is
   the vault's claim, not a check of every value: an acknowledgement written by hand can sit beside
-  a blank optional value, which `committed` drops.
+  a blank optional value, which `committed` drops. Nor does it say the answer carries *only* what
+  you declared — a field you never asked for does not withhold the acknowledgement as long as it
+  has something in it, and `committed` is what drops the rest.
 - `MISMATCHED` — it acknowledged a different set, and the data is complete. The usual cause is a
   declaration it could not read, so it asked the user for everything.
 - `NOT_ACKNOWLEDGED` — no acknowledgement, and the data is complete. A vault that predates this

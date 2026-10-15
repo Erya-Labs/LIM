@@ -148,6 +148,11 @@ class FieldRequirements @JvmOverloads constructor(
      * acknowledgement only when this is `true`, so a vault that forgot to drop a blank field
      * answers without one rather than making a claim its payload does not support.
      *
+     * **An undeclared non-blank field does not withhold the acknowledgement; an undeclared blank
+     * one does.** So an answer that reads [FieldRequirementsVerdict.HONOURED] may still carry a
+     * name the client never sent, and [committed] is what drops it — `ResultBuilderTest`'s
+     * *an acknowledged answer can carry a field the declaration never had* pins both halves.
+     *
      * @param values The payload about to be sent, exactly as it will be encoded. Not modified.
      */
     fun isSatisfiedBy(values: Map<String, TypedField>): Boolean {
