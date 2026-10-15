@@ -658,21 +658,36 @@ class GuideExamplesTest {
      * Login is the one flow that proves something, so it is the one flow whose handler being
      * green on the happy path alone would be an authentication bypass rather than a gap.
      *
-     * The guide's `login-result` block is therefore a **function**, and this test drives it eight
-     * times: twice on an answer it must accept, and six times on one it must refuse — an expired
+     * The guide's `login-result` block is therefore a **function**, and this test drives it nine
+     * times: twice on an answer it must accept, and seven times on one it must refuse — an expired
      * challenge, another account's stored key, an answer from a different flow that parses as
-     * something else, a result code that is not `RESULT_OK`, no intent at all, and a genuine answer
-     * replayed against a challenge it did not answer. As straight-line code in a region it could
-     * only ever be run once, on the answer it was always going to accept; re-running it meant
-     * copying it, which pins nothing.
+     * something else, a result code that is not `RESULT_OK`, no intent at all, a genuine answer
+     * replayed against a challenge it did not answer, and a genuine answer to a *different login
+     * request* of this same service. As straight-line code in a region it could only ever be run
+     * once, on the answer it was always going to accept; re-running it meant copying it, which
+     * pins nothing.
      *
-     * **Refusals 4 and 5 exist to reach the two clauses nothing here had ever refused at**, and
-     * they are not equally attributable. Both pass the *genuine* answer's arguments, identical to
-     * the accepting call at the top of this test, and change exactly one of them. Refusal 4 is
-     * therefore the result-code clause and nothing else: the other three are satisfied by that
-     * accepting call's own `true`. Refusal 5 pins that a `null` intent is refused and nothing is
-     * thrown; *which* clause refuses it is said by the paired parse assertion and the comment
-     * beside it, not by the call — which is written there rather than left to be inferred.
+     * **Refusals 4, 5 and 7 exist to reach the clauses nothing here had ever refused at**, and
+     * they are not equally attributable. Refusals 4 and 5 both pass the *genuine* answer's
+     * arguments, identical to the accepting call at the top of this test, and change exactly one
+     * of them. Refusal 4 is therefore the result-code clause and nothing else: the other three
+     * are satisfied by that accepting call's own `true`. Refusal 5 pins that a `null` intent is
+     * refused and nothing is thrown; *which* clause refuses it is said by the paired parse
+     * assertion and the comment beside it, not by the call — which is written there rather than
+     * left to be inferred.
+     *
+     * **Refusal 7 is the correlation clause, and it is attributable by construction** — which is
+     * the property refusal 5 has to borrow from a comment. [Utils.matchesRequestCode] exists for
+     * one accident, two requests in flight and the wrong answer handled, and until this call no
+     * published handler in this file had ever been refused *for that reason* — refusal 5's `null`
+     * reaches the same clause, but by being nothing rather than by belonging elsewhere, which is
+     * a different fault and does not exercise the accident. It is refusal 6's
+     * mirror image: there a second *challenge* under the same request code, here a second
+     * *request* over the same challenge and the same stored key. So the handler's other three
+     * clauses are each asserted true over the very arguments the refusing call is given, and the
+     * correlation is the only clause left that can have produced the `false`. Those three
+     * controls are load-bearing, not decoration: drop one and the suite stays green while the
+     * attribution quietly stops holding.
      *
      * **The replay is a real one.** Refusal 6 is a second challenge this service really minted,
      * really signed by the key the account table really holds, carrying the same request code: a
@@ -691,7 +706,7 @@ class GuideExamplesTest {
      * What is new here is only that the *published handler*, as printed, refuses.
      */
     @Test
-    fun `login proves the holder of the stored key is present, and refuses six answers`() {
+    fun `login proves the holder of the stored key is present, and refuses seven answers`() {
         val storedPublicKey = signUpOnTheFixtureVault()
 
         // region snippet:login-request
@@ -874,6 +889,56 @@ class GuideExamplesTest {
         assertFalse(
             "…and that very same answer, replayed against the earlier challenge, logs nobody in",
             loginSucceeded(replayed.resultCode, replayed.data, storedPublicKey, nonce),
+        )
+
+        // Refusal 7: the correlation clause refusing for the reason it exists — an answer that
+        // belongs to a *different request*, which no call here had ever been refused for. Every
+        // call above hands this handler an answer tagged `LOGIN_REQUEST` or no answer at all, so
+        // while refusal 5's `null` does reach this clause (see the note there), the hazard the
+        // clause was written for — two login requests in flight, and the handler given the answer
+        // to the other one — had never been driven. Both requests are this service's own, over
+        // the same challenge and the same stored key, so nothing is wrong with this answer
+        // except which request it belongs to.
+        //
+        // The attribution is **by construction, not by inference**, which is the thing refusal 5
+        // cannot say about itself: the handler's other three clauses are each asserted true just
+        // below, over these very arguments, so the `false` that follows leaves the correlation as
+        // the only clause that can have produced it. Drop any one of those three and the suite
+        // stays green while the attribution quietly stops holding — they are load-bearing.
+        val otherRequest = vault.answer(
+            Utils.createSignChallengeIntent(
+                context,
+                storedPublicKey,
+                nonce,
+                SECOND_LOGIN_REQUEST,
+                nonceFormat = Utils.NONCE_FORMAT_TIMESTAMPED,
+            ),
+        )
+        assertEquals(
+            "the result-code clause is satisfied: the vault signed this second challenge rather " +
+                "than refusing it, and `RESULT_OK` is what the refused call below passes",
+            Activity.RESULT_OK,
+            otherRequest.resultCode,
+        )
+        assertTrue(
+            "the answer *is* correlated — to its own request, which is the whole point. So the " +
+                "handler's correlation clause is false because the two codes differ, not " +
+                "because the extra is absent, blank or unreadable",
+            Utils.matchesRequestCode(otherRequest.data, SECOND_LOGIN_REQUEST),
+        )
+        assertTrue(
+            "the freshness clause is satisfied: the challenge is inside the block's own window",
+            Utils.isNonceFresh(nonce, maxAgeMillis = 60_000L),
+        )
+        assertTrue(
+            "the verify clause is satisfied: the signature is genuine, by the key this service " +
+                "stores, over the very bytes it sent",
+            Utils.parseSignChallengeResult(otherRequest.data)!!.isVerified(storedPublicKey, nonce),
+        )
+        assertFalse(
+            "…and yet the answer to another request logs nobody in: three clauses measured true " +
+                "on these arguments leave the correlation as the clause that refused",
+            loginSucceeded(Activity.RESULT_OK, otherRequest.data, storedPublicKey, nonce),
         )
     }
 
@@ -1164,6 +1229,15 @@ class GuideExamplesTest {
      *  - the built answer is a *real* answer rather than an intent that happens to parse — the key
      *    comes back out as it went in and the echoed request code correlates, neither of which an
      *    empty envelope could do;
+     *  - **all three of the handler's clauses refuse something, and each refusal names itself.**
+     *    The printed handler is driven four times: once on the answer it keeps, and three times on
+     *    answers it must not — one refusal per clause. Until the last two were written only the
+     *    result-code clause had ever returned, which made the other two lines paste, not behaviour.
+     *    Each of the two new calls asserts the clauses it is *not* about: the answer belonging to
+     *    another request would parse to a key, so its `null` is the correlation; and the refusal
+     *    carrying only a request code correlates *and* parses, so its `null` is the absent key.
+     *    That second one is handed `RESULT_OK` deliberately — the handler reads no result code out
+     *    of the intent, and attributing its silence to the first clause would be wrong;
      *  - the diagnosis line the second block tells an integrator to log carries no value the user
      *    disclosed *under the key that carries one*. The field value asserted absent is spelled to
      *    collide with nothing any renderer in [Utils.describeIntent] emits: a short value like
@@ -1213,6 +1287,57 @@ class GuideExamplesTest {
         assertNull(
             "control: the same handler keeps nothing when the vault refused",
             onVaultAnswer(Activity.RESULT_CANCELED, answer),
+        )
+
+        // The handler has three clauses and only the result code had ever been the one that
+        // returned. The two calls below reach the other two, and each is paired with the clause
+        // *above* it measured true, so the refusal is attributed by construction rather than
+        // asserted by comment.
+        //
+        // Refused at the correlation: the same built answer, echoing a different request of the
+        // same flow. This is the two-requests-in-flight accident `matchesRequestCode` exists for,
+        // and it is a genuine answer — a user really consented to this disclosure — so there is
+        // nothing else for the handler to object to.
+        val anotherRequestsAnswer = Utils.createShareResultIntent(
+            publicKey = FAKE_PUBLIC_KEY,
+            fields = linkedMapOf(
+                "email" to TypedField(value = FAKE_EMAIL, type = FieldType.EMAIL),
+            ),
+            requestCode = SECOND_SIGN_UP_REQUEST,
+        )
+        assertEquals(
+            "the clause below the correlation would have succeeded: the parse hands back a key",
+            FAKE_PUBLIC_KEY,
+            Utils.parseShareResult(anotherRequestsAnswer)?.publicKey,
+        )
+        assertNull(
+            "…so an answer belonging to another request is kept by nothing, and the correlation " +
+                "is the clause that refused it rather than the parse",
+            onVaultAnswer(Activity.RESULT_OK, anotherRequestsAnswer),
+        )
+
+        // Refused at the key: a refusal as a vault really sends one — `RESULT_CANCELED` carrying
+        // the echoed request code and nothing else, `FixtureVault.refuse`'s shape. It is handed
+        // over with `RESULT_OK` on purpose, so the first clause cannot be what refuses it: this
+        // handler never reads a result code out of the intent, and an integrator who forgot the
+        // code check would land exactly here.
+        val keyless = Intent().putExtra(Utils.EXTRA_SHARE_REQUEST_CODE, SIGN_UP_REQUEST)
+        assertTrue(
+            "the correlation passes, so the handler gets past the clause above",
+            Utils.matchesRequestCode(keyless, SIGN_UP_REQUEST),
+        )
+        assertNotNull(
+            "and the parse passes too — a refusal is a readable answer, not an empty envelope",
+            Utils.parseShareResult(keyless),
+        )
+        assertNull(
+            "…but it carries no public key, which is what leaves the key as the only clause " +
+                "that can refuse here",
+            Utils.parseShareResult(keyless)?.publicKey,
+        )
+        assertNull(
+            "so the handler keeps nothing, and throws nothing",
+            onVaultAnswer(Activity.RESULT_OK, keyless),
         )
 
         // region snippet:testing-diagnosis
@@ -1628,6 +1753,17 @@ class GuideExamplesTest {
         private const val SIGN_UP_REQUEST = "signup-1"
         private const val QUERY_REQUEST = "query-1"
         private const val LOGIN_REQUEST = "login-1"
+
+        /**
+         * A second token for each of those two flows, and the only reason either exists: a
+         * published handler has to be driven with a genuine answer that belongs to a **different
+         * request**. That is the one accident [Utils.matchesRequestCode] is there for — two
+         * requests in flight, the wrong answer handled — and no snippet's handler had ever
+         * refused on it. Neither token reaches a region: a guide that showed an integrator two
+         * request codes per flow would be teaching the hazard rather than the loop.
+         */
+        private const val SECOND_LOGIN_REQUEST = "login-2"
+        private const val SECOND_SIGN_UP_REQUEST = "signup-2"
 
         /**
          * An app's own saved-state keys, which is all they are: nothing in this library reads
