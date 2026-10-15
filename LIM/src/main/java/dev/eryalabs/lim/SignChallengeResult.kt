@@ -46,6 +46,10 @@ data class SignChallengeResult(
      * a public key or nonce read back out of the result intent, which would let the sender
      * choose both sides of the proof. Freshness is a separate question: check the nonce with
      * [Utils.isNonceFresh] as well, or a signature captured today can be replayed tomorrow.
+     * *Inside* that window there is no bound at all — this call asks only whether the signature is
+     * genuine over the bytes you pass, so the same answer returns `true` every time it is
+     * presented; minting a fresh challenge per attempt and treating an answer as consumed once you
+     * have acted on it is the caller's rule to keep, not something this library enforces.
      *
      * **Example**, verbatim from `docs/INTEGRATION.md`'s *Login (sign-challenge)* section —
      * this call is the last of the four clauses, and the only one that proves anything:

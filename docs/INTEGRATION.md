@@ -475,6 +475,18 @@ private key before `isVerified` can be true of it — *Testing your integration 
 where to read one — and it is worth the trouble: this is the only handler here where accepting a
 bad answer logs somebody in.
 
+Mint a new challenge for every attempt, and treat an answer as consumed once you have acted on it.
+Nothing in this library makes a challenge single-use: `isVerified` asks whether a signature is
+genuine over bytes you supply, so inside the window the same answer verifies every time it is
+presented, and the 60-second freshness clause is the only thing that bounds it — the window is the
+only bound, and refusal 1 of `GuideExamplesTest`'s *login proves the holder of the stored key is
+present, and refuses eight answers* is where that bound is measured, beside the three acceptances
+of one genuine answer on identical arguments. Restoring a challenge does not spend it either — a
+challenge read back out of saved state is the same unspent challenge, still inside its window or
+not, which is why the next section's advice is about *restoring* a challenge and never about
+reusing one. This is a statement about what this library does, not a claim that anybody can get
+hold of your answer: consume once is a rule for your own handler, and it is cheap to keep.
+
 ---
 
 ## Surviving process death

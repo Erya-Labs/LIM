@@ -659,15 +659,35 @@ class GuideExamplesTest {
      * Login is the one flow that proves something, so it is the one flow whose handler being
      * green on the happy path alone would be an authentication bypass rather than a gap.
      *
-     * The guide's `login-result` block is therefore a **function**, and this test drives it ten
-     * times: twice on an answer it must accept, and eight times on one it must refuse — an expired
-     * challenge, another account's stored key, an answer from a different flow that parses as
-     * something else, a result code that is not `RESULT_OK`, no intent at all, a genuine answer
+     * The guide's `login-result` block is therefore a **function**, and this test drives it twelve
+     * times: four times on an answer it must accept, and eight times on one it must refuse — an
+     * expired challenge, another account's stored key, an answer from a different flow that parses
+     * as something else, a result code that is not `RESULT_OK`, no intent at all, a genuine answer
      * replayed against a challenge it did not answer, a genuine answer to a *different login
      * request* of this same service, and a genuine answer to a challenge the integrator minted
      * themselves. As straight-line code in a region it could only ever be run
      * once, on the answer it was always going to accept; re-running it meant copying it, which
      * pins nothing.
+     *
+     * **Three of the four acceptances are the same call, and that is the point of them.** Nothing
+     * in this library makes a challenge single-use, so the identical `(resultCode, data,
+     * storedKey, challenge)` is accepted a second and a third time, with the 60-second window
+     * asserted open on either side of the pair so the attribution is the window still being open
+     * rather than the handler being indifferent to its challenge. Every *other* repeat in this
+     * test changes one argument and lands on a refusal, so none of them asks that question; the
+     * fourth acceptance is refusal 6's own, a genuinely different login that keeps "true three
+     * times" from reading as a handler that is true of everything. The closed window is refusal
+     * 1's, cited rather than minted twice, and the matching refusal — *a* genuine answer against a
+     * challenge it did not answer — is refusal 6's `assertFalse`, over that answer rather than
+     * this one, because only refusal 6 asserts it as a pair through the handler. The repeats
+     * themselves discriminate nothing in the present tense: `loginSucceeded` holds no state, so
+     * they cannot fail while the first acceptance passes and the window stays open — the clock is
+     * the one way they could diverge, and the controls are what witness it. What they buy is the
+     * statement that today nothing makes an answer single-use plus a canary for the day
+     * something does.
+     * What this says is what *this library* does not do: it is not a claim that any particular
+     * attacker can obtain a login answer, and whether a challenge should be single-use *on the
+     * wire* is the standing peer-freshness question and not this test's.
      *
      * **Refusals 4, 5 and 7 exist to reach the clauses nothing here had ever refused at**, and
      * they are not equally attributable. Refusals 4 and 5 both pass the *genuine* answer's
@@ -784,6 +804,54 @@ class GuideExamplesTest {
         assertTrue(
             "the genuine answer logs this profile in",
             loginSucceeded(answer.resultCode, answer.data, storedPublicKey, nonce),
+        )
+
+        // And again, twice, on the *identical* four arguments — because nothing in this library
+        // makes a challenge single-use, and until this pair nothing here said so. Every other
+        // repeat in this test changes one argument and lands on a refusal, so none of them asks
+        // this question.
+        //
+        // The freshness clause is the only bound, which is why the window is asserted open on
+        // either side of the pair: without that the repeated `true` could as well be a handler
+        // indifferent to its challenge, and with it the attribution is the window still being
+        // open. Both control assertions are load-bearing in exactly that sense — delete either
+        // and the suite stays green while the attribution quietly stops holding.
+        //
+        // The closed window is measured by refusal 1 below rather than minted a second time
+        // here, and the other half of the pair — *a* genuine answer against a challenge it did
+        // not answer, refused through this same handler — is refusal 6's `assertFalse`. It is
+        // that answer and not this one, deliberately: refusal 6 asserts the pair, accepted
+        // against its own challenge and refused against the earlier one, and only a pair
+        // separates "this handler accepts anything" from "this answer is still the answer to
+        // *this* challenge". The same-object version of it is the direct `isVerified` assertion
+        // a few lines below, which is not a handler refusal and so is not the citation.
+        //
+        // What the repeats do **not** add is present-tense discrimination. `loginSucceeded`
+        // holds no state, so these two calls are the same expression on the same arguments as
+        // the one above and cannot fail while that one passes *and the window stays open* —
+        // the freshness clause reads the ambient clock, which is the one way they could
+        // diverge and exactly what the two controls below witness. What they buy is a canary
+        // against a future change that makes an answer single-use, and the statement that
+        // today nothing does.
+        assertTrue(
+            "control: the challenge is still inside the block's own 60-second window before the " +
+                "repeats below, so what they measure is the window being open and not the " +
+                "handler being indifferent",
+            Utils.isNonceFresh(nonce, maxAgeMillis = 60_000L),
+        )
+        assertTrue(
+            "the same answer, against the same challenge, logs the same profile in a second time",
+            loginSucceeded(answer.resultCode, answer.data, storedPublicKey, nonce),
+        )
+        assertTrue(
+            "…and a third: an answer is not spent by being acted on, so treating one as consumed " +
+                "is the client's rule to keep and never this library's to enforce",
+            loginSucceeded(answer.resultCode, answer.data, storedPublicKey, nonce),
+        )
+        assertTrue(
+            "control: and the window was still open after them, so neither acceptance above was " +
+                "bought by a clause that had already stopped applying",
+            Utils.isNonceFresh(nonce, maxAgeMillis = 60_000L),
         )
 
         val parsed = Utils.parseSignChallengeResult(answer.data)
