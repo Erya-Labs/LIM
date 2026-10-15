@@ -1668,7 +1668,7 @@ class KDocExampleTest {
 
         /**
          * The two floors, each set **at** the measured count rather than below it: 19 example
-         * blocks over 4 published sources, and 17 snippet-marked guide blocks.
+         * blocks over 4 published sources, and 18 snippet-marked guide blocks.
          *
          * At rather than below, because both counts are the subject here, and losing either is
          * worth a failure while adding to it is not. These are the *losing*-direction guards and
@@ -1677,7 +1677,7 @@ class KDocExampleTest {
          * count balanced and reddens only the floor below.
          */
         private const val MINIMUM_EXAMPLES = 19
-        private const val MINIMUM_GUIDE_BLOCKS = 17
+        private const val MINIMUM_GUIDE_BLOCKS = 18
 
         /**
          * A fence, with leading whitespace tolerated because the comment prefix has already been

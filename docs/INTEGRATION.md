@@ -353,6 +353,49 @@ val email = disclosure?.fields?.get("email")?.value
 // vault told us this", never "the holder of the key is here".
 ```
 
+### When the answer comes back short
+
+Consent is per disclosure, so a field the user released at sign-up they may hold back now. The
+answer is a well-formed answer either way: it simply carries less than you stored, and
+`fields["email"]` is absent rather than wrong. State what the screen needs as a
+`FieldRequirements` and read the disclosure against it. The correlation and result-code checks
+from the block above come first; this is what to do with an answer that is yours.
+
+<!-- snippet: GuideExamplesTest.kt#query-short -->
+```kotlin
+// In onActivityResult, once `resultCode` is RESULT_OK and the request code matches. A
+// disclosure can be shorter than the profile you stored: consent is per disclosure, so a
+// field the user released at sign-up they may hold back now. `fields["email"]` is then
+// absent — or blank, from a vault that sends the field anyway — and both read alike here.
+fun onDisclosure(data: Intent?) {
+    val needed = FieldRequirements(listOf("name", "email"))
+    val disclosed = Utils.parseQueryResult(data)?.fields ?: emptyMap()
+    // `committed` is null while a required field is absent or blank, and otherwise keeps
+    // the declared fields that arrived with something in them — an undeclared one is
+    // dropped; `missingRequired` names the required ones to ask for again.
+    val profile = needed.committed(disclosed)
+    if (profile != null) keepProfile(profile) else askAgainFor(needed.missingRequired(disclosed))
+}
+```
+
+**One edge, if you generalise this to a screen where nothing is required.** With every field
+optional there is no required field left to be short, so `committed` is never `null`: an answer
+that parsed to nothing — a refusal, or no answer at all — gives an empty map, and that reads as a
+profile with nothing in it rather than as "ask again". **The result code is the only thing that
+refuses it.** Correlation will not: a refusal carries no fields but it is still correlated, as
+*When the user says no* shows, so `matchesRequestCode` says `true` about it.
+
+And neither check is redundant when something *is* required. This gate reads the fields and
+nothing else, so it cannot see which request an answer belongs to — a complete answer about one
+profile lands in another's row — and it cannot see a result code, so a `RESULT_CANCELED` carrying
+a full payload reads as consent. Gate on the data *as well as* those two, never instead of them.
+
+`checkFieldRequirements` is not the check for this one. It is the **sign-up** check: it reads the
+sign-up fields key and only that, so a query answer reaches it with no fields at all and it
+reports `INCOMPLETE` whenever anything is required and `NOT_ACKNOWLEDGED` when nothing is —
+whatever the vault actually disclosed. `FieldRequirementsVerdictTest` measures both arms over a
+real query answer.
+
 ---
 
 ## Login (sign-challenge)

@@ -335,6 +335,152 @@ class GuideExamplesTest {
         )
     }
 
+    /**
+     * *When the answer comes back short*: the same query, answered with one field where two were
+     * stored.
+     *
+     * This is not a vault misbehaving. Consent is per disclosure, so [FixtureVault.discloses] is
+     * the user releasing the name this time and holding the email back, and the answer is still
+     * built by [Utils.createQueryResultIntent] like every other one here.
+     *
+     * The guide's block is a **function** for the reason `login-result` is: the claim is that it
+     * survives answers it must not take at face value, and straight-line code could only ever meet
+     * the one answer it was written for. Six answers run through it:
+     *
+     *  1. the short one — one field where two were stored;
+     *  2. the whole profile, without which the check could be failing for every input and every
+     *     other assertion here would still pass;
+     *  3. an over-disclosing vault's answer carrying a field this screen never declared, which
+     *     [FieldRequirements.committed] drops rather than stores — the property that stops a vault
+     *     putting a key of its choosing into a client's profile table;
+     *  4. a field sent **blank** rather than omitted, which has to take the same branch as an
+     *     absent one or the block's "absent — or blank" is a guess about which vault answered;
+     *  5. `null`, the answer an app gets when there is none;
+     *  6. a refusal, which parses to no fields at all.
+     *
+     * The outcome is asserted by **name** — `[email]`, not "something was missing" — because
+     * "which field is short" is the only version of this a user can be told about, and a handler
+     * that merely knew the answer was incomplete would pass an emptiness check just as well.
+     *
+     * The last assertions are the edge the section warns about and this handler does not reach:
+     * with **nothing** required there is no required field left to be short, so `committed` of an
+     * answer that parsed to nothing is an empty map rather than `null`, and a refusal would read
+     * as a stored profile with nothing in it. The **result code** is what refuses that, and only
+     * it: a refusal is still correlated — `a refusal is still correlated` below pins that — so
+     * `matchesRequestCode` says `true` about one. Which is why the printed block's first line is
+     * the precondition rather than a remark.
+     *
+     * [Utils.checkFieldRequirements] is deliberately not in the handler: it reads the sign-up
+     * fields key and only that, so a query answer reaches it carrying nothing.
+     * `FieldRequirementsVerdictTest` measures both arms of that over a real query answer, and the
+     * guide's prose cites it rather than repeating the measurement here.
+     */
+    @Test
+    fun `a query answer can disclose less than was stored, and the handler names what is short`() {
+        val accountKey = signUpOnTheFixtureVault()
+        // The user releases the name this time and not the email.
+        vault.discloses = setOf("name")
+        val shortAnswer = vault.answer(Utils.createQueryIntent(context, accountKey, QUERY_REQUEST))
+
+        // region snippet:query-short
+        // In onActivityResult, once `resultCode` is RESULT_OK and the request code matches. A
+        // disclosure can be shorter than the profile you stored: consent is per disclosure, so a
+        // field the user released at sign-up they may hold back now. `fields["email"]` is then
+        // absent — or blank, from a vault that sends the field anyway — and both read alike here.
+        fun onDisclosure(data: Intent?) {
+            val needed = FieldRequirements(listOf("name", "email"))
+            val disclosed = Utils.parseQueryResult(data)?.fields ?: emptyMap()
+            // `committed` is null while a required field is absent or blank, and otherwise keeps
+            // the declared fields that arrived with something in them — an undeclared one is
+            // dropped; `missingRequired` names the required ones to ask for again.
+            val profile = needed.committed(disclosed)
+            if (profile != null) keepProfile(profile) else askAgainFor(needed.missingRequired(disclosed))
+        }
+        // endregion snippet:query-short
+
+        assertEquals(Activity.RESULT_OK, shortAnswer.resultCode)
+        assertTrue(
+            "the checks the block above shows come first, and this answer passes them",
+            Utils.matchesRequestCode(shortAnswer.data, QUERY_REQUEST),
+        )
+        assertEquals(
+            "the name arrived — so the handler is reading a disclosure, not failing to parse one",
+            listOf("name"),
+            Utils.parseQueryResult(shortAnswer.data)!!.fields.keys.toList(),
+        )
+
+        onDisclosure(shortAnswer.data)
+        assertEquals(
+            "the one field the user held back is the one the handler asks for again",
+            listOf("ask again [email]"),
+            queryOutcomes,
+        )
+
+        // The whole profile, through the same handler: nothing missing, and both fields kept.
+        queryOutcomes.clear()
+        vault.discloses = null
+        val whole = vault.answer(Utils.createQueryIntent(context, accountKey, QUERY_REQUEST)).data
+        onDisclosure(whole)
+        assertEquals(listOf("kept [name, email]"), queryOutcomes)
+
+        // And a vault that discloses more than was asked about: `phone` is in the answer, it is
+        // not in what this screen declared, and it is not in what the handler would store.
+        queryOutcomes.clear()
+        val over = overDisclosingVault()
+        val generous = over.answer(Utils.createQueryIntent(context, over.publicKey, QUERY_REQUEST)).data
+        assertEquals(
+            listOf("name", "email", "phone"),
+            Utils.parseQueryResult(generous)!!.fields.keys.toList(),
+        )
+        onDisclosure(generous)
+        assertEquals(listOf("kept [name, email]"), queryOutcomes)
+
+        // A vault that sends a field it holds nothing for rather than omitting it. Blank and
+        // absent take the same branch, which is what makes the block's "absent — or blank" true
+        // rather than a guess about which vault you are talking to.
+        queryOutcomes.clear()
+        onDisclosure(
+            Utils.createQueryResultIntent(
+                accountKey,
+                linkedMapOf(
+                    "name" to TypedField("Ada", FieldType.STRING),
+                    "email" to TypedField("", FieldType.EMAIL),
+                ),
+                QUERY_REQUEST,
+            ),
+        )
+        assertEquals(listOf("ask again [email]"), queryOutcomes)
+
+        // No answer at all, and a refusal: neither parses to any fields, so both required names
+        // are short and the handler asks again rather than storing an empty profile.
+        queryOutcomes.clear()
+        onDisclosure(null)
+        vault.consents = false
+        val refused = vault.answer(Utils.createQueryIntent(context, accountKey, QUERY_REQUEST))
+        assertEquals(Activity.RESULT_CANCELED, refused.resultCode)
+        onDisclosure(refused.data)
+        assertEquals(
+            listOf("ask again [name, email]", "ask again [name, email]"),
+            queryOutcomes,
+        )
+
+        // And the edge the section warns about, measured rather than asserted of the printed
+        // block: declare nothing required and there is no required field left to be short, so
+        // `committed` of an answer that parsed to nothing is an empty map, not `null` — the arm
+        // where a refusal would read as a stored profile with nothing in it. The result code is
+        // what refuses that and the only thing that does, since the refusal driven through the
+        // handler above was correlated; this gate cannot see either.
+        val allOptional = FieldRequirements(listOf("name", "email"), setOf("name", "email"))
+        assertEquals(emptyList<String>(), allOptional.missingRequired(emptyMap()))
+        assertEquals(emptyMap<String, TypedField>(), allOptional.committed(emptyMap()))
+        assertTrue(
+            "and the refusal this handler was handed is correlated, which is why the section " +
+                "puts the result code and not `matchesRequestCode` between it and a stored " +
+                "empty profile",
+            Utils.matchesRequestCode(refused.data, QUERY_REQUEST),
+        )
+    }
+
     // ── Login ────────────────────────────────────────────────────────────
 
     /**
@@ -932,6 +1078,45 @@ class GuideExamplesTest {
         signUpOutcomes += "reported"
     }
 
+    /** What *When the answer comes back short*'s handler did, one line per call. */
+    private val queryOutcomes = mutableListOf<String>()
+
+    /** That handler's two outcomes: the profile it would store, or the names to ask for again. */
+    private fun keepProfile(profile: Map<String, TypedField>) {
+        queryOutcomes += "kept ${profile.keys.toList()}"
+    }
+
+    private fun askAgainFor(missing: List<String>) {
+        queryOutcomes += "ask again $missing"
+    }
+
+    /**
+     * A vault holding a third field, signed up for and ready to disclose all three.
+     *
+     * Needed because [FixtureVault] stores exactly the fields the sign-up request declared, so an
+     * answer carrying a field a *query*'s caller never named cannot come out of the two-field
+     * sign-up the rest of this file does. Nothing here is a guide snippet; it is the only way to
+     * build the over-disclosing answer the handler has to drop a field from.
+     */
+    private fun overDisclosingVault(): FixtureVault {
+        val vault = FixtureVault(
+            vaultKeyPair,
+            PROFILE + ("phone" to TypedField("555-0100", FieldType.PHONE)),
+        )
+        val request = Utils.createShareIntent(context, optionalPhoneEntry(), requestCode = SIGN_UP_REQUEST)
+        val answer = vault.answer(request)
+        // Asserted on the parsed result, not on `answer.data`: a refusal carries a non-null
+        // intent too, so a guard on the intent alone would pass over a vault that stored nothing
+        // and leave this helper handing back an empty profile for the handler to read.
+        assertEquals(Activity.RESULT_OK, answer.resultCode)
+        assertEquals(
+            "the over-disclosing vault must store all three fields for this to over-disclose",
+            listOf("name", "email", "phone"),
+            Utils.parseShareResult(answer.data)!!.fields.keys.toList(),
+        )
+        return vault
+    }
+
     /** The guide's optional-field sign-up entry, for the test that does not re-print it. */
     private fun optionalPhoneEntry() = Entry(
         id = "signup-form",
@@ -1027,6 +1212,15 @@ class GuideExamplesTest {
         /** The user's answer at the consent dialog. */
         var consents: Boolean = true
 
+        /**
+         * The field names the user releases on a query, or `null` for the whole stored profile.
+         *
+         * Consent is per disclosure in this protocol, so a vault may answer with less than it
+         * holds — and that is the one thing a client's query handler has to survive. `null` by
+         * default, so every call written before this knob discloses everything exactly as it did.
+         */
+        var discloses: Set<String>? = null
+
         private var stored: Entry? = null
 
         fun answer(request: Intent): VaultAnswer = when (request.action) {
@@ -1062,7 +1256,10 @@ class GuideExamplesTest {
         }
 
         private fun disclose(request: QueryRequest): VaultAnswer {
-            val held = stored?.fields
+            // What the user released, which may be less than what is stored. See [discloses].
+            val held = stored?.fields?.let { fields ->
+                discloses?.let { released -> fields.filterKeys { it in released } } ?: fields
+            }
             // An unknown key and a refused consent collapse into one answer on purpose:
             // answering "no such profile" tells the caller a profile exists for every key it is
             // not told that about.

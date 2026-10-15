@@ -7,6 +7,14 @@ import java.util.Collections
  * and **the one definition of "blank" this protocol has**, so that a client's gate and a vault's
  * Save button cannot disagree about it.
  *
+ * **A query disclosure is read the same way.** Only [optionalFields] travels on the wire, and only
+ * on a sign-up; the class itself is just a declaration of what some set of values has to contain,
+ * so a client that states what one screen needs can hand [missingRequired] and [committed] the
+ * fields of a [QueryResult] exactly as it hands them a [ShareResult]'s. Consent is per disclosure,
+ * so an answer carrying less than was stored is a well-formed answer, and this is what names the
+ * part that is short. [Utils.checkFieldRequirements] is *not* that check — it reads the sign-up
+ * fields key alone, so a query answer reaches it carrying nothing.
+ *
  * **Required is the default.** Every name in [fieldNames] is required unless it is also named in
  * the optional list, and a name that is not one of [fieldNames] is dropped rather than added: a
  * misspelt optional name leaves its field required, which is the direction that fails closed. A
@@ -116,7 +124,12 @@ class FieldRequirements @JvmOverloads constructor(
      * and a client's "what is missing" list, and it is the same list on both sides because both
      * call this.
      *
-     * @param values The values to check — a vault's draft, or a client's `ShareResult.fields`.
+     * @param values The values to check — a vault's draft, or a client's `ShareResult.fields` or
+     *               `QueryResult.fields`. A query disclosure is read exactly like a sign-up's
+     *               answer: this is the list of required names the vault did not disclose, **or
+     *               disclosed blank**, which is what a client asks for again rather than
+     *               rendering as absent. Absent and blank take the same branch here, by the one
+     *               definition of blank above.
      *               Looked up by exact key; keys this object does not declare are ignored here.
      *               Not modified.
      * @return A read-only list, empty when nothing required is missing.
@@ -151,8 +164,12 @@ class FieldRequirements @JvmOverloads constructor(
      * is empty, not `null`, when every field is optional and every one was left blank — a profile
      * that is a key and nothing else, which is what a vault offering it answers with.
      *
-     * @param values A vault's draft or a client's `ShareResult.fields`. The [TypedField]s are
-     *               handed back as they are, never trimmed or rewritten. Not modified.
+     * @param values A vault's draft, or a client's `ShareResult.fields` or `QueryResult.fields` —
+     *               a query disclosure is read exactly like a sign-up's answer, so an
+     *               over-disclosing vault's extra field is dropped here rather than stored, and
+     *               so is a declared one that arrived blank. The
+     *               [TypedField]s are handed back as they are, never trimmed or rewritten. Not
+     *               modified.
      * @return A read-only map, or `null` exactly when [missingRequired] is non-empty.
      */
     fun committed(values: Map<String, TypedField>): Map<String, TypedField>? {
