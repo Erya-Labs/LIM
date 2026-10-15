@@ -2761,8 +2761,11 @@ object Utils {
      * <!-- example: INTEGRATION.md#declined -->
      * ```kotlin
      * // Branch on the result code, never on the parse. A refused query parses into a
-     * // perfectly good QueryResult with no fields — exactly what a vault that consented and
-     * // disclosed nothing returns — so the parse cannot tell you which of the two happened.
+     * // perfectly good QueryResult with no fields — exactly the field payload a vault that
+     * // consented and disclosed nothing returns — so the fields cannot tell you which of the
+     * // two happened. The echoed public key often does differ, and is still not the signal:
+     * // it is the vault's own claim, a refusal that echoed one would read as a disclosure,
+     * // and a consenting vault with no key to give sends none either.
      * val declined = resultCode != Activity.RESULT_OK
      * // Correlation survives a refusal: the echoed request code is the one thing a declining
      * // vault still sends, so you know which request the user said no to.

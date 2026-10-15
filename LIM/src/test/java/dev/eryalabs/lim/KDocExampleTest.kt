@@ -1668,16 +1668,21 @@ class KDocExampleTest {
 
         /**
          * The two floors, each set **at** the measured count rather than below it: 19 example
-         * blocks over 4 published sources, and 18 snippet-marked guide blocks.
+         * blocks over 4 published sources, and 19 snippet-marked guide blocks.
          *
          * At rather than below, because both counts are the subject here, and losing either is
          * worth a failure while adding to it is not. These are the *losing*-direction guards and
          * the two-way fence count is the gaining-direction one; neither replaces the other —
          * deleting a whole block removes one block and two fence lines, which leaves the two-way
          * count balanced and reddens only the floor below.
+         *
+         * The guide floor was raised 18 → 19 when *Mint the refusal too* added the block the
+         * testing section was missing. Raised **to** the new measurement, which is what a floor
+         * set at the count means: nothing was silenced by it, and the two counts move apart only
+         * because that block quotes a test region rather than a published declaration.
          */
         private const val MINIMUM_EXAMPLES = 19
-        private const val MINIMUM_GUIDE_BLOCKS = 18
+        private const val MINIMUM_GUIDE_BLOCKS = 19
 
         /**
          * A fence, with leading whitespace tolerated because the comment prefix has already been

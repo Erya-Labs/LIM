@@ -543,8 +543,11 @@ today is `RESULT_CANCELED` carrying the request code you sent and nothing else.
 <!-- snippet: GuideExamplesTest.kt#declined -->
 ```kotlin
 // Branch on the result code, never on the parse. A refused query parses into a
-// perfectly good QueryResult with no fields — exactly what a vault that consented and
-// disclosed nothing returns — so the parse cannot tell you which of the two happened.
+// perfectly good QueryResult with no fields — exactly the field payload a vault that
+// consented and disclosed nothing returns — so the fields cannot tell you which of the
+// two happened. The echoed public key often does differ, and is still not the signal:
+// it is the vault's own claim, a refusal that echoed one would read as a disclosure,
+// and a consenting vault with no key to give sends none either.
 val declined = resultCode != Activity.RESULT_OK
 // Correlation survives a refusal: the echoed request code is the one thing a declining
 // vault still sends, so you know which request the user said no to.
@@ -555,6 +558,19 @@ val whichRequest = Utils.matchesRequestCode(data, QUERY_REQUEST)
 
 A refused *login* answers the same way, so the same rule covers it: no result code, no
 authentication.
+
+**A refusal does not say why, and the two reasons you will guess are not distinguishable from each
+other.** The user declined, and the vault no longer holds that key — a profile the user deleted, a
+device that was reinstalled — carry nothing in the answer to tell them apart, and a vault should
+not add anything: a vault that answered "no such profile" would be telling every caller that a
+profile exists for every key it is *not* told that about. The vaults in this repository collapse
+the two deliberately, and this library cannot make any vault do so — which is one more reason to
+read nothing into a refusal. So never read one as "the account is gone": do not delete the account,
+do not mark it dead, ask again later. And remember what signing up again costs, under *Required and
+optional fields* above — it mints a second profile, so pushing the user back through sign-up is not
+a repair. `GuideExamplesTest > an integrator mints the refusal too, and it reads exactly as a
+vault's does` asks the fixture vault about a key it does not hold and gets the refusal above,
+reading for reading.
 
 ---
 
@@ -733,6 +749,46 @@ The usual answers are all on that line: an extra reads `blank` rather than `abse
 payload sits under the key the other flow's parser reads, or `package` reads `"signup-1"` because a
 request code was passed positionally to `createShareIntent`. An empty `flows=[]` means no parser
 here would accept the intent as anything at all.
+
+### Mint the refusal too
+
+The three builders above all mint a vault's *consent*. The fourth answer — the one *When the user
+says no* calls the answer an integration has not been written without — is minted by none of them,
+because every result builder here writes a field payload and `extra_protocol_version`
+unconditionally, and a refusal honoured nothing. So you write it, and it is two lines:
+
+<!-- snippet: GuideExamplesTest.kt#refusal -->
+```kotlin
+// The fourth answer, and the one no result builder mints: a refusal. Two lines, because
+// there is nothing in one but the code you echoed — the vault honoured nothing, so it
+// attaches nothing. Drive your handler with this as well as with the answers above.
+val refusedCode = Activity.RESULT_CANCELED
+val refused = Intent().putExtra(Utils.EXTRA_SHARE_REQUEST_CODE, QUERY_REQUEST)
+```
+
+Hand that to your handler and all four of its readings are the ones a vault's refusal produces:
+`matchesRequestCode` is **true**, `parseQueryResult` is **non-null with no fields**,
+`parseShareResult` is **non-null with a `null` key**, and `parseSignChallengeResult` is **`null`**.
+A refusal is a readable answer, which is exactly why the result code is the only thing that says it
+was one.
+
+Leave the request code out and `matchesRequestCode` is false — so is a code written as `""`, which
+reads as absent — and what you have is no longer the refusal a vault sends. The echoed code is the
+one thing a declining vault still gives you.
+
+A second refusal shape exists in this repository, hand-built exactly as yours is: the echoed code
+**and** the version echo, which `RequirementsCompatibilityMatrixTest`'s vaults send. No builder
+produces either shape — all three write a field payload alongside the version — so a refusal is
+hand-written wherever it comes from. That one extra changes none of the four readings: you read it
+as `vaultProtocolVersion`, and per *Gate on the data, never on the version* you gate on nothing
+with it. `GuideExamplesTest > an integrator mints the refusal too, and it reads exactly as a
+vault's does` asserts the four readings over both shapes, and asserts the two lines above against
+the refusal its fixture vault really sends for a key it does not hold — same readings, same
+extras.
+
+**The limit.** That test compares your fixture against the fixtures *this repository* uses. It is
+not a claim about any vault in the field: this library cannot enforce what a vault sends, and the
+sentence at the top of *When the user says no* describes today's shape rather than guaranteeing it.
 
 ---
 

@@ -14,6 +14,7 @@ import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
@@ -1235,8 +1236,11 @@ class GuideExamplesTest {
 
         // region snippet:declined
         // Branch on the result code, never on the parse. A refused query parses into a
-        // perfectly good QueryResult with no fields — exactly what a vault that consented and
-        // disclosed nothing returns — so the parse cannot tell you which of the two happened.
+        // perfectly good QueryResult with no fields — exactly the field payload a vault that
+        // consented and disclosed nothing returns — so the fields cannot tell you which of the
+        // two happened. The echoed public key often does differ, and is still not the signal:
+        // it is the vault's own claim, a refusal that echoed one would read as a disclosure,
+        // and a consenting vault with no key to give sends none either.
         val declined = resultCode != Activity.RESULT_OK
         // Correlation survives a refusal: the echoed request code is the one thing a declining
         // vault still sends, so you know which request the user said no to.
@@ -1248,7 +1252,8 @@ class GuideExamplesTest {
         assertTrue(declined)
         assertTrue("a refusal is still correlated", whichRequest)
         // The trap the snippet above avoids, pinned so it cannot quietly stop being a trap: the
-        // parse of a refusal is indistinguishable from a consenting vault's empty disclosure.
+        // field payload of a refusal is indistinguishable from a consenting vault's empty
+        // disclosure. The key is not, and the pin for that is at the end of this test.
         val parsed = Utils.parseQueryResult(data)
         assertNotNull("a refusal still parses", parsed)
         assertTrue("with nothing disclosed", parsed!!.fields.isEmpty())
@@ -1261,6 +1266,39 @@ class GuideExamplesTest {
         assertEquals(
             Activity.RESULT_OK,
             vault.answer(Utils.createQueryIntent(context, accountKey, QUERY_REQUEST)).resultCode,
+        )
+
+        // The corrected clause in the block above, pinned over this fixture's own two answers:
+        // the *fields* read alike and it is the key that differs. Scoped to these two on
+        // purpose — `createQueryResultIntent` writes the key through `putPresentExtra`, which
+        // omits a blank one, so a consenting vault with no key to give answers without one too.
+        // A general "the key tells them apart" would be this same defect one layer along, which
+        // is why the block says the key is not the signal rather than offering it as one.
+        vault.discloses = emptySet()
+        val disclosedNothing =
+            vault.answer(Utils.createQueryIntent(context, accountKey, QUERY_REQUEST))
+        assertEquals(
+            "precondition: consent with nothing released is still consent",
+            Activity.RESULT_OK,
+            disclosedNothing.resultCode,
+        )
+        val consenting = Utils.parseQueryResult(disclosedNothing.data)
+        assertNotNull("precondition: and it parses, like the refusal", consenting)
+        assertEquals(
+            "the two answers' fields are equal, which is the half of the old clause that was " +
+                "true: an empty payload says nothing about which happened",
+            parsed.fields,
+            consenting!!.fields,
+        )
+        assertEquals(
+            "…and the half that was not: this builder echoes the key it was given",
+            accountKey,
+            consenting.publicKey,
+        )
+        assertNull(
+            "…while the refusal echoes none, so the parse is not as blind as the block used to " +
+                "claim — and the result code is still the only thing that says which answer it is",
+            parsed.publicKey,
         )
     }
 
@@ -1588,7 +1626,163 @@ class GuideExamplesTest {
         )
     }
 
+    /**
+     * The same section's fourth block, and the one answer the other three cannot mint.
+     *
+     * The three builders that section publishes all produce a vault's *consent*. A refusal is
+     * produced by none of them — [FixtureVault.refuse] says why: every result builder in this
+     * library attaches [Utils.EXTRA_PROTOCOL_VERSION] unconditionally, and a refusal honoured
+     * nothing, so a refusal is hand-built or it is not a refusal. That left the section minting
+     * every answer except the one *When the user says no* calls the answer an integration has not
+     * been written without.
+     *
+     * What the region cannot assert about itself, and this function therefore asserts outside it:
+     *
+     *  - **the four readings a handler branches on**, spelled out rather than implied:
+     *    [Utils.matchesRequestCode] true, [Utils.parseQueryResult] non-null with no fields,
+     *    [Utils.parseShareResult] non-null with a `null` key, [Utils.parseSignChallengeResult]
+     *    `null`. A refusal is a *readable* answer, which is exactly why the result code is the
+     *    only thing that says it was one;
+     *  - **that the two hand-written lines are the refusal this repository's vaults really
+     *    send**, and not a shape of their own. [FixtureVault] is asked about a key it does not
+     *    hold — the `request.publicKey != publicKey` arm of [FixtureVault.disclose], which no
+     *    test in this file had ever executed — and its answer gives the same four readings and
+     *    the same extras, key for key.
+     *
+     * **Two refusal *extras* shapes exist in this repository and this test asserts over both.**
+     * [FixtureVault.refuse] sends the request code alone; `RequirementsCompatibilityMatrixTest`
+     * sends the request code *and* the version echo, hand-built there as it is here — no builder
+     * in this library produces either shape, because all three write a field payload alongside
+     * the version, which is the reason [FixtureVault.refuse] gives for being hand-built at all.
+     * The integrator's two lines match the first exactly and
+     * the second but for that one extra — read as `vaultProtocolVersion`, and gated on by
+     * nothing, per *Gate on the data, never on the version*. A handler that behaved differently
+     * between the two would be the defect. Extras are therefore compared only *within* a shape;
+     * across the two they differ by construction and an equality assertion would simply be false.
+     * A third variant exists and is not this test's: no payload at all, `VaultAnswer(
+     * RESULT_CANCELED, null)`, which [RequiredFieldsVault] sends and the saved-state section
+     * drives.
+     *
+     * **The limit, stated where the assertion is.** This compares an integrator's fixture against
+     * the fixtures *this repository* uses. It is not a claim about any vault in the field: LIM
+     * cannot enforce what a vault sends, and the guide's sentence about the shape of a refusal is
+     * a statement of today's shape rather than a guarantee.
+     */
+    @Test
+    fun `an integrator mints the refusal too, and it reads exactly as a vault's does`() {
+        val accountKey = signUpOnTheFixtureVault()
+
+        // region snippet:refusal
+        // The fourth answer, and the one no result builder mints: a refusal. Two lines, because
+        // there is nothing in one but the code you echoed — the vault honoured nothing, so it
+        // attaches nothing. Drive your handler with this as well as with the answers above.
+        val refusedCode = Activity.RESULT_CANCELED
+        val refused = Intent().putExtra(Utils.EXTRA_SHARE_REQUEST_CODE, QUERY_REQUEST)
+        // endregion snippet:refusal
+
+        assertEquals(
+            "precondition: the two lines above are a refusal, which is a result code and not a " +
+                "property of the payload",
+            Activity.RESULT_CANCELED,
+            refusedCode,
+        )
+        assertEquals(
+            "the four readings a handler branches on, off an integrator's own two lines",
+            REFUSAL_READINGS,
+            refusalReadings(refused),
+        )
+
+        // The cross-check that makes those two lines honest rather than a shape of their own: the
+        // refusal `FixtureVault` really sends, for a key it does not hold. An unknown key and a
+        // refused consent collapse into one answer on purpose — see `FixtureVault.disclose` — so
+        // this is also the first time in this file that arm runs.
+        val unknownKey = vault.answer(Utils.createQueryIntent(context, otherPublicKey, QUERY_REQUEST))
+        assertNotEquals(
+            "precondition: the vault genuinely does not hold this key",
+            accountKey,
+            otherPublicKey,
+        )
+        assertEquals(
+            "precondition: a key it does not hold is refused, not answered",
+            Activity.RESULT_CANCELED,
+            unknownKey.resultCode,
+        )
+        assertEquals(
+            "the hand-built refusal and the one the fixture vault sends read the same, reading " +
+                "for reading",
+            refusalReadings(refused),
+            refusalReadings(unknownKey.data),
+        )
+        assertEquals(
+            "…and carry the same extras, key for key: within this shape the integrator's two " +
+                "lines are the vault's refusal and not merely something that reads like it",
+            refused.extras!!.keySet(),
+            unknownKey.data!!.extras!!.keySet(),
+        )
+
+        // The second shape: the request code *and* the version echo, as
+        // `RequirementsCompatibilityMatrixTest`'s vaults send it. One extra more, read as
+        // `vaultProtocolVersion` and gated on by nothing.
+        val withVersionEcho = Intent()
+            .putExtra(Utils.EXTRA_SHARE_REQUEST_CODE, QUERY_REQUEST)
+            .putExtra(Utils.EXTRA_PROTOCOL_VERSION, Utils.PROTOCOL_VERSION.toString())
+        assertEquals(
+            "the same four readings over the second shape, so a handler written against the " +
+                "integrator's two lines meets no surprise from a vault that echoes its version",
+            REFUSAL_READINGS,
+            refusalReadings(withVersionEcho),
+        )
+        assertEquals(
+            "…and the one extra that separates the shapes is the version, which the readings " +
+                "above show changes none of them",
+            setOf(Utils.EXTRA_SHARE_REQUEST_CODE, Utils.EXTRA_PROTOCOL_VERSION),
+            withVersionEcho.extras!!.keySet(),
+        )
+        assertEquals(
+            "…and it reads back as the version a client would read, rather than as an opaque " +
+                "extra nothing parses",
+            Utils.PROTOCOL_VERSION,
+            Utils.parseQueryResult(withVersionEcho)?.vaultProtocolVersion,
+        )
+
+        // The echoed request code is what makes a refusal *correlated*, and an integrator's
+        // fixture that forgets it is not the refusal a vault sends. Two spellings of the same
+        // mistake, because the second is the one somebody actually types: left out, and written
+        // as `""` — which `presentStringExtra` maps to absent, so both land here.
+        assertFalse(
+            "a refusal with no echoed code correlates with nothing",
+            Utils.matchesRequestCode(Intent(), QUERY_REQUEST),
+        )
+        assertFalse(
+            "…and neither does one whose code is present but blank",
+            Utils.matchesRequestCode(
+                Intent().putExtra(Utils.EXTRA_SHARE_REQUEST_CODE, ""),
+                QUERY_REQUEST,
+            ),
+        )
+    }
+
     // ── Shared setup, all of it outside the regions ───────────────────────
+
+    /**
+     * The four readings a handler branches on, taken off one answer and reduced to strings.
+     *
+     * One list rather than four assertions, so "the integrator's refusal and the vault's read
+     * alike" is a single comparison whose failure prints which reading differed — and so that a
+     * reading added here is added to every answer the refusal test compares, rather than to
+     * whichever one somebody remembered.
+     */
+    private fun refusalReadings(data: Intent?): List<String> {
+        val query = Utils.parseQueryResult(data)
+        val share = Utils.parseShareResult(data)
+        return listOf(
+            "matchesRequestCode=${Utils.matchesRequestCode(data, QUERY_REQUEST)}",
+            "parseQueryResult=" + if (query == null) "null" else "fields=${query.fields.keys.toList()}",
+            "parseShareResult=" + if (share == null) "null" else "publicKey=${share.publicKey}",
+            "parseSignChallengeResult=" +
+                if (Utils.parseSignChallengeResult(data) == null) "null" else "present",
+        )
+    }
 
     /** What *Required and optional fields*' handler did, one line per call. */
     private val signUpOutcomes = mutableListOf<String>()
@@ -1893,6 +2087,26 @@ class GuideExamplesTest {
         private const val SIGN_UP_REQUEST = "signup-1"
         private const val QUERY_REQUEST = "query-1"
         private const val LOGIN_REQUEST = "login-1"
+
+        /**
+         * What a refusal that *carries a payload* reads as, written down rather than computed.
+         *
+         * Such a refusal parses, and that is the whole point of the four: a handler meets a
+         * readable answer with no fields, no key and no signature, and only the result code says
+         * it was a refusal. Spelled as a literal so the refusal test compares each answer against
+         * a constant somebody wrote, not against another answer's output.
+         *
+         * Scoped to the two payload-bearing shapes deliberately. The third variant — no data
+         * intent at all, which [RequiredFieldsVault] sends — reads as none of this: every one of
+         * the four comes back `false` or `null`, because there is nothing there to parse. That is
+         * a different answer with the same result code, not this one.
+         */
+        private val REFUSAL_READINGS = listOf(
+            "matchesRequestCode=true",
+            "parseQueryResult=fields=[]",
+            "parseShareResult=publicKey=null",
+            "parseSignChallengeResult=null",
+        )
 
         /**
          * A second token for each of those two flows, and the only reason either exists: a
