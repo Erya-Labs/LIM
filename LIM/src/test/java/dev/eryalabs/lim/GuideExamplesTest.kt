@@ -22,6 +22,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.security.KeyPair
 import java.security.KeyPairGenerator
+import java.security.SecureRandom
 import java.security.Signature
 
 /**
@@ -313,8 +314,26 @@ class GuideExamplesTest {
 
     // ── Login ────────────────────────────────────────────────────────────
 
+    /**
+     * Login is the one flow that proves something, so it is the one flow whose handler being
+     * green on the happy path alone would be an authentication bypass rather than a gap.
+     *
+     * The guide's `login-result` block is therefore a **function**, and this test calls it four
+     * times: on the genuine answer, and on three it must refuse — an expired challenge, another
+     * account's stored key, and an answer from a different flow that parses as something else.
+     * As straight-line code in a region it could only ever be run once, on the answer it was
+     * always going to accept; re-running it meant copying it, which pins nothing.
+     *
+     * The other two flows' blocks are deliberately left as they are. A share or a query answer is
+     * data a user consented to disclose; a login answer is a proof, and the refusal paths worth
+     * executing are the ones where accepting a bad answer authenticates somebody.
+     *
+     * `SignatureVerificationTest` and `NonceTest` own the full behaviour of the two calls this
+     * handler leans on, and `DecoderFuzzTest` owns what an arbitrary intent does to the parsers.
+     * What is new here is only that the *published handler*, as printed, refuses.
+     */
     @Test
-    fun `login proves the holder of the stored key is present`() {
+    fun `login proves the holder of the stored key is present, and refuses three answers`() {
         val storedPublicKey = signUpOnTheFixtureVault()
 
         // region snippet:login-request
@@ -333,29 +352,103 @@ class GuideExamplesTest {
         // endregion snippet:login-request
 
         val answer = vault.answer(request)
-        val resultCode = answer.resultCode
-        val data = answer.data
 
         // region snippet:login-result
-        // In onActivityResult. Verify against the key your account table already holds and the
-        // nonce you generated — never against either one read back out of the result, or the
-        // sender gets to choose both sides of the proof.
-        val result = Utils.parseSignChallengeResult(data)
-        val loggedIn = resultCode == Activity.RESULT_OK &&
-            Utils.matchesRequestCode(data, LOGIN_REQUEST) &&
-            Utils.isNonceFresh(nonce, maxAgeMillis = 60_000L) &&
-            result?.isVerified(storedPublicKey, nonce) == true
+        // In onActivityResult — and a function, not four lines inline, because this is the one
+        // handler worth running in your own tests against answers it must refuse. Verify
+        // against the key your account table already holds and the challenge you generated,
+        // never against either one read back out of the result, or the sender gets to choose
+        // both sides of the proof.
+        fun loginSucceeded(
+            resultCode: Int,
+            data: Intent?,
+            storedKey: String,
+            challenge: ByteArray,
+        ): Boolean {
+            val result = Utils.parseSignChallengeResult(data)
+            return resultCode == Activity.RESULT_OK &&
+                Utils.matchesRequestCode(data, LOGIN_REQUEST) &&
+                Utils.isNonceFresh(challenge, maxAgeMillis = 60_000L) &&
+                result?.isVerified(storedKey, challenge) == true
+        }
         // endregion snippet:login-result
 
-        assertTrue("the genuine answer logs this profile in", loggedIn)
-        assertNotNull(result)
+        assertTrue(
+            "the genuine answer logs this profile in",
+            loginSucceeded(answer.resultCode, answer.data, storedPublicKey, nonce),
+        )
+
+        val parsed = Utils.parseSignChallengeResult(answer.data)
+        assertNotNull(parsed)
         assertFalse(
             "the same signature proves nothing about any other key",
-            result!!.isVerified(otherPublicKey, nonce),
+            parsed!!.isVerified(otherPublicKey, nonce),
         )
         assertFalse(
             "nor about a challenge it did not answer — this is the replay the nonce stops",
-            result.isVerified(storedPublicKey, Utils.generateNonce()),
+            parsed.isVerified(storedPublicKey, Utils.generateNonce()),
+        )
+
+        // Refusal 1: an expired challenge. Staleness is minted, never slept for — both halves
+        // take the clock, so a challenge stamped two minutes before now is older than the
+        // block's own 60-second window by construction. It is the *stale* nonce the vault
+        // signs: a nonce nobody signed would be refused on the signature instead and would
+        // prove nothing about freshness.
+        val staleNonce = Utils.generateNonce(SecureRandom(), System.currentTimeMillis() - 120_000L)
+        val staleAnswer = vault.answer(
+            Utils.createSignChallengeIntent(
+                context,
+                storedPublicKey,
+                staleNonce,
+                LOGIN_REQUEST,
+                nonceFormat = Utils.NONCE_FORMAT_TIMESTAMPED,
+            ),
+        )
+        assertEquals("precondition: the vault answered it", Activity.RESULT_OK, staleAnswer.resultCode)
+        assertTrue(
+            "control: the signature over the stale challenge is genuine, so the refusal below " +
+                "is about the window and nothing else — without this pairing it could as well " +
+                "be a broken signature",
+            Utils.parseSignChallengeResult(staleAnswer.data)!!.isVerified(storedPublicKey, staleNonce),
+        )
+        assertFalse(
+            "and an expired challenge logs nobody in, however genuine the signature over it",
+            loginSucceeded(staleAnswer.resultCode, staleAnswer.data, storedPublicKey, staleNonce),
+        )
+
+        // Refusal 2: the genuine answer, checked against an account this service holds no
+        // signature for. Nothing about the intent changes; the stored key does.
+        assertFalse(
+            "the genuine answer authenticates nobody against another account's stored key",
+            loginSucceeded(answer.resultCode, answer.data, otherPublicKey, nonce),
+        )
+
+        // Refusal 3: an answer from a different flow — a share result, which carries a public
+        // key the handler must not read. `LOGIN_REQUEST` is echoed on it **on purpose**: a
+        // hostile sender would echo it, and without it the handler would refuse at
+        // `matchesRequestCode` and prove nothing about the clause this call is named for. The
+        // refusal has to land at the parse, so do not simplify the fixture.
+        val wrongFlow = Utils.createShareResultIntent(
+            publicKey = storedPublicKey,
+            fields = linkedMapOf("email" to TypedField(value = PROFILE_EMAIL, type = FieldType.EMAIL)),
+            requestCode = LOGIN_REQUEST,
+        )
+        assertTrue(
+            "precondition: it correlates, so the handler gets as far as the parse",
+            Utils.matchesRequestCode(wrongFlow, LOGIN_REQUEST),
+        )
+        assertEquals(
+            "precondition: and it is a perfectly good answer of its own flow",
+            storedPublicKey,
+            Utils.parseShareResult(wrongFlow)?.publicKey,
+        )
+        assertNull(
+            "…which the login parser reads as nothing at all",
+            Utils.parseSignChallengeResult(wrongFlow),
+        )
+        assertFalse(
+            "a share answer carrying a public key authenticates nobody, and nothing is thrown",
+            loginSucceeded(Activity.RESULT_OK, wrongFlow, storedPublicKey, nonce),
         )
     }
 

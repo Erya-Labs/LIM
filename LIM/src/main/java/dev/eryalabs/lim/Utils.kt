@@ -808,14 +808,23 @@ object Utils {
      *
      * <!-- example: INTEGRATION.md#login-result -->
      * ```kotlin
-     * // In onActivityResult. Verify against the key your account table already holds and the
-     * // nonce you generated — never against either one read back out of the result, or the
-     * // sender gets to choose both sides of the proof.
-     * val result = Utils.parseSignChallengeResult(data)
-     * val loggedIn = resultCode == Activity.RESULT_OK &&
-     *     Utils.matchesRequestCode(data, LOGIN_REQUEST) &&
-     *     Utils.isNonceFresh(nonce, maxAgeMillis = 60_000L) &&
-     *     result?.isVerified(storedPublicKey, nonce) == true
+     * // In onActivityResult — and a function, not four lines inline, because this is the one
+     * // handler worth running in your own tests against answers it must refuse. Verify
+     * // against the key your account table already holds and the challenge you generated,
+     * // never against either one read back out of the result, or the sender gets to choose
+     * // both sides of the proof.
+     * fun loginSucceeded(
+     *     resultCode: Int,
+     *     data: Intent?,
+     *     storedKey: String,
+     *     challenge: ByteArray,
+     * ): Boolean {
+     *     val result = Utils.parseSignChallengeResult(data)
+     *     return resultCode == Activity.RESULT_OK &&
+     *         Utils.matchesRequestCode(data, LOGIN_REQUEST) &&
+     *         Utils.isNonceFresh(challenge, maxAgeMillis = 60_000L) &&
+     *         result?.isVerified(storedKey, challenge) == true
+     * }
      * ```
      *
      * @param nonce        The challenge bytes to date, in [generateNonce]'s layout — the

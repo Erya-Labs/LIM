@@ -381,19 +381,36 @@ val request = Utils.createSignChallengeIntent(
 
 <!-- snippet: GuideExamplesTest.kt#login-result -->
 ```kotlin
-// In onActivityResult. Verify against the key your account table already holds and the
-// nonce you generated — never against either one read back out of the result, or the
-// sender gets to choose both sides of the proof.
-val result = Utils.parseSignChallengeResult(data)
-val loggedIn = resultCode == Activity.RESULT_OK &&
-    Utils.matchesRequestCode(data, LOGIN_REQUEST) &&
-    Utils.isNonceFresh(nonce, maxAgeMillis = 60_000L) &&
-    result?.isVerified(storedPublicKey, nonce) == true
+// In onActivityResult — and a function, not four lines inline, because this is the one
+// handler worth running in your own tests against answers it must refuse. Verify
+// against the key your account table already holds and the challenge you generated,
+// never against either one read back out of the result, or the sender gets to choose
+// both sides of the proof.
+fun loginSucceeded(
+    resultCode: Int,
+    data: Intent?,
+    storedKey: String,
+    challenge: ByteArray,
+): Boolean {
+    val result = Utils.parseSignChallengeResult(data)
+    return resultCode == Activity.RESULT_OK &&
+        Utils.matchesRequestCode(data, LOGIN_REQUEST) &&
+        Utils.isNonceFresh(challenge, maxAgeMillis = 60_000L) &&
+        result?.isVerified(storedKey, challenge) == true
+}
 ```
 
 Freshness and authenticity are separate questions, and the four clauses above are in the order that
 makes each one cheap to reason about: the right request, inside its window, signed by the right key
 over the right bytes.
+
+The result code, the intent, your stored key and your challenge are parameters, so your own test
+can call this on the answers it has to refuse: an expired challenge, another account's stored key,
+an answer from a different flow. The request code and the window stay your app's own constants. A
+login test is the one that needs real cryptography, because a signature has to be made with a
+private key before `isVerified` can be true of it — *Testing your integration without a vault* says
+where to read one — and it is worth the trouble: this is the only handler here where accepting a
+bad answer logs somebody in.
 
 ---
 
