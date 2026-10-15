@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.BadParcelableException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -296,6 +297,69 @@ class FieldRequirementsVerdictTest {
             FieldRequirementsVerdict.values().toSet(),
             seen,
         )
+    }
+
+    /**
+     * **Sign-ups only, and the misuse whose verdict looks like an answer.** This function reads
+     * the sign-up fields key and only that one, so a *query* answer — whose fields travel under
+     * [Utils.EXTRA_QUERY_RESULT_FIELDS] — reaches it as an answer carrying no fields at all. A
+     * complete query disclosure therefore reads as `INCOMPLETE` with anything required, and as
+     * `NOT_ACKNOWLEDGED` when nothing is. `parseShareResult` does not refuse the intent either: a
+     * query answer carries two of the three extras it reads, so it parses to the vault's key and
+     * an empty field map. A client reusing its sign-up handler for a query re-prompts a user who
+     * already consented, for ever; `GuideExamplesTest` drives the guide's own handler with it.
+     *
+     * The two completeness assertions are what make this measure anything: they prove the fixture
+     * disclosed every declared field *and* left no required one blank — the two other ways this
+     * fixture could produce `INCOMPLETE` and measure nothing — so the `INCOMPLETE` below is about
+     * the **key**. (Only a required field can produce it, which is why blankness is pinned over
+     * exactly those.) The control at the end is the other half — the same payload under the
+     * sign-up key is a genuine share answer, and the verdicts come out right.
+     */
+    @Test
+    fun `a complete query answer reads as no fields, because its fields key is not the sign-up one`() {
+        val disclosed = complete + ("phone" to TypedField("555-0100", FieldType.PHONE))
+        val answer = Utils.createQueryResultIntent(KEY, disclosed, CODE)
+
+        assertEquals(
+            "read with its own parser, every declared field is there",
+            listOf("name", "email", "phone"),
+            Utils.parseQueryResult(answer)!!.fields.keys.toList(),
+        )
+        assertTrue(
+            "and none of them blank — so the INCOMPLETE below is about the key, not about the " +
+                "values. Keys alone would stay green over a payload of blanks, which is the one " +
+                "other way this fixture could produce INCOMPLETE and measure nothing.",
+            requirements.missingRequired(Utils.parseQueryResult(answer)!!.fields).isEmpty(),
+        )
+
+        assertEquals(
+            "with name and email required, a complete disclosure still reads as INCOMPLETE",
+            FieldRequirementsVerdict.INCOMPLETE,
+            verdict(answer),
+        )
+
+        // The arm where the misuse reads as success: nothing required, so no required field can be
+        // missing, and `committed` of the misparsed fields is an empty profile rather than `null`.
+        val allOptional = FieldRequirements(requirements.fieldNames, requirements.fieldNames)
+        assertEquals(
+            FieldRequirementsVerdict.NOT_ACKNOWLEDGED,
+            Utils.checkFieldRequirements(allOptional, answer),
+        )
+        assertEquals(
+            "and the data gate agrees with it — an empty map, not null, is what would be stored",
+            emptyMap<String, TypedField>(),
+            allOptional.committed(Utils.parseShareResult(answer)!!.fields),
+        )
+
+        val misparsed = Utils.parseShareResult(answer)
+        assertNotNull("the share parser does not refuse a query answer", misparsed)
+        assertEquals("it keeps the key the vault sent", KEY, misparsed!!.publicKey)
+        assertTrue("and reads no fields out of it", misparsed.fields.isEmpty())
+
+        // Control: the same payload under EXTRA_FIELDS_JSON is a share answer, and reads as one.
+        assertEquals(FieldRequirementsVerdict.NOT_ACKNOWLEDGED, verdict(older(disclosed)))
+        assertEquals(FieldRequirementsVerdict.HONOURED, verdict(acknowledging(disclosed)))
     }
 
     /** Total over the hostile shapes an answer can take. */

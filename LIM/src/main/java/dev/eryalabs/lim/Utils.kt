@@ -2162,6 +2162,13 @@ object Utils {
      * nothing in a share result is signed. The acknowledgement is exactly as trustworthy as the
      * vault you addressed.
      *
+     * **Sign-up answers only.** It reads the sign-up fields key, so a *query* answer — whose
+     * fields travel under [EXTRA_QUERY_RESULT_FIELDS] — reaches it as an answer carrying no
+     * fields: a complete disclosure reads as [FieldRequirementsVerdict.INCOMPLETE] whenever
+     * anything is required, and as [FieldRequirementsVerdict.NOT_ACKNOWLEDGED] when nothing is.
+     * For a query, call [FieldRequirements.missingRequired] or [FieldRequirements.committed]
+     * directly over [QueryResult.fields] instead.
+     *
      * Total: no answer a vault can send makes this throw.
      *
      * **Example**, verbatim from `docs/INTEGRATION.md`'s *Required and optional fields* section:

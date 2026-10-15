@@ -174,12 +174,12 @@ class GuideExamplesTest {
      * [RequiredFieldsVault] answers the first call. The user has typed a name and an email and
      * nothing for `phone`, so the vault stores the two and drops the third, and the handler
      * creates the account from [FieldRequirements.committed] with the verdict `HONOURED`. The
-     * three controls run the **same** handler against the answers it has to survive: a vault
+     * four controls run the **same** handler against the answers it has to survive: a vault
      * built before required fields, which acknowledges nothing (`NOT_ACKNOWLEDGED`, and its blank
      * `phone` dropped by `committed` rather than stored as `""`); the same vault where the user
-     * skipped a required field (`INCOMPLETE`, naming it); and an answer that hand-writes the
-     * acknowledgement over that incomplete payload (`VIOLATED`). Every assertion is outside the
-     * regions.
+     * skipped a required field (`INCOMPLETE`, naming it); an answer that hand-writes the
+     * acknowledgement over that incomplete payload (`VIOLATED`); and a complete *query* answer,
+     * which this handler cannot read at all. Every assertion is outside the regions.
      */
     @Test
     fun `a sign-up can leave named fields optional and reads what the vault did with them`() {
@@ -276,6 +276,25 @@ class GuideExamplesTest {
         val forged = skipped!!.apply { putExtra(Utils.EXTRA_APPLIED_OPTIONAL_FIELDS, """["phone"]""") }
         onSignUpAnswer(forged)
         assertEquals(listOf("reported"), signUpOutcomes)
+
+        // And the misuse: a *query* answer, disclosing all three fields, handed to this handler.
+        // A query's fields travel under another extra, so this handler reads none of them — it
+        // keeps the key and calls the account incomplete over a disclosure that had both required
+        // fields in it. Reuse one handler for both flows and you re-prompt a user who already
+        // consented, for ever. `FieldRequirementsVerdictTest` measures why; this is what it costs.
+        signUpOutcomes.clear()
+        onSignUpAnswer(
+            Utils.createQueryResultIntent(
+                FAKE_PUBLIC_KEY,
+                linkedMapOf(
+                    "name" to TypedField("Ada", FieldType.STRING),
+                    "email" to TypedField(PROFILE_EMAIL, FieldType.EMAIL),
+                    "phone" to TypedField("555-0100", FieldType.PHONE),
+                ),
+                SIGN_UP_REQUEST,
+            ),
+        )
+        assertEquals(listOf("incomplete [name, email]"), signUpOutcomes)
     }
 
     // ── Query ────────────────────────────────────────────────────────────
