@@ -487,11 +487,29 @@ class GuideExamplesTest {
      * Login is the one flow that proves something, so it is the one flow whose handler being
      * green on the happy path alone would be an authentication bypass rather than a gap.
      *
-     * The guide's `login-result` block is therefore a **function**, and this test calls it four
-     * times: on the genuine answer, and on three it must refuse — an expired challenge, another
-     * account's stored key, and an answer from a different flow that parses as something else.
-     * As straight-line code in a region it could only ever be run once, on the answer it was
-     * always going to accept; re-running it meant copying it, which pins nothing.
+     * The guide's `login-result` block is therefore a **function**, and this test drives it eight
+     * times: twice on an answer it must accept, and six times on one it must refuse — an expired
+     * challenge, another account's stored key, an answer from a different flow that parses as
+     * something else, a result code that is not `RESULT_OK`, no intent at all, and a genuine answer
+     * replayed against a challenge it did not answer. As straight-line code in a region it could
+     * only ever be run once, on the answer it was always going to accept; re-running it meant
+     * copying it, which pins nothing.
+     *
+     * **Refusals 4 and 5 exist to reach the two clauses nothing here had ever refused at**, and
+     * they are not equally attributable. Both pass the *genuine* answer's arguments, identical to
+     * the accepting call at the top of this test, and change exactly one of them. Refusal 4 is
+     * therefore the result-code clause and nothing else: the other three are satisfied by that
+     * accepting call's own `true`. Refusal 5 pins that a `null` intent is refused and nothing is
+     * thrown; *which* clause refuses it is said by the paired parse assertion and the comment
+     * beside it, not by the call — which is written there rather than left to be inferred.
+     *
+     * **The replay is a real one.** Refusal 6 is a second challenge this service really minted,
+     * really signed by the key the account table really holds, carrying the same request code: a
+     * well-formed answer from the right signer, whose only fault is which challenge it answers. It
+     * is asserted as a **pair** — accepted against its own challenge, refused against the earlier
+     * one — because only the pair separates "this answer is bad" from "this answer is not the
+     * answer to *this* challenge", and the second is the whole reason a nonce exists. Both nonces
+     * are asserted fresh, so that refusal is the signature and not the window.
      *
      * The other two flows' blocks are deliberately left as they are. A share or a query answer is
      * data a user consented to disclose; a login answer is a proof, and the refusal paths worth
@@ -502,7 +520,7 @@ class GuideExamplesTest {
      * What is new here is only that the *published handler*, as printed, refuses.
      */
     @Test
-    fun `login proves the holder of the stored key is present, and refuses three answers`() {
+    fun `login proves the holder of the stored key is present, and refuses six answers`() {
         val storedPublicKey = signUpOnTheFixtureVault()
 
         // region snippet:login-request
@@ -619,6 +637,73 @@ class GuideExamplesTest {
             "a share answer carrying a public key authenticates nobody, and nothing is thrown",
             loginSucceeded(Activity.RESULT_OK, wrongFlow, storedPublicKey, nonce),
         )
+
+        // Refusal 4: the block's first clause, which until now was never the one that refused —
+        // every call above passes `RESULT_OK`. The arguments are the genuine answer's, identical
+        // to the accepting call at the top of this test, so the other three clauses are satisfied
+        // by that call's own `true` and this refusal is the result-code clause alone.
+        assertFalse(
+            "a cancelled answer logs nobody in, however genuine the signature it carries",
+            loginSucceeded(Activity.RESULT_CANCELED, answer.data, storedPublicKey, nonce),
+        )
+
+        // Refusal 5: no intent at all, the shape `onActivityResult` is handed when a vault
+        // returns without one. What this pins is that the printed handler refuses it *and throws
+        // nothing* — a handler on a page has to survive the absent case, not merely reject it.
+        //
+        // The limit, stated rather than implied: driving the handler with `data = null` does not
+        // pin which clause refused. The assertion beside it is what says that, by measuring the
+        // step the comment names: the parse has already run and returned `null`, and the refusal
+        // lands at correlation, where `matchesRequestCode(null, …)` is `false` (`Utils.kt:2782`)
+        // and `&&` short-circuits before `result?.isVerified` is reached. If a later change made
+        // the parse throw instead, this call would redden for a reason its name does not name.
+        assertNull(
+            "the login parser reads a missing intent as nothing at all",
+            Utils.parseSignChallengeResult(null),
+        )
+        assertFalse(
+            "…and the handler refuses it rather than throwing",
+            loginSucceeded(Activity.RESULT_OK, null, storedPublicKey, nonce),
+        )
+
+        // Refusal 6, and the replay the nonce exists to stop — asserted *through* the handler
+        // rather than around it. The vault signs a second challenge this service really minted,
+        // under the same request code, so the answer is well formed, the signer is the right one
+        // and the signature is genuine: the only thing wrong is which challenge it answers.
+        val secondNonce = Utils.generateNonce()
+        val replayed = vault.answer(
+            Utils.createSignChallengeIntent(
+                context,
+                storedPublicKey,
+                secondNonce,
+                LOGIN_REQUEST,
+                nonceFormat = Utils.NONCE_FORMAT_TIMESTAMPED,
+            ),
+        )
+        assertEquals(
+            "precondition: the vault signed the second challenge too",
+            Activity.RESULT_OK,
+            replayed.resultCode,
+        )
+        assertTrue(
+            "control: the earlier challenge is still inside the block's own 60-second window",
+            Utils.isNonceFresh(nonce, maxAgeMillis = 60_000L),
+        )
+        assertTrue(
+            "control: and so is the one this answer signed — so the verdicts below are about " +
+                "which challenge was signed, not about the clock",
+            Utils.isNonceFresh(secondNonce, maxAgeMillis = 60_000L),
+        )
+        // The pair is the point: either verdict alone would be explained by the answer being
+        // good or bad in general, and only both together say "not the answer to *this* one".
+        assertTrue(
+            "the second answer logs the profile in against the challenge it actually answered",
+            loginSucceeded(replayed.resultCode, replayed.data, storedPublicKey, secondNonce),
+        )
+        assertFalse(
+            "…and that very same answer, replayed against the earlier challenge, logs nobody in",
+            loginSucceeded(replayed.resultCode, replayed.data, storedPublicKey, nonce),
+        )
     }
 
     // ── Surviving process death ───────────────────────────────────────────
@@ -649,12 +734,14 @@ class GuideExamplesTest {
      * now, and the *same* restored bytes judged an hour later verify and are refused anyway. That
      * pairing is what backs the section's sentence about an app resumed from recents.
      *
-     * The restored request code is deliberately **not** asserted, and the guide says so: the
-     * guide's own request codes are constants, so the `putString` line is there for an app that
-     * *mints* a correlation token per request, and no test here can make a claim about an app that
-     * does not exist. What that leaves unpinned is the line's own mechanics — a save under the
-     * wrong key would reach the guide unnoticed — which is recorded in T48's Progress entry as a
-     * planning candidate rather than widened into here.
+     * **The restored request code is pinned too, and narrowly.** The guide's own request codes are
+     * constants, so the `putString` line is there for an app that *mints* a correlation token per
+     * request — and no test here can make a claim about an app that does not exist. What a test
+     * here can pin, and now does, is the line's own mechanics: the value it saves, the key it saves
+     * it under, and that both come back out of the parcel. A save of the wrong value, or under the
+     * wrong key, no longer reaches the guide unnoticed — and no wider than that: the pin reads the
+     * value and the key, not where the value came from, so a line that ignored its own parameter
+     * for a constant of the same text would still pass.
      */
     @Test
     fun `a challenge that outlives the process still verifies, and a regenerated one never does`() {
@@ -713,6 +800,13 @@ class GuideExamplesTest {
             restored,
         )
         assertArrayEquals("…as the very same bytes, which is all that matters", nonce, restored)
+        assertEquals(
+            "and the save line's other half travelled too: the request code comes back out of " +
+                "the key that line names, which is the mechanics of the line and no claim about " +
+                "an app that mints a correlation token per request",
+            LOGIN_REQUEST,
+            revived!!.getString(STATE_REQUEST_CODE),
+        )
 
         val answer = vault.answer(request)
         val result = Utils.parseSignChallengeResult(answer.data)
