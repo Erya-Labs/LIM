@@ -827,7 +827,13 @@ class ChangelogTest {
     }
 
     /**
-     * The release section is grouped by flow, and each group is present.
+     * The entry that describes the whole surface is grouped by flow, and each group is present.
+     *
+     * That entry is [FULL_SURFACE_VERSION]'s. It had no earlier release to diff against, so it
+     * describes everything, and a flow missing from it is a part of the library nobody wrote down.
+     * Every later entry is an ordinary list of what changed, as the preamble says: 1.1.0 touches
+     * sign-up alone, and demanding a Query or Diagnostics heading of it would only breed empty ones.
+     * Until 1.1.0 this check read the declared version's section, which was the same entry.
      *
      * Presence only, in no particular order: this file pins *coverage*, not arrangement. Reordering
      * the sections reddens nothing, and an assertion that fought every future edit to the document
@@ -835,15 +841,16 @@ class ChangelogTest {
      */
     @Test
     fun `the release section is grouped by flow`() {
-        // Read out of the release section rather than out of the whole file: once a second
-        // version section exists, headings belonging to it must not satisfy this one's claim.
-        val groups = releaseSection().lines().filter { it.startsWith("### ") }
+        // Read out of that entry's section rather than out of the whole file: headings belonging
+        // to any other version must not satisfy this one's claim.
+        val groups = releaseSectionIn(changelogFile().readLines(), FULL_SURFACE_VERSION)
+            .lines().filter { it.startsWith("### ") }
         val absent = REQUIRED_GROUPS.filterNot { required ->
             groups.any { required in it }
         }
 
         assertEquals(
-            "the ${declaredVersion()} section must group the surface by flow; these groups have " +
+            "the $FULL_SURFACE_VERSION section must group the surface by flow; these groups have " +
                 "no `### ` heading. Found: $groups",
             emptyList<String>(),
             absent,
@@ -1235,8 +1242,14 @@ class ChangelogTest {
         )
 
         /**
-         * The flows the release section groups the surface by. Matched as substrings of a `### `
-         * heading, in no order; see `the release section is grouped by flow`.
+         * The release whose entry describes the whole surface rather than a change to it: the
+         * first one. See `the release section is grouped by flow`.
+         */
+        private const val FULL_SURFACE_VERSION = "1.0.0"
+
+        /**
+         * The flows the [FULL_SURFACE_VERSION] entry groups the surface by. Matched as substrings
+         * of a `### ` heading, in no order; see `the release section is grouped by flow`.
          */
         private val REQUIRED_GROUPS = listOf(
             "Share",
