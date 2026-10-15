@@ -173,13 +173,48 @@ class GuideExamplesTest {
      *
      * [RequiredFieldsVault] answers the first call. The user has typed a name and an email and
      * nothing for `phone`, so the vault stores the two and drops the third, and the handler
-     * creates the account from [FieldRequirements.committed] with the verdict `HONOURED`. The
-     * four controls run the **same** handler against the answers it has to survive: a vault
-     * built before required fields, which acknowledges nothing (`NOT_ACKNOWLEDGED`, and its blank
-     * `phone` dropped by `committed` rather than stored as `""`); the same vault where the user
-     * skipped a required field (`INCOMPLETE`, naming it); an answer that hand-writes the
-     * acknowledgement over that incomplete payload (`VIOLATED`); and a complete *query* answer,
-     * which this handler cannot read at all. Every assertion is outside the regions.
+     * creates the account from [FieldRequirements.committed] with the verdict `HONOURED`.
+     *
+     * **The printed handler is driven fourteen times in all, and every assertion is outside the
+     * regions.** Four more answers carry data it reads: a vault built before required fields,
+     * which acknowledges nothing (`NOT_ACKNOWLEDGED`, and its blank `phone` dropped by
+     * `committed` rather than stored as `""`); the same vault where the user skipped a required
+     * field (`INCOMPLETE`, naming it); an answer that hand-writes the acknowledgement over that
+     * incomplete payload (`VIOLATED`); and a complete *query* answer, which this handler cannot
+     * read at all.
+     *
+     * **Four are answers it refuses, and each names the clause that refused it** — until they
+     * were driven here, neither of the handler's two early returns had ever been the clause that
+     * returned. Grouped here by that clause rather than in the order the body drives them: `null`
+     * data and [RequiredFieldsVault]'s unreadable-request refusal stop at `parseShareResult`
+     * returning `null`. The refusal the guide promises an integrator — a user who will not fill a
+     * required field backs out, and it arrives as `RESULT_CANCELED` carrying the echoed request
+     * code and nothing else — *parses*, so the absent `publicKey` is the clause that stops it;
+     * and a **login** answer parses too. That last one is the sharper misuse: a
+     * login answer's fields travel under the share flow's key, so [Utils.checkFieldRequirements]
+     * reads it as a *complete* sign-up and the only thing between it and `createAccount` is the
+     * missing key. It stays a misuse rather than a hole in the protocol because the guide's own
+     * preamble checks the result code and the correlation first, and [Utils.matchesRequestCode]
+     * is asserted `false` about that answer here.
+     *
+     * **Three of the last five calls are controls, the fourth is a fifth input and the last is its
+     * control** — said that way round because a header reading "the last five are controls" would
+     * be the very thing this paragraph is here to stop. The `HONOURED` answer is re-driven *after*
+     * the four silent ones, so "recorded nothing" cannot be a broken recorder. Then each of the
+     * two answers that *parsed* is re-driven with a key put on it, which is what makes those two
+     * silences the absent key and not the result code — this handler never reads one: the refusal
+     * reaches `INCOMPLETE`, and the login answer reaches `createAccount` and records what a
+     * genuine sign-up records, so the sentence above is driven rather than inferred. The input is
+     * the one verdict arm no call had ever taken, `MISMATCHED` — the complete answer acknowledging
+     * a *different* optional set — and its control is the same answer acknowledging the declared
+     * one, which is `HONOURED` down the same arm and records the same line, so the pair measures
+     * the arm's identity rather than the branch the two share.
+     *
+     * **One path this handler cannot be shown, stated rather than implied.** The key-only profile
+     * the guide promises — every field optional, every one left blank, `HONOURED` over an empty
+     * field map — needs a different declaration, and the printed handler closes over the one
+     * declared below. `RequirementsCompatibilityMatrixTest:379-400` pins that path end to end
+     * instead.
      */
     @Test
     fun `a sign-up can leave named fields optional and reads what the vault did with them`() {
@@ -295,6 +330,142 @@ class GuideExamplesTest {
             ),
         )
         assertEquals(listOf("incomplete [name, email]"), signUpOutcomes)
+
+        // Everything above hands this handler something it can read. Neither of its two early
+        // returns has ever been the clause that refused, so the four answers below are the ones
+        // that make them fire — and each asserts *which* one fired rather than reasoning about it.
+        // The two are named by their expressions and never by a line number: this file's line
+        // numbers move whenever anything above them does, and a stale attribution in an assertion
+        // message is a lie told at exactly the moment somebody needs it to be true.
+
+        // `onActivityResult` with no data at all. Nothing recorded, nothing thrown, and the parse
+        // is asserted beside it so the clause that refused is measured rather than reasoned.
+        signUpOutcomes.clear()
+        onSignUpAnswer(null)
+        assertEquals("a null answer records no outcome at all", emptyList<String>(), signUpOutcomes)
+        assertNull(
+            "and `parseShareResult(data) ?: return` is the clause that refused it",
+            Utils.parseShareResult(null),
+        )
+
+        // The refusal the guide promises: the user will not fill a required field, backs out, and
+        // this is what reaches the client. `RequiredFieldsVault` sends the shape `FixtureVault`
+        // does — `RESULT_CANCELED`, the echoed request code, nothing else.
+        signUpOutcomes.clear()
+        val unwilling = RequiredFieldsVault(
+            vaultKeyPair,
+            linkedMapOf("email" to TypedField(PROFILE_EMAIL, FieldType.EMAIL)),
+        ).answer(request)
+        assertEquals(Activity.RESULT_CANCELED, unwilling.resultCode)
+        val refusal = unwilling.data
+        assertEquals(
+            "a refusal carries the echoed request code and nothing else",
+            setOf(Utils.EXTRA_SHARE_REQUEST_CODE),
+            refusal!!.extras!!.keySet(),
+        )
+        onSignUpAnswer(refusal)
+        assertEquals(emptyList<String>(), signUpOutcomes)
+        assertNotNull(
+            "the request code alone makes a refusal parse, so `parseShareResult(data) ?: return` " +
+                "passed over it",
+            Utils.parseShareResult(refusal),
+        )
+        assertNull(
+            "and the absent key is what refused it — `result.publicKey ?: return`, which nothing " +
+                "had reached before now",
+            Utils.parseShareResult(refusal)!!.publicKey,
+        )
+
+        // The same vault's other refusal: a request it could not read at all, answered with no
+        // intent. The null input again, arriving from a fixture rather than from a literal.
+        signUpOutcomes.clear()
+        val unreadable = RequiredFieldsVault(vaultKeyPair, PROFILE).answer(Intent())
+        assertEquals(Activity.RESULT_CANCELED, unreadable.resultCode)
+        assertNull("that refusal carries no intent", unreadable.data)
+        onSignUpAnswer(unreadable.data)
+        assertEquals(emptyList<String>(), signUpOutcomes)
+
+        // And a *login* answer, handed to the sign-up handler. A login answer's fields travel
+        // under the share flow's key, so it parses as a keyless share result and the verdict reads
+        // its payload as a complete sign-up: the only thing between it and `createAccount` is the
+        // key it does not carry. The guide's preamble checks the result code and the correlation
+        // first, and this answer echoes a *login* request code — so this is the misuse where
+        // neither was done, not a hole in the protocol.
+        signUpOutcomes.clear()
+        val storedKey = signUpOnTheFixtureVault()
+        val loginAnswer = vault.answer(
+            Utils.createSignChallengeIntent(context, storedKey, Utils.generateNonce(), LOGIN_REQUEST),
+        ).data
+        onSignUpAnswer(loginAnswer)
+        assertEquals(emptyList<String>(), signUpOutcomes)
+        assertNotNull("a login answer parses as a share result", Utils.parseShareResult(loginAnswer))
+        assertNull(
+            "without a key, which is the only thing that refuses it",
+            Utils.parseShareResult(loginAnswer)!!.publicKey,
+        )
+        assertEquals(
+            "the verdict reads a login answer's fields as a complete sign-up",
+            FieldRequirementsVerdict.NOT_ACKNOWLEDGED,
+            Utils.checkFieldRequirements(requirements, loginAnswer),
+        )
+        assertFalse(
+            "the correlation the guide checks first would have refused it, which is what makes " +
+                "this a misuse rather than a protocol hole",
+            Utils.matchesRequestCode(loginAnswer, SIGN_UP_REQUEST),
+        )
+
+        // Control: the first answer re-driven, *after* the four silent calls. Without it every
+        // "records nothing" above could be passing because the recorder stopped recording.
+        signUpOutcomes.clear()
+        onSignUpAnswer(delivered)
+        assertEquals(
+            "the recorder still records, so the four silences above are the handler's",
+            listOf("created [name, email]"),
+            signUpOutcomes,
+        )
+
+        // Control: the same refusal with a key put on it reaches the verdict. That is what says
+        // the silence above was the absent key and not the result code — which this handler,
+        // printed as the guide prints it, never reads.
+        signUpOutcomes.clear()
+        onSignUpAnswer(refusal.apply { putExtra(Utils.EXTRA_PUBLIC_KEY, FAKE_PUBLIC_KEY) })
+        assertEquals(listOf("incomplete [name, email]"), signUpOutcomes)
+
+        // Control: the login answer with a key put on it the same way, and this is the one worth
+        // looking at. It does not merely reach the verdict — it reaches `createAccount`, and
+        // records the same line a genuine sign-up records. That is the claim above, driven rather
+        // than inferred: the only thing between a login answer and a created account is the key it
+        // does not carry, so a handler that skipped the result code and the correlation would read
+        // an answer that authenticated nothing as a successful sign-up.
+        signUpOutcomes.clear()
+        onSignUpAnswer(loginAnswer!!.apply { putExtra(Utils.EXTRA_PUBLIC_KEY, FAKE_PUBLIC_KEY) })
+        assertEquals(listOf("created [name, email]"), signUpOutcomes)
+
+        // `MISMATCHED`: the older vault's complete answer, acknowledging an optional set that is
+        // not the one declared. No call had ever taken this arm, so the three-way grouping at the
+        // top of the `when` was assumed rather than measured.
+        signUpOutcomes.clear()
+        val acknowledgedWrong = older!!.apply {
+            putExtra(Utils.EXTRA_APPLIED_OPTIONAL_FIELDS, """["name"]""")
+        }
+        assertEquals(
+            FieldRequirementsVerdict.MISMATCHED,
+            Utils.checkFieldRequirements(requirements, acknowledgedWrong),
+        )
+        onSignUpAnswer(acknowledgedWrong)
+        assertEquals(listOf("created [name, email]"), signUpOutcomes)
+
+        // Control: the same answer acknowledging the set that *was* declared. Same arm, same
+        // recorded line, different verdict — so the call above measures the arm's identity rather
+        // than just the branch it shares with `HONOURED`.
+        signUpOutcomes.clear()
+        acknowledgedWrong.putExtra(Utils.EXTRA_APPLIED_OPTIONAL_FIELDS, """["phone"]""")
+        assertEquals(
+            FieldRequirementsVerdict.HONOURED,
+            Utils.checkFieldRequirements(requirements, acknowledgedWrong),
+        )
+        onSignUpAnswer(acknowledgedWrong)
+        assertEquals(listOf("created [name, email]"), signUpOutcomes)
     }
 
     // ── Query ────────────────────────────────────────────────────────────
