@@ -14,6 +14,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.io.File
+import java.lang.reflect.Modifier
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.Signature
@@ -578,9 +580,10 @@ class IntentDescriptionTest {
      *
      * One of the sentinels is a field **name**, not a value, which is the site a redaction review
      * is most likely to miss: `Entry.toString()` prints the keys of its field map by design, and a
-     * description that followed that precedent would leak here while still honouring the letter of
-     * "a field value never appears". A key is as likely to be something the vault invented about
-     * one user as it is to be `email`, so the count is all this line may say.
+     * description that followed that precedent would leak here while still reducing every field
+     * *value* to a count, which is the half of the rule a reviewer checks. A key is as likely to
+     * be something the vault invented about one user as it is to be `email`, so the count is all
+     * this line may say.
      */
     @Test
     fun `no sentinel field value or field name appears in a description`() {
@@ -642,6 +645,188 @@ class IntentDescriptionTest {
         // Non-vacuity, and the reason this test can tell the two apart at all: the fallback string
         // is what `redactedValue` renders, so a key that *did* fall through would equal it.
         assertEquals(fallback, redactedValue(value))
+    }
+
+    /**
+     * The claim above, measured from the other side — and the one the KDoc actually makes to a
+     * third party.
+     *
+     * The test above asks only that no described key reaches the *generic fallback*. A future
+     * extra handed a `describedText` arm instead of a count passes it while the KDoc's "Exactly
+     * four values are printed close to verbatim" sentence goes quietly false, and `docs/` quotes
+     * that sentence as the authority for what a client may safely log. That is not hypothetical:
+     * [Utils.describeIntent]'s list of extras grew by two keys in the 1.1.0 release.
+     *
+     * So this walks **every published extra**, reflectively — `public static final String` on
+     * [Utils] whose name starts with `EXTRA_`, which is `ProtocolSymmetryTest`'s enumeration and
+     * what a Kotlin `const val` in an `object` compiles to — rather than a hand list, so a key a
+     * future release declares is in scope the day it is declared. Each one is probed **alone** on
+     * an otherwise-empty intent with [CANARY], and the set that prints it whole must be exactly
+     * the names the KDoc's own sentence links, plus [Utils.EXTRA_PUBLIC_KEY].
+     *
+     * **Why the public key is the `+ 1` and not an oversight.** It is printed rather than hidden,
+     * previewed through [previewedPublicKey] — see `a real public key appears only previewed` —
+     * so a sender's bytes reach the line through it too, which is why the corrected KDoc names it
+     * alongside the four tokens. [CANARY] is derived from [PUBLIC_KEY_PREVIEW_CHARS] and is
+     * shorter than it precisely so that this stays true: [previewedPublicKey] returns a short
+     * value whole, and a canary at or past the boundary would move the public key out of the
+     * measured set and make the `+ 1` look like a mistake.
+     *
+     * **A floor under a private cap, declared rather than hidden.** The *token* half of the
+     * measurement assumes `DESCRIBE_TEXT_CHARS` exceeds [CANARY]'s length, and that constant is
+     * private, documented as tunable without telling anyone, and deliberately not frozen by
+     * `an oversized text extra is truncated rather than logged whole`. Tuning it below [CANARY]
+     * would redden this test for a third reason, so the failure message names that reason too.
+     *
+     * **And the limit of `whole`, which is the one input that embarrasses this measurement.** A
+     * renderer that printed a *prefix* of a sender's value — `describedText(raw.take(16))` — or
+     * that upper-cased or percent-encoded it would keep the canary out of the measured set and
+     * pass, while sixteen characters of an email still reached the line. What is pinned here is
+     * the four-name list and the by-key arrangement behind it; this is not a leak detector, and
+     * nothing in this file claims to be one.
+     */
+    @Test
+    fun `exactly the extras the KDoc's own sentence names are printed whole`() {
+        // Preconditions for the `+ 1`, stated rather than assumed.
+        assertEquals(
+            "the canary must be derived from the published preview width, or the seed below is " +
+                "too short and this probe is measuring a string nobody chose",
+            PUBLIC_KEY_PREVIEW_CHARS / 2,
+            CANARY.length,
+        )
+        assertEquals(
+            "a canary this short must survive previewedPublicKey whole, or EXTRA_PUBLIC_KEY " +
+                "drops out of the measured set and the + 1 below becomes wrong for a reason " +
+                "nothing here would report",
+            CANARY,
+            previewedPublicKey(CANARY),
+        )
+
+        val published = publishedExtras()
+        assertEquals(
+            "the hand-mirrored DESCRIBED_EXTRA_KEYS must be the same list as the reflective " +
+                "enumeration, or the reader above walks a surface this test does not",
+            published.values.toSortedSet(),
+            DESCRIBED_EXTRA_KEYS.toSortedSet(),
+        )
+
+        val printedWhole = published
+            .filterValues { key -> CANARY in Utils.describeIntent(Intent().putExtra(key, CANARY)) }
+            .keys
+
+        // Non-vacuity: both sides of the partition are populated, so the equality below is never
+        // between two empty sets.
+        assertTrue(
+            "no extra printed the canary at all — the probe is not reaching describeIntent",
+            printedWhole.isNotEmpty(),
+        )
+        assertTrue(
+            "every extra printed the canary, so nothing here is redacted and the equality below " +
+                "would hold against a function that had stopped redacting entirely",
+            printedWhole.size < published.size,
+        )
+
+        val named = verbatimSentence(utilsSource(), UTILS_RELATIVE).linkedNames
+        assertEquals(
+            "the keys that print a sender's bytes whole must be exactly the ones " +
+                "describeIntent's KDoc names, plus EXTRA_PUBLIC_KEY. A key on the left and not " +
+                "the right is documented and does not do it; a key on the right and not the " +
+                "left prints personal data a third party was told it would not — fix the arm in " +
+                "describedValue, or the sentence in $UTILS_RELATIVE, whichever is wrong. If " +
+                "*every* protocol token left at once and only EXTRA_PUBLIC_KEY remains, neither " +
+                "is wrong: DESCRIBE_TEXT_CHARS was tuned below ${CANARY.length} and this " +
+                "canary is now too long to survive describedText",
+            (named + "EXTRA_PUBLIC_KEY").toSortedSet(),
+            printedWhole.toSortedSet(),
+        )
+    }
+
+    /**
+     * The same sentence's count word, which is the defect class in the one sentence that
+     * enumerates what it counts: "Exactly **four**" stays written while the list beside it grows.
+     *
+     * Separate from the test above on purpose. A failed `assertEquals` aborts its method, so a
+     * fifth link added to the sentence must redden two methods for both findings to be seen —
+     * one saying the measurement disagrees with the names, one saying the word disagrees with
+     * the count.
+     */
+    @Test
+    fun `the verbatim sentence's count word matches the number of extras it names`() {
+        val sentence = verbatimSentence(utilsSource(), UTILS_RELATIVE)
+
+        val after = sentence.text.substringAfter(COUNT_PREFIX, missingDelimiterValue = "")
+        check(after.isNotEmpty()) {
+            "$UTILS_RELATIVE: the \"$VERBATIM_ANCHOR\" paragraph no longer contains " +
+                "\"$COUNT_PREFIX\", so the count word this test checks cannot be located. " +
+                "Re-anchor it here rather than dropping the check: ${sentence.text}"
+        }
+        val word = after.takeWhile { !it.isWhitespace() }
+        val counted = COUNT_WORDS[word]
+        check(counted != null) {
+            "$UTILS_RELATIVE: \"$COUNT_PREFIX$word\" uses a number word this test does not " +
+                "know. Extend COUNT_WORDS (it covers ${COUNT_WORDS.keys}) rather than removing " +
+                "the check — an unrecognised word must never pass quietly."
+        }
+
+        assertEquals(
+            "the KDoc says \"$COUNT_PREFIX$word\" but links ${sentence.linkedNames.size} " +
+                "extras (${sentence.linkedNames}). A stale number in the sentence a third party " +
+                "is pointed at is the whole defect this test exists for",
+            counted,
+            sentence.linkedNames.size,
+        )
+    }
+
+    /**
+     * (a) The locator fails loudly, which is the difference between this measuring something and
+     * comparing two empty sets.
+     *
+     * Both halves of what it must find are withheld in turn — a KDoc with no such paragraph, and
+     * the paragraph with no `[EXTRA_*]` link in it — and each failure must name the file it read
+     * and the anchor it looked for, because the reader of that message is someone who has just
+     * reworded a KDoc and has no reason to know this test exists.
+     */
+    @Test
+    fun `control - the sentence locator names the file and its anchor when it finds neither`() {
+        val noParagraph = """
+            /**
+             * Describes an intent, and says nothing about how it prints what it was given.
+             *
+             * [EXTRA_NONCE] is linked here, outside any paragraph this test would accept.
+             */
+            fun describeIntent(intent: Intent?): String = ""
+        """.trimIndent()
+        val noLinks = """
+            /**
+             * Describes an intent.
+             *
+             * Exactly four values are printed close to verbatim, and this paragraph declines to
+             * say which, which is the other way the measurement could end up empty.
+             */
+            fun describeIntent(intent: Intent?): String = ""
+        """.trimIndent()
+
+        listOf(noParagraph to "a KDoc with no such paragraph", noLinks to "a paragraph with no links")
+            .forEach { (fixture, what) ->
+                val failure = runCatching { verbatimSentence(fixture, "Fixture.kt") }.exceptionOrNull()
+                checkNotNull(failure) { "$what must not be accepted silently" }
+                val message = failure.message.orEmpty()
+                assertTrue(
+                    "$what must fail naming the file it read; got: $message",
+                    "Fixture.kt" in message,
+                )
+                assertTrue(
+                    "$what must fail naming the anchor it looked for; got: $message",
+                    VERBATIM_ANCHOR in message,
+                )
+            }
+
+        // …and the same locator must succeed over the real source, or the two assertions above
+        // are satisfied by a function that rejects everything.
+        assertTrue(
+            "the locator must find the real sentence too",
+            verbatimSentence(utilsSource(), UTILS_RELATIVE).linkedNames.isNotEmpty(),
+        )
     }
 
     /**
@@ -1053,6 +1238,149 @@ class IntentDescriptionTest {
             if (Utils.parseQueryResult(intent) != null) add("queryResult")
             if (Utils.parseSignChallengeResult(intent) != null) add("signChallengeResult")
         }
+
+        // ── Reading the KDoc's own sentence ──────────────────────────────
+
+        /** Where `Utils.kt` sits, module-relative. Named in every locator failure below. */
+        private const val UTILS_RELATIVE = "src/main/java/dev/eryalabs/lim/Utils.kt"
+
+        /** The declaration whose KDoc the sentence must live in. */
+        private const val DESCRIBE_DECLARATION = "fun describeIntent("
+
+        /** The phrase that identifies the sentence. Reworded in `Utils.kt` ⇒ reworded here. */
+        private const val VERBATIM_ANCHOR = "printed close to verbatim"
+
+        /** What the count word follows in that sentence. */
+        private const val COUNT_PREFIX = "Exactly "
+
+        /** The number words that sentence may use. Extend it; never delete the check. */
+        private val COUNT_WORDS = mapOf(
+            "two" to 2, "three" to 3, "four" to 4, "five" to 5,
+            "six" to 6, "seven" to 7, "eight" to 8,
+        )
+
+        private val EXTRA_LINK = Regex("""\[(EXTRA_[A-Z0-9_]+)]""")
+
+        /**
+         * A short, distinctive value to file under one key at a time and look for on the line.
+         *
+         * **Its length is derived, not written**, and that is load-bearing:
+         * [previewedPublicKey] returns a value no longer than [PUBLIC_KEY_PREVIEW_CHARS] whole,
+         * so a canary at or past that boundary would be truncated and `EXTRA_PUBLIC_KEY` would
+         * leave the measured set silently. Half the published width keeps it comfortably inside
+         * while staying long enough to be unmistakable in a log line.
+         */
+        val CANARY = "LIM-CANARY-5b2e-DO-NOT-REDACT-ME-PADDING".take(PUBLIC_KEY_PREVIEW_CHARS / 2)
+
+        /** The sentence, and the extras it links, as the measurement compares against. */
+        data class VerbatimSentence(val text: String, val linkedNames: List<String>)
+
+        /**
+         * Every extra the protocol publishes, by constant name and wire value, read off [Utils]
+         * rather than listed — `ProtocolSymmetryTest`'s enumeration, for its reason: a hand list
+         * is written with the keys someone already had in mind, so the key nobody thought about
+         * is exactly the one it omits.
+         */
+        fun publishedExtras(): Map<String, String> = Utils::class.java.declaredFields
+            .filter { field ->
+                field.name.startsWith("EXTRA_") &&
+                    field.type == String::class.java &&
+                    Modifier.isPublic(field.modifiers) &&
+                    Modifier.isStatic(field.modifiers) &&
+                    Modifier.isFinal(field.modifiers) &&
+                    !field.isSynthetic
+            }
+            .sortedBy { it.name }
+            .associate { field -> field.name to field.get(null) as String }
+
+        /**
+         * `Utils.kt` as text, located by walking up from the working directory.
+         *
+         * `RedactionVisibilityTest:96`'s locator, for its reason: the working directory of a
+         * Gradle unit test is the module directory, but that is a Gradle default rather than a
+         * promise, so every ancestor is tried both as the module root and as the repository
+         * root. A scanner that silently found nothing would pass for ever.
+         */
+        fun utilsSource(): String {
+            val workingDirectory = File(".").absoluteFile.normalize()
+            val tried = mutableListOf<File>()
+            var directory: File? = workingDirectory
+            while (directory != null) {
+                for (candidate in listOf(
+                    File(directory, UTILS_RELATIVE),
+                    File(directory, "LIM/$UTILS_RELATIVE"),
+                )) {
+                    tried += candidate
+                    if (candidate.isFile) return candidate.readText()
+                }
+                directory = directory.parentFile
+            }
+            throw AssertionError(
+                "cannot find $UTILS_RELATIVE — this test pins a source-level fact and must not " +
+                    "be silently skipped. Working directory: $workingDirectory. Tried:\n" +
+                    tried.map { it.absolutePath }.distinct().joinToString("\n"),
+            )
+        }
+
+        /**
+         * The one paragraph of [DESCRIBE_DECLARATION]'s KDoc that names what is printed as the
+         * sender wrote it, with the extras it links.
+         *
+         * Every way of finding nothing throws, naming [fileLabel] and [VERBATIM_ANCHOR]: a
+         * locator that quietly returned an empty result would make its callers compare two empty
+         * sets and pass for ever, which is the fail-green this repository has refused since T36.
+         */
+        fun verbatimSentence(source: String, fileLabel: String): VerbatimSentence {
+            val declaredAt = source.indexOf(DESCRIBE_DECLARATION)
+            val closedAt = if (declaredAt < 0) -1 else source.lastIndexOf("*/", declaredAt)
+            val openedAt = if (closedAt < 0) -1 else source.lastIndexOf("/**", closedAt)
+            if (openedAt < 0) {
+                throw AssertionError(
+                    "$fileLabel: no KDoc block before `$DESCRIBE_DECLARATION`, so the " +
+                        "\"$VERBATIM_ANCHOR\" paragraph cannot be located at all",
+                )
+            }
+
+            val paragraphs = kdocParagraphs(source.substring(openedAt + "/**".length, closedAt))
+            val matching = paragraphs.filter { VERBATIM_ANCHOR in it }
+            if (matching.size != 1) {
+                throw AssertionError(
+                    "$fileLabel: expected exactly one paragraph of `$DESCRIBE_DECLARATION`'s " +
+                        "KDoc containing \"$VERBATIM_ANCHOR\", found ${matching.size}. That " +
+                        "paragraph is what tells a client which keys print a sender's bytes " +
+                        "whole; if it was reworded, re-anchor this test rather than deleting it",
+                )
+            }
+
+            val text = matching.single()
+            val linkedNames = EXTRA_LINK.findAll(text).map { it.groupValues[1] }.toList()
+            if (linkedNames.isEmpty()) {
+                throw AssertionError(
+                    "$fileLabel: the \"$VERBATIM_ANCHOR\" paragraph links no [EXTRA_*] " +
+                        "constant, so there is nothing to measure against: $text",
+                )
+            }
+            if (linkedNames.distinct() != linkedNames) {
+                throw AssertionError(
+                    "$fileLabel: the \"$VERBATIM_ANCHOR\" paragraph links $linkedNames, naming " +
+                        "one twice — the count word beside it would then disagree with the set " +
+                        "for a reason that is a typo rather than a drift",
+                )
+            }
+            return VerbatimSentence(text, linkedNames)
+        }
+
+        /** A KDoc block's paragraphs: asterisks stripped, lines joined, blank lines splitting. */
+        private fun kdocParagraphs(block: String): List<String> =
+            block.lines()
+                .map { it.trim().removePrefix("*").trim() }
+                .fold(mutableListOf(mutableListOf<String>())) { paragraphs, line ->
+                    if (line.isEmpty()) paragraphs += mutableListOf<String>()
+                    else paragraphs.last() += line
+                    paragraphs
+                }
+                .filter { it.isNotEmpty() }
+                .map { it.joinToString(" ") }
 
         private lateinit var keyPair: KeyPair
 

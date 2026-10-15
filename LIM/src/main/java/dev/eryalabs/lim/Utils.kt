@@ -3011,11 +3011,25 @@ object Utils {
      * those parsers pin in both directions, and delegating is the same call
      * [verifyRotationStatement] makes about [verifySignature].
      *
-     * **Redaction is [toString]'s policy, not a new one.** A field value never appears: an entry
-     * payload renders as `decoded, 3 fields` or `undecodable` and never its contents or its field
-     * names, a field payload as a count, a nonce and a signature as byte lengths, and a public key
-     * through [previewedPublicKey] rather than a second truncation rule. Anything that would split
-     * a line is replaced with `.`, so one call is one line even when the sender chose otherwise.
+     * **Redaction is [toString]'s policy, not a new one, and it is chosen by *key*.** Every key
+     * this protocol defines to carry personal data is reduced: an entry payload renders as
+     * `decoded, 3 fields` or `undecodable` and never its contents or its field names, a field
+     * payload as a count, a nonce and a signature as byte lengths, and a public key through
+     * [previewedPublicKey] rather than a second truncation rule. Anything that would split a line
+     * is replaced with `.`, so one call is one line even when the sender chose otherwise.
+     *
+     * **Choosing by key is also the boundary, and the boundary is narrow but not empty.** Of the
+     * extras, the four protocol tokens named below and the public key are where a *sender's* own
+     * bytes reach the line, as are the action and the package beside them. A peer that files a
+     * profile value, a fields payload or an `Entry.id` under one of those keys therefore puts it
+     * on the reader's log line, and nothing here catches it: this function trusts the key rather
+     * than sniffing every value's shape, so a value that arrived in the wrong place is a
+     * misdirected sender's bug rather than a leak by this line. What is owed in return is a bound
+     * on how much such a mistake can print, and every one of those positions carries one — the
+     * key is previewed at [PUBLIC_KEY_PREVIEW_CHARS], and the tokens, the action and the package
+     * are capped at `DESCRIBE_TEXT_CHARS`, a private width kept small for exactly this reason
+     * rather than a cosmetic one. Within the bound a value still prints as it was sent, which is
+     * the honest shape of the promise: bounded, not absent.
      *
      * Exactly four values are printed close to verbatim, truncated but not reduced:
      * [EXTRA_NONCE_FORMAT], [EXTRA_ALGORITHM], [EXTRA_PROTOCOL_VERSION] and
