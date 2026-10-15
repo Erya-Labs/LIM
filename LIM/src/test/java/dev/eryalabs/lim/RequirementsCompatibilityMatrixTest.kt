@@ -6,6 +6,7 @@ import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -410,6 +411,71 @@ class RequirementsCompatibilityMatrixTest {
             assertEquals(REFUSAL, answer.data.extras!!.keySet())
             assertEquals(FieldRequirementsVerdict.INCOMPLETE, c1Verdict(answer))
         }
+    }
+
+    /**
+     * **The declaration has to reach the answer, and a client that loses it blames an honest
+     * vault.** The third cause of `VIOLATED` is the client's own: a declaration that is not the one
+     * that was sent. One V2 answer here — the page's optional-`phone` sign-up, fields
+     * `{name, email}` with the acknowledgement `["phone"]`, which an honest vault really sends —
+     * read against three declarations, and then a fourth.
+     *
+     *  - **The one that was sent** — `HONOURED`.
+     *  - **The same names with the optional set lost**, which is what an activity recreated after
+     *    process death holds if it saved only the field names: `phone` is required again, so the
+     *    honest answer reads as `VIOLATED` and the guide's printed handler takes its `else` arm and
+     *    reports the vault. Nothing about the answer changed.
+     *  - **Rebuilt from the entry the request was built from** — the same construction, asserted
+     *    equal to the one that was sent by [FieldRequirements]'s own equality rather than assumed
+     *    equal, and `HONOURED` again.
+     *
+     * [FieldRequirements.committed] is asserted beside each verdict, which applies the partition
+     * `FieldRequirementsVerdictTest` pins (`:276-300`) to a *drift* in the declaration rather than
+     * to a payload, and is what makes the blame measurable: the client's own gate and the verdict
+     * it would blame the vault on agree, and both are wrong about the vault. Those three
+     * assertions detect nothing on their own — deleting them leaves the test green — and are here
+     * for what they say.
+     *
+     * A fourth reading is the drift that fails the *other* way, which the guide now warns of: a
+     * declaration restored with no field names at all requires nothing, so there is no verdict to
+     * catch it and `committed` hands back an empty profile rather than `null`.
+     */
+    @Test
+    fun `a declaration that is not the one that was sent blames an honest vault`() {
+        val answer = V2().answer(c1Request(), diligent)
+        assertCell("drift", answer, setOf("name", "email"), mapOf("name" to NAME, "email" to EMAIL), WITH_ACK)
+        assertEquals("""["phone"]""", answer.data.getStringExtra("extra_applied_optional_fields"))
+        val fields = Utils.parseShareResult(answer.data)!!.fields
+
+        // The declaration that was sent. Without this the VIOLATED below could be a property of
+        // the answer rather than of the declaration read against it.
+        assertEquals(FieldRequirementsVerdict.HONOURED, Utils.checkFieldRequirements(c1Requirements, answer.data))
+        assertNotNull(c1Requirements.committed(fields))
+
+        // The optional set lost: every field required again, and the answer is suddenly a defect.
+        val drifted = FieldRequirements(entry.fields.keys)
+        assertEquals(FieldRequirementsVerdict.VIOLATED, Utils.checkFieldRequirements(drifted, answer.data))
+        assertNull("the client's own gate agrees with the verdict, and both blame the vault", drifted.committed(fields))
+        assertEquals(listOf("phone"), drifted.missingRequired(fields))
+
+        // Rebuilt from the same source the request was built from.
+        val rebuilt = FieldRequirements(entry.fields.keys, setOf("phone"))
+        assertEquals(c1Requirements, rebuilt)
+        assertEquals(FieldRequirementsVerdict.HONOURED, Utils.checkFieldRequirements(rebuilt, answer.data))
+        assertNotNull(rebuilt.committed(fields))
+
+        // The verdict turns on an acknowledgement being present, so this measures drift against an
+        // acknowledging vault and not merely a short payload: the same drifted declaration over the
+        // 1.0.0-API vault's answer, which acknowledges nothing, is INCOMPLETE rather than VIOLATED.
+        val withoutAck = V0().answer(c1Request(), diligent)
+        assertEquals(FieldRequirementsVerdict.INCOMPLETE, Utils.checkFieldRequirements(drifted, withoutAck.data))
+
+        // Drift the other way and nothing refuses it: a declaration restored with no names
+        // requires nothing, so the verdict is MISMATCHED — which the guide's handler routes to
+        // createAccount — and `committed` is an empty profile rather than null.
+        val nameless = FieldRequirements(emptyList())
+        assertEquals(FieldRequirementsVerdict.MISMATCHED, Utils.checkFieldRequirements(nameless, answer.data))
+        assertEquals(emptyMap<String, TypedField>(), nameless.committed(fields))
     }
 
     /** Cell 8: a vault that writes the acknowledgement by hand over data that does not support it. */

@@ -293,9 +293,11 @@ create the account from.
   `FieldRequirements.missingRequired` names what is missing.
 - `VIOLATED` — an acknowledgement over a missing required field. This library's builder never
   writes one, so the vault is writing it by hand or is broken — unless you required a field you
-  never sent. A field whose `TypedField` is null in your `Entry`, as Java code or a template Gson
-  built can leave one, is not encoded, so build your requirements from the keys whose value is
-  not null.
+  never sent, or read the answer against a declaration that is not the one you sent. A field whose
+  `TypedField` is null in your `Entry`, as Java code or a template Gson built can leave one, is not
+  encoded, so build your requirements from the keys whose value is not null; and a declaration that
+  reaches the answer without its optional set requires every field again, so an optional field the
+  user left blank reads as an honest vault broken — see *Surviving process death*.
 
 Keep an `else` branch, as the handler above does: a later release may add a verdict.
 
@@ -513,6 +515,23 @@ This fails intermittently or not at all on a developer's desk, so do not wait fo
 Turn on *Don't keep activities* in Developer options, or rotate the device while the vault's dialog
 is up, and run your login once. Either one recreates the activity, and it is the cheapest honest
 test of this page you can run.
+
+A sign-up has its own thing to keep, and it is not bytes: the challenge is not the only thing that
+has to outlive the process, because a sign-up's answer is read against the `FieldRequirements` you
+sent. Rebuild it from the same source the request was built from — the entry, and the optional names
+your form chose — and if that source can change between the request and the answer, save the
+optional names with the rest of the in-flight state. Lose the optional set and every field is
+required again, so the honest answer to the optional-`phone` sign-up in *Required and optional
+fields* — `name` and `email` filled in, the blank `phone` dropped, the acknowledgement saying so —
+reads as `VIOLATED` and the handler reports a vault that did exactly what you asked.
+`FieldRequirements.committed` returns `null` on that same answer, so your own gate agrees with the
+verdict and both are wrong about the vault. Restore an emptier declaration and it fails the other
+way with no verdict to catch it: one that names no fields requires nothing, so that same answer
+reads as `MISMATCHED` and `committed` hands back an *empty* profile rather than `null` — an account
+created with nothing in it.
+`RequirementsCompatibilityMatrixTest > a declaration that is not the one that was sent blames an
+honest vault` reads one honest answer against the declaration that was sent, the same names with
+the optional set lost, the declaration rebuilt, and the nameless one.
 
 ---
 

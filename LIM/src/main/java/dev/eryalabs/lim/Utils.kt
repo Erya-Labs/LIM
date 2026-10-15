@@ -2197,6 +2197,12 @@ object Utils {
      *
      * @param requirements What you declared when you sent the sign-up — the same object whose
      *                     [FieldRequirements.optionalFields] you passed to [createShareIntent].
+     *                     A different one is read as if it were that object, so a declaration lost
+     *                     and rebuilt wrong misreads an honest answer: with the optional set gone
+     *                     every field is required again, and an optional field the user left blank
+     *                     is then missing — [FieldRequirementsVerdict.VIOLATED], with
+     *                     [FieldRequirements.committed] `null` over the same fields. Keep it, or
+     *                     rebuild it from the source the request was built from.
      * @param result       The result intent from `onActivityResult`, or `null`, which reads as an
      *                     answer carrying no fields and no acknowledgement. Read, never retained.
      */
