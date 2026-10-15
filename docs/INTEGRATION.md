@@ -24,7 +24,7 @@ LIM is published on Maven Central:
 
 ```gradle
 dependencies {
-    implementation("dev.eryalabs.lim:lim:1.0.0")
+    implementation("dev.eryalabs.lim:lim:1.1.0")
 }
 ```
 
@@ -216,8 +216,7 @@ it goes wrong.
 
 ### Required and optional fields
 
-**This needs the release after 1.0.0** — the version Setup prints does not have it — and a vault
-built on that release to honour it.
+**This needs 1.1.0** — the version Setup prints — and a vault built on 1.1.0 or later to honour it.
 
 A vault that implements required fields treats **every field you declare as required**: the user
 cannot save the sign-up while one of them is blank, and if they will not fill it in they back out,
@@ -604,7 +603,7 @@ here would accept the intent as anything at all.
 - `ClientIntegrationExampleTest` — sign-up, query, login and refusal as one runnable sequence,
   against one profile, with a fixture vault answering. Read this if you are writing a vault: it
   runs both halves of the wire.
-- `RequirementsCompatibilityMatrixTest` — an app on 1.0.0 or on the release after it, against a
+- `RequirementsCompatibilityMatrixTest` — an app on 1.0.0 or on 1.1.0, against a
   vault from before required fields, the interim one that required everything, and one that
   implements them: what the user is asked for, what comes back, and the verdict, in every pairing.
 - `GuideExamplesTest` — the source of every block on this page.

@@ -468,7 +468,7 @@ object Utils {
      * [checkFieldRequirements], and gate on [FieldRequirements.committed]. A vault that predates
      * this ignores the extra: it may let the user skip any field, required ones included, or —
      * like the interim Endeavor build — make them fill in every field, optional ones included.
-     * The verdict is how you find out. This needs a vault built on the release after 1.0.0.
+     * The verdict is how you find out. This needs a vault built on 1.1.0 or later.
      *
      * **Five arguments and no defaults, deliberately.** No call with fewer arguments can resolve
      * here, so every call written against 1.0.0 still means what it meant:
