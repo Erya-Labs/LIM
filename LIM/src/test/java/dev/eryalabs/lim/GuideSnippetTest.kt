@@ -46,8 +46,14 @@ import java.io.File
  * writing. Whether the guide reads well is a human judgement (VISION), and an assertion pretending
  * otherwise would be worse than none.
  *
- * Regex over two files, so it runs in milliseconds: no Robolectric, no reflection beyond resolving
- * the excuses' citations.
+ * Regex over text, so it runs in milliseconds: no Robolectric, no reflection beyond resolving the
+ * excuses' citations. The text is five things, not two — the guide, every Kotlin test source,
+ * `README.md`, `LIM/build.gradle.kts` and `settings.gradle.kts`, every one of them reached through
+ * [locate]. "Two files" here was false from this class's first commit, which landed the coordinate
+ * pin, the build-from-source pin and the README link test beside the snippet rules and beside that
+ * sentence — not falsified later by something added since. The *pairwise* sense of "two files" —
+ * one guide block against one region — is the one that was always true, so the two places that use
+ * it, the next section's heading and [Audit]'s own KDoc, are left exactly as they were.
  */
 class GuideSnippetTest {
 
@@ -539,7 +545,7 @@ class GuideSnippetTest {
 
     @Test
     fun `the README links a guide that exists`() {
-        val readme = locate("README.md")
+        val readme = locate(README_PATH)
         val links = Regex("""]\((docs/[^)]+)\)""").findAll(readme.readText())
             .map { it.groupValues[1] }
             .toList()
@@ -552,6 +558,258 @@ class GuideSnippetTest {
             "a README link into docs/ must resolve to a file that exists",
             emptyList<String>(),
             links.filterNot { File(readme.parentFile, it).isFile }.sorted(),
+        )
+    }
+
+    /**
+     * The README names the artifact and **not** its version, and both halves are asserted.
+     *
+     * A third party finds this file on its own and nothing else, so it has to answer "can I use
+     * this from my project" before they click anything. The name is read out of the build file's
+     * own `coordinates(...)` call through the same [COORDINATES] regex that
+     * `the guide prints the coordinate the build file declares` uses — one definition of what the
+     * library is called, not two that have to agree.
+     *
+     * **The one place that tells an integrator which version to depend on is the guide's Setup
+     * section.** It is pinned there against the build file, so a human bumping it reddens that
+     * document by design. `CHANGELOG.md` names versions too, but as the record of what each one
+     * changed, and its heading is itself held to `coordinates(...)` by `ChangelogTest`. A copy on
+     * the front page would be neither of those: one more line every release has to move by hand,
+     * on the page nobody re-reads. So the README's *absence* of a version is asserted rather than
+     * hoped for.
+     *
+     * **"One place" is scoped to that instruction, not to the character sequence.** The guide
+     * states a feature's minimum version in prose as well — `docs/INTEGRATION.md`'s optional-fields
+     * section says which release first honoured them, and its closing section glosses a test name
+     * the same way. Both subordinate themselves to Setup rather than competing with it, and
+     * neither is pinned here; a count of version literals in the repository is not what this
+     * asserts and would be wrong the next time somebody wrote one.
+     *
+     * The absence is asserted twice over, because the two ways it can be false are different. The
+     * *shape* `group:artifact:version` is what an integrator would copy, and the bare declared
+     * *value* is what a sentence like "current version: x" would leak without ever forming a
+     * triple; neither alone covers the other.
+     *
+     * An absence is also the shape of assertion that passes for ever once its matcher stops
+     * matching anything, so each matcher must report somewhere: the triple in the guide, which
+     * genuinely prints one, and the bare version in the build file it was read out of. One
+     * matcher, two answers — the negative controls' rule applied to a rule stated negatively.
+     *
+     * **Neither half pins which version it found, and the choice of file is what makes that
+     * true.** The *value* is `the guide prints the coordinate the build file declares`'s business.
+     * Asking the guide for the declared version — rather than for any triple — was measured to
+     * couple this test to the release: bumping `coordinates(...)` alone turned it red, which
+     * would tell a human editing the README that the front page needs touching on release. That
+     * is the one thing this whole arrangement exists to stop, so a release reddens the guide's
+     * coordinate test and this test stays green.
+     *
+     * Two limits of that arrangement, stated rather than implied away. **The bare matcher knows
+     * only today's declared version**, so a README line naming a version that was *already* stale
+     * when it was written — "requires LIM 1.0.0 or later", or a truncated "LIM 1.1" — is invisible
+     * to both halves. Matching any `x.y.z` instead would fire on the Gson coordinate the guide
+     * legitimately prints, so this is the trade rather than an oversight; what is closed is the
+     * literal a release moves. And **the bare half's non-vacuity probe cannot fail as the matcher
+     * is built today** — `version` is read out of the build file and `Regex.escape` makes a
+     * literal of it — so it is a guard against a future bound or transformation that matches
+     * nothing, not a measurement of the current code. The triple half, pointed at a different
+     * file, is the one that is genuinely falsifiable: deleting the guide's coordinate reddens it.
+     */
+    @Test
+    fun `the README names the artifact and leaves its version to the guide`() {
+        val buildFile = locate(MODULE_BUILD_FILE)
+        val declared = COORDINATES.findAll(buildFile.readText()).toList()
+        assertEquals(
+            "expected exactly one `coordinates(group, artifact, version)` call in " +
+                "${buildFile.absolutePath}; the artifact the README must name is read out of it",
+            1,
+            declared.size,
+        )
+        val (group, artifact, version) = declared.single().destructured
+        val readme = locate(README_PATH).readText()
+        assertTrue(
+            "`$README_PATH` must name `$group:$artifact` — the coordinate " +
+                "`$MODULE_BUILD_FILE` declares. A visitor who finds this repository on their own " +
+                "reads that file and nothing else, and it cannot tell them whether this library " +
+                "is usable from their project without saying what to depend on",
+            "$group:$artifact" in readme,
+        )
+
+        val triple = Regex(Regex.escape("$group:$artifact:") + """([0-9A-Za-z.\-+]+)""")
+        assertEquals(
+            "the one place that tells an integrator which version to depend on is the Setup " +
+                "section of `$GUIDE_PATH`, where it is held to `coordinates(...)`. A copy in " +
+                "`$README_PATH` is one more line every release has to move by hand, on the page " +
+                "nobody re-reads, so this file names `$group:$artifact` without a version and " +
+                "sends the reader to the guide for it. Drop the version here, not this assertion",
+            emptySet<String>(),
+            triple.findAll(readme).map { it.value }.toSet(),
+        )
+
+        // The triple is the shape an integrator would copy; the bare value is the same leak
+        // without one — "Latest release v1.1.0", "the current release is 1.1.0." or a badge
+        // rendering `version-1.1.0-blue` all pass the assertion above and still make the README a
+        // file every release has to touch.
+        //
+        // **Deliberately unbounded.** Every word-boundary this was tried with let one of those
+        // three through: excluding a letter on the left loses `v1.1.0`, excluding a separator on
+        // the right loses the badge, and allowing one loses the sentence-final period — and the
+        // bound that would tell `1.1.0` inside `1.1.0-rc1` from `1.1.0` inside `version-1.1.0-blue`
+        // does not exist, because locally the two are the same text. A substring search needs no
+        // such judgement: this page is meant to carry no version at all, so a longer version
+        // literal that contains the declared one is a leak worth reporting rather than a false
+        // positive, and the remedy is always the same — take the version off the front page.
+        val bare = Regex(Regex.escape(version))
+        assertEquals(
+            "…and `$README_PATH` must not print the declared version `$version` anywhere at all, " +
+                "in any shape, for the same reason and with the same remedy: the guide's Setup " +
+                "section is where it is held to `coordinates(...)`, and nothing holds a loose " +
+                "mention here. If this version's digits genuinely belong on the front page for " +
+                "some unrelated reason, reword the sentence — this page has no version in it by " +
+                "design. Found at",
+            emptyList<String>(),
+            bare.findAll(readme).map { "offset ${it.range.first}: ${it.value}" }.toList(),
+        )
+
+        // Neither absence means anything unless its matcher can find something: a regex that
+        // matches nothing passes an emptiness assertion for ever.
+        //
+        // They are proven against different files, and the difference is the whole point. The
+        // triple matcher goes to the guide, which genuinely prints one — and is asked only
+        // *whether*, never which, so a version bump reddens the guide's own coordinate test and
+        // not this one. The bare matcher goes to `LIM/build.gradle.kts`, the file its literal was
+        // read out of: what can go wrong with it is construction — a bad escape, a lookaround
+        // that matches nothing — and the string it was built from is the one place guaranteed to
+        // contain it. Pointing it at the guide instead was measured to couple this test to the
+        // release: bumping `coordinates(...)` alone turned it red, which is exactly the signal
+        // the arrangement above exists not to send.
+        val inTheGuide = triple.findAll(guideFile().readText()).map { it.value }.toSet()
+        assertEquals(
+            "…and both absences above are vacuous unless their matchers find something. The " +
+                "triple must be found in `$GUIDE_PATH`, which genuinely prints one; the bare " +
+                "version must be found in `$MODULE_BUILD_FILE`, the file it was read out of. If " +
+                "this is the half that failed, the assertions above were passing for the wrong " +
+                "reason until it did. Matchers that found nothing",
+            emptyList<String>(),
+            listOfNotNull(
+                "the `$group:$artifact:<version>` triple, in `$GUIDE_PATH`"
+                    .takeIf { inTheGuide.isEmpty() },
+                "the bare version `$version`, in `$MODULE_BUILD_FILE`"
+                    .takeIf { !bare.containsMatchIn(buildFile.readText()) },
+            ),
+        )
+        println(
+            "GuideSnippetTest: $README_PATH names $group:$artifact, with neither the triple nor " +
+                "the bare version; $GUIDE_PATH prints $inTheGuide against a declared $version",
+        )
+    }
+
+    /**
+     * The SDK floor, which both documents print and until now neither was held to.
+     *
+     * It is the first question an integrator asks and the cheapest claim to leave stale: a document
+     * promising `minSdk 24` after the floor rose sends somebody to a library that will not merge
+     * into their manifest, and one promising a floor *lower* than the build declares is worse,
+     * because the failure arrives at their users rather than at their build. So the number is read
+     * out of the module's own `defaultConfig` and both documents must print that and nothing else.
+     *
+     * **[MIN_SDK] reads every spelling this repository can plausibly carry, with one pattern.** A
+     * pattern that matched only `minSdk 24` was blind to `minSdk = 23` — and the guide already
+     * carries ` ```gradle ` blocks headed with a consumer's own build file, where the assignment
+     * is the natural thing to write, so the *lower-floor* case above could have landed in one and
+     * stayed green. The quoted-attribute form is in for the same measured reason: the guide
+     * publishes a ` ```xml ` manifest element, which is where `android:minSdkVersion="23"` would
+     * go. One pattern over both documents and the build file means the set compared is the set
+     * found, whichever way somebody wrote it.
+     *
+     * **The limit, stated rather than implied away:** it matches on the identifier, so a floor
+     * written without it — "API level 24", "Android 7.0" — is invisible, as is one separated from
+     * its number by anything other than whitespace, `=`, `:` or a quote — a bolded or
+     * code-spanned name with the number left outside it is the easy one to write by accident.
+     * What is closed is the four spellings [MIN_SDK] names.
+     *
+     * That hole is narrower than it looks, and in the safe direction: the comparison is set
+     * equality, so a document whose *only* mention is in an unreadable spelling reports an empty
+     * set and reddens. A stale floor can hide here only by sitting beside a correct, readable
+     * one — which is the shape to look for if this test is ever green on a document that reads
+     * wrong.
+     */
+    @Test
+    fun `both documents print the minimum SDK the build file declares`() {
+        val buildFile = locate(MODULE_BUILD_FILE)
+        val declared = MIN_SDK.findAll(buildFile.readText()).map { it.groupValues[1] }.toList()
+        assertEquals(
+            "expected exactly one `minSdk` declaration in ${buildFile.absolutePath}; the number " +
+                "both documents must print is read out of it. Found: $declared",
+            1,
+            declared.size,
+        )
+        val floor = declared.single()
+        for (document in listOf(README_PATH, GUIDE_PATH)) {
+            assertEquals(
+                "`$document` must print `minSdk $floor`, and no other value of it — in prose, in " +
+                    "a Kotlin DSL assignment, after a colon, or as a quoted manifest attribute: " +
+                    "`$MODULE_BUILD_FILE` declares `minSdk = $floor`. If the floor moved, that " +
+                    "document is now advertising a minimum this library is not built for — " +
+                    "update the document, not this assertion",
+                setOf(floor),
+                MIN_SDK.findAll(locate(document).readText()).map { it.groupValues[1] }.toSet(),
+            )
+        }
+        println("GuideSnippetTest: minSdk $floor printed by $README_PATH and $GUIDE_PATH")
+    }
+
+    /**
+     * The README carries no fenced code at all, because nothing here could execute any of it.
+     *
+     * Every ` ```kotlin ` block in the guide is a region of a `@Test` method, quoted verbatim —
+     * that is this whole class. The marker rule binds the guide alone, so a sample on the front
+     * page would be the first Kotlin this project publishes that no test ran, and the first free
+     * to rot. Prose naming the coordinate is enough for a front page; code belongs in the guide,
+     * behind a region.
+     *
+     * **The rule is "no fence", not "no `kotlin` fence", and the width is the point.** Pinning the
+     * one language word leaves a page that publishes Kotlin in three green ways: a ` ```kt ` fence
+     * (GitHub highlights it as Kotlin; the language word is not `kotlin`), an unlabelled ` ``` `
+     * fence, and — measured, not inferred — a fence [FENCE_OPEN] cannot see at all, since it
+     * anchors at column 0 and takes a bare word. A README with a Kotlin block indented under a
+     * list item and a second fenced `~~~` was green against a `kotlin`-only scan. The guide
+     * survives a narrow rule because rules 6 and 7 cover the rest of its fences; the README is
+     * under neither, so the honest front-page rule is the simple one. Whether this page should
+     * ever carry a fence — a ` ```gradle ` dependency line, say — is a presentation judgement and
+     * therefore human: this assertion is where a human records that decision.
+     *
+     * [unreadableFences] is reused rather than restated so the shapes [FENCE_OPEN] is blind to are
+     * refused here by the same scan `the guide uses no fence this test cannot see` runs.
+     *
+     * **The limit, stated rather than implied away:** both scans look at fences, so two shapes
+     * are outside them — a four-space-indented block with no fence at all, and an HTML
+     * `<pre><code>` element, which GitHub also renders as code. The first hole is inherited from
+     * rule 7, and closing it means taking on Markdown's indentation rules, which is the trade
+     * rule 7 already declined; the second is not a fence in any sense and is named here only so
+     * that "no fenced code" is read as what it says.
+     */
+    @Test
+    fun `the README carries no fenced code, which nothing here executes`() {
+        val lines = locate(README_PATH).readLines()
+        assertEquals(
+            "an indented fence, a `~~~` fence or a fence with an info string beyond the language " +
+                "word is invisible to the fence scan below, so code inside one would be published " +
+                "on the front page with nothing pinning it and nothing complaining. Fence at " +
+                "column 0 with backticks and a bare language word, in `$README_PATH` as in " +
+                "`$GUIDE_PATH`",
+            emptyList<String>(),
+            unreadableFences(lines),
+        )
+        assertEquals(
+            "every ` ```$SNIPPET_LANGUAGE ` block in `$GUIDE_PATH` is lifted out of a test that " +
+                "runs, and `$README_PATH` is under no such rule — code here would be the only " +
+                "code this project publishes with no test behind it, in any language and under " +
+                "any label. Move it into the guide and give it a region, or decide by hand that " +
+                "this page may carry a fence and say so here. Fences found at",
+            emptyList<String>(),
+            lines.withIndex()
+                .filter { (_, line) -> FENCE_OPEN.matches(line) }
+                .map { (index, line) -> "$README_PATH:${index + 1}: $line" },
         )
     }
 
@@ -1195,6 +1453,7 @@ class GuideSnippetTest {
 
     private companion object {
         private const val GUIDE_PATH = "docs/INTEGRATION.md"
+        private const val README_PATH = "README.md"
         private const val TEST_SOURCE_ROOT = "src/test/java"
         private const val MODULE_BUILD_FILE = "LIM/build.gradle.kts"
         private const val SETTINGS_FILE = "settings.gradle.kts"
@@ -1282,6 +1541,17 @@ class GuideSnippetTest {
         private val COORDINATES =
             Regex("""coordinates\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\)""")
         private val INCLUDE = Regex("""include\("\s*:([A-Za-z_][\w\-]*)"\)""")
+
+        /**
+         * The SDK floor as the repository's documents and build file spell it: `minSdk = 24` in
+         * Kotlin DSL, `minSdk 24` in prose, `minSdk: 24`, and `android:minSdkVersion="24"` in a
+         * manifest — the guide publishes a manifest element, so the quoted-attribute form is one
+         * a stale floor could really hide in. One pattern for the declaration and the mentions,
+         * so the comparison cannot be blind to a form on one side that it reads on the other.
+         * See `both documents print the minimum SDK the build file declares` for what it does not
+         * reach.
+         */
+        private val MIN_SDK = Regex("""minSdk(?:Version)?\s*[=:]?\s*"?(\d+)""")
 
         /** Pinned by name so the guide cannot ship half-written. */
         private val REQUIRED_SECTIONS = listOf(
