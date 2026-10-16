@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.BadParcelableException
 import android.util.Base64
 import androidx.test.core.app.ApplicationProvider
+import com.google.gson.annotations.SerializedName
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -14,6 +15,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.lang.reflect.Modifier
 
 /**
  * The request parsers are the vault's half of the wire format, and these tests close the
@@ -230,6 +232,239 @@ class RequestParsingTest {
         ).forEach { (payload, why) ->
             assertNull(why, Utils.parseShareRequest(requestIntent(Utils.EXTRA_ENTRY_JSON to payload)))
         }
+    }
+
+    // ── Minification: the five keys the consumer rules name, lost one at a time ──
+
+    /**
+     * `docs/INTEGRATION.md`'s *Minification* section tells an integrator to know the failure by
+     * sight — "sign-up opens no consent dialog at all" — and that is true of two of the five keys
+     * the keep rules name. The other three fail *silently*: the request arrives, degraded, and
+     * neither app says so. This census is which is which.
+     *
+     * **Why one key at a time is the useful question.** That same section tells every
+     * vendored-AAR consumer — "the only install path this guide can offer today" — to copy the
+     * rules into their own ProGuard file **by hand**. A hand copy is partial sometimes, and a
+     * partial copy is exactly the per-key case. The asymmetry comes from [Utils.decodeEntry]
+     * (`Utils.kt:3441-3449`) delegating to two `repaired()` extensions: the [Entry] one returns
+     * `null` when identity is missing (`Utils.kt:3459-3460`) but turns an absent `fields` map into
+     * `emptyMap()` (`:3462`), and the [TypedField] one repairs a missing value to `""` and a
+     * missing type to [FieldType.STRING] (`:3484-3485`).
+     *
+     * **The decoder's half of every cell is already pinned, and this test cites it rather than
+     * buying it twice.** `EntryCodecTest` asserts that an absent `fields` member decodes non-null
+     * with an empty map (`:72-79`), an explicitly null one likewise (`:221-226`), an `id`-only or
+     * `publicKey`-only payload decodes `null` (`:92-94`, `:97-99`), `{}` decodes `null` (`:87-89`),
+     * and a field missing its `value` or its `type` is repaired (`:200-211`). On the parser side the
+     * loud pair is covered by `a rejected entry payload yields no share request`, just above, with
+     * `{}` among its refusals, and the `fields`-absent cell by `FieldRequirementsParsingTest:288`
+     * and `:304-308`, which read `fieldNames` off `{"id":"x","publicKey":"k"}` and so can only pass
+     * if it became a `ShareRequest`.
+     * **Those three cells are here for the census's shape, not as new coverage.** What is new is
+     * the two silent member-loss cells — `value` and `type`, driven by `DecoderFuzzTest` but
+     * asserted there only as no-throw plus the entry invariants — and the grouping.
+     *
+     * **What the grouping is worth, stated narrowly, because two other files already own most of
+     * it.** A sixth serialised key added to [Entry] or [TypedField] and *not* given a keep rule
+     * reddens `ConsumerRulesTest`'s rule 3 (`:331-354`, asserted at `:515-524`), which builds its
+     * uncovered set by reflection over these same two classes (`:1245`); one added without an annotation
+     * reddens `WireKeyAnnotationTest:85-91`. So the only case this census is the sole **wire-key**
+     * detector of is a key that is **both** annotated **and** keep-ruled but has no cell here — a
+     * real increment, and that narrow one. (A sixth key that is also a *public* property would
+     * additionally move `ApiBaselineTest` and `PublicApiAuditTest`'s member manifest, but neither
+     * of those is about wire keys; the case that escapes everything else is a non-public
+     * serialised field.) Note also that the key set below is derived from the
+     * declared fields of two hard-coded classes, not from the rules file: it is
+     * `ConsumerRulesTest` rule 3 that ties the two together, and a third `-keep class` block added
+     * to `consumer-rules.pro` later would be invisible here.
+     *
+     * **Why this file and not `ConsumerRulesTest`**, which owns the document section: that class
+     * carries no `@RunWith` (`:121`, one of 13 of the 49 Kotlin test classes without one), and
+     * `Intent`, `Context` and `android.util.Base64` are unimplemented stubs without Robolectric
+     * (`LIM/build.gradle.kts:58-60`). This class carries `@RunWith(RobolectricTestRunner::class)`
+     * and owns the parser being measured, so the cells run here. The mutual citation is with the
+     * guide, not with `ConsumerRulesTest`: this KDoc names the *Minification* section and
+     * `docs/INTEGRATION.md` names this census, while the reference to `ConsumerRulesTest` is
+     * one-way, since T64 requires that file to pass unmodified.
+     * In-file citations are by test name rather than by line throughout the paragraphs above: a
+     * line number into the file the citation itself lives in goes stale on the commit that writes
+     * it, which the first draft of this KDoc demonstrated twice.
+     *
+     * **Three limits, all three measured rather than reasoned.** (1) R8 never runs in this
+     * repository — `isMinifyEnabled = false` is correct for a library, and the guide says so at its
+     * *Minification* section — so the single-letter keys below are a *model* of its output, matching
+     * the guide's own `"a"`, `"b"`, `"c"`. What is measured is the **absence** of each key, which is
+     * the mechanism; nothing here is a claim about what R8 actually names anything.
+     * (2) This is a property of the renamed *member*, not of the annotation. Deleting
+     * `@SerializedName("fields")` from [Entry] was probed and reverted: `WireKeyAnnotationTest`
+     * reddened twice and the annotation census at the foot of this test reddened once, while all
+     * six cells below printed **byte-identically** — the annotation's value is spelled the same as
+     * the property it sits on, so it is load-bearing only once R8 has renamed the field underneath
+     * it, which is precisely why the keep rules exist.
+     * (3) The guide sentence this test backs is **not pinned by anything**, and deleting it was
+     * probed too: the whole suite stayed green, because `GuideSnippetTest` deliberately pins the
+     * fenced blocks and not the prose. The measurement lives here; the sentence there is a
+     * citation, and keeping the two in step is a human's job.
+     */
+    @Test
+    fun `each wire key the keep rules name is lost loudly or silently, and the census says which`() {
+        val allFive = "all five"
+        val canonical = Utils.createShareIntent(context, entry)
+        val payload = canonical.getStringExtra(Utils.EXTRA_ENTRY_JSON)!!
+
+        // Rename quoted JSON keys in the builder's own payload, asserting the edit landed: a
+        // rename that matched nothing would make every `null` below this test's own doing rather
+        // than the decoder's. Every occurrence goes, because R8 renames the field, not a use of it.
+        fun rename(vararg swaps: Pair<String, String>): String =
+            swaps.fold(payload) { text, (from, to) ->
+                val token = """"$from":"""
+                val replacement = """"$to":"""
+                val hits = text.windowed(token.length).count { it == token }
+                assertTrue("`$token` must occur in the builder's payload to be renamed", hits > 0)
+                val renamed = text.replace(token, replacement)
+                assertFalse("`$token` must be gone after the rename", renamed.contains(token))
+                assertEquals(
+                    "every `$token` must have become `$replacement`",
+                    hits,
+                    renamed.windowed(replacement.length).count { it == replacement },
+                )
+                renamed
+            }
+
+        // The published vault-side parser, not just the decoder: every other extra is still
+        // exactly what the builder wrote, so only the payload differs between cells.
+        fun parse(json: String): ShareRequest? = Utils.parseShareRequest(
+            Intent(canonical).apply { putExtra(Utils.EXTRA_ENTRY_JSON, json) },
+        )
+
+        // Control, asserted before any absence claim: the un-renamed payload through this exact
+        // path is the entry that was sent. Without it the instrument could be dead.
+        assertEquals(
+            "the un-renamed payload must round-trip, or this census measures nothing",
+            entry,
+            parse(payload)?.entry,
+        )
+
+        val cells = linkedMapOf(
+            "id" to parse(rename("id" to "a")),
+            "fields" to parse(rename("fields" to "b")),
+            "publicKey" to parse(rename("publicKey" to "c")),
+            "value" to parse(rename("value" to "d")),
+            "type" to parse(rename("type" to "e")),
+            // The guide's literal sentence: all five gone at once.
+            allFive to parse(
+                rename("id" to "a", "fields" to "b", "publicKey" to "c", "value" to "d", "type" to "e"),
+            ),
+        )
+
+        // Values are rendered as lengths, the way `SignChallengeRequest.toString()` renders a
+        // nonce: blankness is the whole finding and a length shows it without printing a field.
+        println(
+            "Wire-key census — one key renamed, through createShareIntent → parseShareRequest:\n" +
+                cells.entries.joinToString("\n") { (key, request) ->
+                    val outcome = if (request == null) {
+                        "DROPPED  — no request arrives, so no consent dialog opens"
+                    } else {
+                        "ARRIVES  — " + if (request.entry.fields.isEmpty()) {
+                            "no fields at all"
+                        } else {
+                            request.entry.fields.entries.joinToString(", ") { (name, field) ->
+                                "$name=<${field.value.length} chars, ${field.type}>"
+                            }
+                        }
+                    }
+                    "  ${key.padEnd(10)} $outcome"
+                },
+        )
+
+        // ── Loud: identity is unrepairable, so nothing reaches the vault's handler ──
+
+        assertNull("a renamed `id` must drop the request", cells.getValue("id"))
+        assertNull("a renamed `publicKey` must drop the request", cells.getValue("publicKey"))
+        assertNull(
+            "all five renamed — the sentence the guide actually prints — must drop the request",
+            cells.getValue(allFive),
+        )
+
+        // ── Silent: the request arrives, degraded, and neither app logs a reason ──
+
+        val noFields = cells.getValue("fields")
+        assertNotNull("a renamed `fields` must still arrive", noFields)
+        assertEquals(
+            "…carrying no fields at all, because an absent map is repaired to emptyMap()",
+            emptyMap<String, TypedField>(),
+            noFields!!.entry.fields,
+        )
+        assertEquals("with the identity intact", entry.id, noFields.entry.id)
+        assertEquals(entry.publicKey, noFields.entry.publicKey)
+
+        val blankValues = cells.getValue("value")
+        assertNotNull("a renamed `value` must still arrive", blankValues)
+        assertEquals(
+            "…with every field still declared",
+            entry.fields.keys,
+            blankValues!!.entry.fields.keys,
+        )
+        assertEquals("but blank", "", blankValues.entry.fields.getValue("name").value)
+        assertEquals("", blankValues.entry.fields.getValue("email").value)
+        assertEquals(
+            "the declared type survives, so only the data is gone",
+            FieldType.EMAIL,
+            blankValues.entry.fields.getValue("email").type,
+        )
+
+        val stringTypes = cells.getValue("type")
+        assertNotNull("a renamed `type` must still arrive", stringTypes)
+        assertEquals(entry.fields.keys, stringTypes!!.entry.fields.keys)
+        assertEquals(
+            "the values survive",
+            "ada@example.com",
+            stringTypes.entry.fields.getValue("email").value,
+        )
+        assertEquals(
+            "but an Email field is now read as a String — the quietest loss of the six",
+            FieldType.STRING,
+            stringTypes.entry.fields.getValue("email").type,
+        )
+
+        // ── Every serialised key of the payload classes has a cell above ──
+        //
+        // Taken from the two classes that declare them rather than from a literal here, so a sixth
+        // serialised field cannot ship with no cell. This is *not* the only guard on that — see the
+        // KDoc: a sixth key without a keep rule reddens `ConsumerRulesTest` rule 3 and one without
+        // an annotation reddens `WireKeyAnnotationTest`. What is only caught here is a key that has
+        // both and no cell. Nor is this derived from `consumer-rules.pro`: `ConsumerRulesTest` is
+        // what ties these fields to the rules file.
+        val wireKeys = listOf(Entry::class.java, TypedField::class.java)
+            .flatMap { type -> type.declaredFields.toList() }
+            .filterNot { Modifier.isStatic(it.modifiers) || it.isSynthetic }
+            .map { field ->
+                val named: SerializedName? = field.getAnnotation(SerializedName::class.java)
+                assertNotNull(
+                    "${field.declaringClass.simpleName}.${field.name} is serialised but names no " +
+                        "wire key, so this census cannot cover it",
+                    named,
+                )
+                named!!.value
+            }
+        assertEquals(
+            "every serialised member key of the payload classes must have a cell above",
+            wireKeys.toSet(),
+            cells.keys - allFive,
+        )
+        assertEquals("…each exactly once", wireKeys.size, wireKeys.toSet().size)
+
+        // The control that separates members from data, and the reason the keep rules name five
+        // fields and not the profile: a *field name* is payload, so R8 never touches it and
+        // renaming one costs nothing but the name.
+        val renamedField = parse(rename("name" to "a"))
+        assertNotNull("a renamed user field must not drop the request", renamedField)
+        assertEquals(
+            "field names are payload: the request survives and the field is simply called `a`",
+            setOf("a", "email"),
+            renamedField!!.entry.fields.keys,
+        )
+        assertEquals("Ada", renamedField.entry.fields.getValue("a").value)
     }
 
     /**

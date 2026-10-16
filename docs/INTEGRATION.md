@@ -119,6 +119,17 @@ Know the failure by sight, because neither app logs a reason for it: **sign-up o
 dialog at all.** The minified payload is keyed `"a"`, `"b"`, `"c"`; the vault reads `id` and
 `publicKey` as absent, `Utils.decodeEntry` answers `null`, and the request is dropped on arrival.
 
+That is the loud failure, and of the five field keys above it is the identity pair that causes it:
+`Utils.decodeEntry` refuses an entry with no `id` or no `publicKey`, so losing either one drops the
+request, as does losing all five. Lose any of the other three on its own and it **arrives,
+degraded**, just as quietly — without `fields` the vault sees a profile declaring no fields at all,
+without `value` every field arrives blank, and without `type` a field you declared `Email` is read
+as a `String`. So a *partial* copy of these rules is a hazard in its own right and not merely a
+safer version of a missing one; `RequestParsingTest`'s wire-key census is what measures which key
+fails which way. The block's other directives fail their own ways, each written down beside it in
+`consumer-rules.pro` — dropping `-keepattributes Signature`, for instance, is neither of the two
+above.
+
 Nothing here switches obfuscation off, and you should not add `-dontobfuscate` on this library's
 account. These rules name exactly what has to survive it and leave every other decision about your
 app to you.

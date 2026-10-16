@@ -1117,7 +1117,7 @@ class ResultBuilderTest {
      */
     @Test
     fun `an acknowledged answer can carry a field the declaration never had`() {
-        // The guide's sign-up declaration, `docs/INTEGRATION.md:232-241`: three names, `phone`
+        // The guide's sign-up declaration, `docs/INTEGRATION.md:243-252`: three names, `phone`
         // optional.
         val declared = FieldRequirements(listOf("name", "email", "phone"), setOf("phone"))
         val declaredKeys = setOf("name", "email", "phone")
@@ -1157,7 +1157,7 @@ class ResultBuilderTest {
         )
 
         // The mirror: one stray field the vault forgot to drop, and the same 1.1.0 vault reads as
-        // one that predates the release — the cause `docs/INTEGRATION.md:289-291` describes
+        // one that predates the release — the cause `docs/INTEGRATION.md:300-302` describes
         // without naming it.
         val strayBlank = overDisclosed + ("address" to TypedField("", FieldType.STRING))
 
