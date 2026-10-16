@@ -334,6 +334,14 @@ What to know before relying on it:
   never picked is dropped; no date format is promised. If every field is optional and the user
   leaves all of them blank, Endeavor creates a profile that is a key and nothing else: the answer
   carries the key, an empty field map and the acknowledgement, and the verdict is `HONOURED`.
+- **The limit of the bullet above.** Two halves, and only one of them is this library's. Blankness,
+  the drop and the verdict are `FieldRequirements` and `Utils.checkFieldRequirements`, asserted for
+  every type this library publishes — required fields in `FieldRequirementsTest`, optional ones in
+  `BlankAcrossTypesTest` — and end to end for the key-only profile
+  (`RequirementsCompatibilityMatrixTest`), so an unanswered date behaves exactly as an unanswered
+  name does, by construction rather than by coincidence. What a form shows, when "Not answered"
+  appears and when Save unblocks is Endeavor's own code in another repository, and no test here can
+  hold it to any of that.
 - **The verdict is not authentication.** The acknowledgement is an unsigned extra, exactly as
   trustworthy as the vault you addressed.
 - **The version number cannot tell you either.** `PROTOCOL_VERSION` stays 2. A vault echoes the
@@ -754,6 +762,15 @@ val verdict = Utils.checkFieldRequirements(requirements, answer)
 // field missing or a blank value left in.
 val applied = Utils.parseAppliedOptionalFields(answer)
 ```
+
+**The limit, and the enforceable core underneath it.** "The verdict a real vault produces" is a
+sentence about vaults in the field, and this library cannot enforce what one of them sends. What it
+does enforce is narrower, and it is what makes the recipe sound: **the verdict is a function of the
+answer's extras alone.** `checkFieldRequirements` reads `extra_fields_json` and
+`extra_applied_optional_fields` and nothing about who sent them — not the action, not the package,
+not the key, not the echoed code — so an answer from the builder above and a bare hand-built
+`Intent` carrying those two extras read the same verdict. `BlankAcrossTypesTest` asserts exactly
+that, which is the same limit *When the user says no* draws at the end of its own section.
 
 A login test is the one case that still needs real cryptography: a signature has to be made with a
 private key before `isVerified` can be true of it. `ClientIntegrationExampleTest` is the file to
