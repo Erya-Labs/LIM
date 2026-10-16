@@ -413,6 +413,8 @@ empty payload rather than as no payload at all. Treat `SignChallengeResult.field
 not ask for rather than as a profile update — and as unverified data besides, until `isVerified`
 has returned `true`. `GuideExamplesTest`'s *a login answer carries the whole stored profile beside
 the proof* reads that payload off the answer this section's own fixture vault returns.
+`NoNetworkLegTest` is where the network half of that first claim is measured, over this library's
+own compiled classes and this module's manifest.
 
 The order is the whole lesson: generate, keep, verify against what you already had.
 
