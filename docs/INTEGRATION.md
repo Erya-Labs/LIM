@@ -414,7 +414,11 @@ not ask for rather than as a profile update — and as unverified data besides, 
 has returned `true`. `GuideExamplesTest`'s *a login answer carries the whole stored profile beside
 the proof* reads that payload off the answer this section's own fixture vault returns.
 `NoNetworkLegTest` is where the network half of that first claim is measured, over this library's
-own compiled classes and this module's manifest.
+own compiled classes and this module's manifest. Its *no class compiled into the library holds or
+names a private key* measures this library's half of the other claim on the same classes — none of
+them names a private key, a keystore or `Signature.initSign`, and nothing on the published surface
+declares a `java.security` type but the `SecureRandom` you may hand `generateNonce`. That the
+vault's key never leaves its Keystore is the vault's property, not something measurable here.
 
 The order is the whole lesson: generate, keep, verify against what you already had.
 
