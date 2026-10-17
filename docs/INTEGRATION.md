@@ -856,3 +856,9 @@ sentence at the top of *When the user says no* describes today's shape rather th
   implements them: what the user is asked for, what comes back, and the verdict, in every pairing.
 - `GuideExamplesTest` — the source of every block on this page.
 - `IntentBuilderTest` — the wire format as literals. This is the contract between the two apps.
+- [VAULT.md](VAULT.md) — the other half of the wire, written for whoever is building the app that
+  answers you: how a request is read, how each flow is answered, and *What a vault must do* — the
+  obligations a correct vault owes the protocol, each one beside a test that would notice if a
+  fixture vault here stopped honouring it. Worth reading even if you will never write a vault,
+  because it says which of the guarantees above are a vault's to keep rather than this library's
+  to enforce.

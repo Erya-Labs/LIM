@@ -21,10 +21,11 @@ above each block names the region it came from, in `VaultGuideExamplesTest`, and
 fails if the two ever drift — or if the region is not inside a function JUnit executes. So nothing
 here is prose that compiled once.
 
-This page covers a vault's whole turn: reading a request, answering it, and refusing. The
-obligations a vault owes the protocol are not collected on it yet — with one exception, because the
-login block below cannot honestly be printed without it: a vault must refuse to sign a signed
-statement's pre-image.
+This page covers a vault's whole turn: reading a request, answering it, refusing — and then the
+things a vault has to *do*, which *What a vault must do* collects at the end. Every one of those
+obligations was published before this page existed — in the KDoc of the functions above, in
+`CHANGELOG.md`, or in the client's guide; what that section adds is having them in one place, each
+beside a test that would notice if a vault here stopped honouring it.
 
 ---
 
@@ -377,6 +378,98 @@ which is the disclosure the client's own guide warns integrators not to read int
 vault's policy. What the user is asked, what is stored, what is disclosed and when a refusal is the
 right answer are decisions this library has no part in and cannot check — the tests behind these
 blocks hold a fixture vault to them, and nothing here can hold a vault in the field to anything.
+
+---
+
+## What a vault must do
+
+Everything above is *shape*: which function to call, what comes back, what an answer looks like on
+the wire. This section is the other kind of statement — the things a correct vault has to do, none
+of which any function in this library can perform for you.
+
+None of them is new here. Each one is already published in the KDoc of the function it belongs to,
+or in `CHANGELOG.md`, or in the client's guide; what was missing was a single place to read them,
+so a vault author had to find nine sentences across four source files to learn the first one below.
+
+**Each bullet names a `@Test`, and that is what stops this list becoming decoration.**
+`GuideSnippetTest` resolves every citation here by reflection: a bullet citing a test that does not
+exist reddens, and a bullet citing nothing at all reddens. So an obligation cannot outlive its
+evidence, and one cannot be added without somebody pointing at a test that would notice.
+
+- **Call `Utils.isStatementPreImage` on every nonce before signing it, and refuse a match.** A
+  nonce is caller-chosen bytes, and the pre-image of a signed statement — a key rotation, a
+  recovery authorization, a revocation — is exactly such bytes. Sign one and you have answered a
+  "prove your identity" dialog with a valid rotation of the user's key. The signing device is the
+  only place this check can be made: afterwards no verifier can tell the two signatures apart,
+  because the same key signed the same bytes. **Nothing in this library refuses such a nonce on
+  your behalf.** `parseSignChallengeRequest` hands the bytes over deliberately — they are
+  legitimate input to *look* at — and whether that parser should itself refuse them is a narrowing
+  of the protocol drafted for a human and still open, so do not read this bullet as saying LIM
+  enforces it. Pinned by `VaultGuideExamplesTest > a login answer is a signature the client
+  verifies against the key it already holds`, and over a second fixture by
+  `ClientIntegrationExampleTest > the vault refuses to sign a statement pre-image handed to it as
+  a challenge`.
+- **Treat every incoming intent as hostile, and answer a `null` parse with nothing at all.** Any
+  installed app can fire an intent at an exported activity, and nothing on the way in has been
+  authenticated by anybody. The parsers fail closed rather than throwing, so a `null` is not an
+  error to report: there is no user to show it to and no request to consent to. Show nothing,
+  answer nothing. That the parsers refuse rather than throw is pinned by
+  `VaultGuideExamplesTest > a share and a query are told apart by their payload, and neither parses
+  as both`; that a vault *answers* such an intent with a refusal carrying no payload at all — not
+  an error, not even a correlation token, because the token is read off a parse that did not
+  happen — is pinned by `VaultGuideExamplesTest > a refusal for a key this vault does not hold is
+  the refusal for a consent the user withheld`.
+- **A parsed request is not an entitlement.** A non-null return says somebody asked about a key —
+  no more. What is disclosed, and whether to sign at all, is the user's consent decision made in
+  your own UI, and consent in this protocol is **per disclosure**: one field of three is a complete
+  answer, and an empty disclosure is a legitimate one. Pinned by
+  `VaultGuideExamplesTest > a query answer discloses only what was released, under the query flow's
+  own field key`.
+- **Answer with the key the vault holds, never the key the request named.** A query's `publicKey`
+  is the key the *caller* chose to ask about, and a sign-up's is a placeholder; the key an answer
+  carries must be the one this vault minted and stored, because that key *is* the account from
+  there on. This is why the request-taking builders take the key explicitly instead of echoing the
+  request's — a builder that echoed it would let the calling app decide what its own answer says
+  about it. Pinned by `VaultGuideExamplesTest > a share answer carries the key the vault minted and
+  the token the request came with`.
+- **Every field is required unless the client marked it optional, and an unreadable declaration is
+  not a licence.** Absent, blank, malformed, wrong-typed and unreadable all mean *every field is
+  required* — the same answer a client built before the declaration existed gets. The quiet
+  direction of that mistake is a vault saving an empty profile and then answering a client that
+  asked for a full one, which is a false claim on the wire rather than a lenient one. Pinned by
+  `VaultGuideExamplesTest > an absent or unreadable optional-fields declaration leaves every field
+  required`.
+- **Echo the correlation token on every answer and on every refusal, and never treat it as
+  authentication.** It is the one extra that has to survive a refusal: without it the client holds
+  an answer it cannot attribute to a request, and the accident that follows is not a crash — it is
+  a handler acting on a disclosure meant for something else. It travels in an extra any app can
+  write, so a match says "this is the result I was waiting for" and never "this result is genuine".
+  Pinned by `VaultGuideExamplesTest > a refusal is a result code and the echoed token, and a
+  builder would say more than that`.
+- **A refusal must not say which of its reasons it is.** "The user declined" and "this vault holds
+  no such profile" are one answer, deliberately: a vault that distinguished them would be telling
+  every caller that a profile exists for every key it is *not* told that about, which turns a
+  refusal into a disclosure about the key. So both go out as `RESULT_CANCELED` with the echoed
+  token and nothing else — no reason, no status, no version echo. Pinned by
+  `VaultGuideExamplesTest > a refusal for a key this vault does not hold is the refusal for a
+  consent the user withheld`.
+- **The private half of a profile's keypair never leaves the vault.** It is not part of any answer,
+  it is not a field, and it is not something this library will ever ask you for: LIM holds no
+  private key, sees none and signs nothing. `createSignChallengeResultIntent` writes what you say
+  you signed, and the client's own verification is what decides whether that is true. Pinned by
+  `NoNetworkLegTest > no class compiled into the library holds or names a private key` — **and
+  that citation is the one limit worth reading twice.** It holds *this library* to its half of the
+  sentence, by reading the compiled bytecode. Your Keystore discipline is yours, and nothing here
+  measures it.
+
+**The limit of this whole section, which is the same limit the page has drawn twice already.**
+Every citation above but one holds a **fixture** vault — one written in this repository, in a test
+method — to the obligation beside it. The obligations are the protocol's; the enforcement is yours.
+A vault in the field is another application in another repository, and no assertion here can reach
+it. (The exception is the last bullet, whose citation reads this library's own compiled bytecode
+and involves no vault at all; that bullet says so where it stands.) What the citations do buy is
+that this page cannot state an obligation nothing in this repository has ever executed, and that
+the list cannot keep claiming one after the test demonstrating it was renamed away.
 
 ---
 

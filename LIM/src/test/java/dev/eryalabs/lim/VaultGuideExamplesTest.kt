@@ -53,10 +53,17 @@ import java.security.Signature
  * the answer — or the refusal — the client reads back. **What makes the answering half evidence
  * rather than three builder calls is the read-back**: every test holding one of those regions
  * parses the intent it built with the function the client half really calls, so a page block that
- * built the wrong thing cannot stay green. The obligations a vault owes the protocol are a later
- * instalment and are not collected here — **with one exception, stated so that this sentence does
- * not read as a licence**: the login region refuses a statement pre-image before it signs, because
- * a published block a vault author copies cannot omit that and stay honest. See the login test.
+ * built the wrong thing cannot stay green.
+ *
+ * **And the page's *What a vault must do* section cites into this file**, which is the one thing to
+ * know before renaming a test here. That section states eight obligations and names a `@Test` for
+ * each; most of those citations are methods of this class, and `GuideSnippetTest` resolves every
+ * one of them by reflection, so a rename that leaves the page behind reddens there rather than
+ * being discovered by a reader. Seven of the eight are demonstrated by tests that already existed
+ * for other reasons — the obligations were published in KDoc long before the page collected them.
+ * The eighth needed writing, and is the last test in this file: a refusal for a key the vault does
+ * not hold has to be the refusal for a withheld consent, which nothing here had ever asked a
+ * fixture vault to prove.
  *
  * **The limit, and it is the whole of what the answering half can claim.** Every test here holds a
  * *fixture* vault — this file — to the shape of an answer. The shape is all this library can speak
@@ -726,6 +733,150 @@ class VaultGuideExamplesTest {
             Utils.parseQueryResult(throughABuilder)!!.vaultProtocolVersion,
         )
     }
+
+    /**
+     * The obligation the *What a vault must do* section states and no test in this repository held:
+     * **a refusal does not say which of its two reasons it is.**
+     *
+     * "The user declined" and "this vault holds no such profile" have to be one answer. A vault
+     * that distinguished them would answer every key it was *not* told "no such profile" about with
+     * the news that a profile for it exists, which turns a refusal into a disclosure about the key
+     * — and the key is the account identifier, so that is a disclosure about the account.
+     *
+     * **Why this needs a vault-shaped fixture rather than two hand-built intents.** Two refusals
+     * written side by side are equal because one author typed them that way; the obligation is
+     * about a *decision*, so the fixture below has to make it. `answerQuery` is the whole of a
+     * vault's query handling as this page describes it, and the two causes meet in one arm of one
+     * `if` deliberately. Give that arm a second branch — a reason extra, a different result code,
+     * a `null` payload for the unknown key — and the comparison below reddens, which is what makes
+     * this a test of the obligation and not of `Intent`'s equality.
+     *
+     * `GuideExamplesTest > an integrator mints the refusal too, and it reads exactly as a vault's
+     * does` is the nearest existing assertion and a different claim: it compares an integrator's
+     * hand-built refusal against the one `FixtureVault` sends for a key it does not hold. That pins
+     * the *shape* an integrator should test against. It never asks the vault for the other cause,
+     * so it cannot see a vault that answered the two differently — which is this test's subject.
+     */
+    @Test
+    fun `a refusal for a key this vault does not hold is the refusal for a consent the user withheld`() {
+        // A vault's query handling, entire. The two causes of a refusal are one arm on purpose:
+        // the vault holds no such profile, or the user said no, and the client learns neither.
+        fun answerQuery(incoming: Intent, consents: Boolean): Pair<Int, Intent> {
+            val request = Utils.parseQueryRequest(incoming)
+                ?: return Activity.RESULT_CANCELED to Intent()
+            if (request.publicKey != storedKey || !consents) {
+                return Activity.RESULT_CANCELED to Intent().apply {
+                    request.requestCode?.let { putExtra(Utils.EXTRA_SHARE_REQUEST_CODE, it) }
+                }
+            }
+            return Activity.RESULT_OK to
+                Utils.createQueryResultIntent(request, storedKey, heldProfile)
+        }
+
+        val askingAboutTheHeldKey = queryIntent()
+        val askingAboutAKeyThisVaultNeverMinted =
+            Utils.createQueryIntent(context, publicKey = otherKey, requestCode = REQUEST_CODE)
+
+        // Cause one: the vault holds the profile and the user declined to disclose it.
+        val withheld = answerQuery(askingAboutTheHeldKey, consents = false)
+        // Cause two: the user would have consented, and there is no such profile to consent about.
+        val noSuchProfile = answerQuery(askingAboutAKeyThisVaultNeverMinted, consents = true)
+
+        assertEquals(
+            "precondition: the second request names a key this vault did not mint, so the two " +
+                "refusals really do have different causes",
+            false,
+            Utils.parseQueryRequest(askingAboutAKeyThisVaultNeverMinted)!!.publicKey == storedKey,
+        )
+        assertEquals(
+            "both causes are refusals, and the result code is the whole of what a client is told",
+            withheld.first,
+            noSuchProfile.first,
+        )
+        assertEquals(
+            "…and the two payloads are the same extras with the same *values*: a vault that " +
+                "attached a reason, a status or a different envelope to one of them would be " +
+                "telling every caller that a profile exists for every key it is not told that " +
+                "about",
+            extrasOf(withheld.second),
+            extrasOf(noSuchProfile.second),
+        )
+        assertEquals(
+            "…and read back the way a client reads them, the two are the same answer rather " +
+                "than two answers that happen to share a shape",
+            Utils.parseQueryResult(withheld.second),
+            Utils.parseQueryResult(noSuchProfile.second),
+        )
+        assertTrue(
+            "both stay correlatable, which is the one thing a refusal must carry",
+            Utils.matchesRequestCode(withheld.second, REQUEST_CODE) &&
+                Utils.matchesRequestCode(noSuchProfile.second, REQUEST_CODE),
+        )
+
+        // The floor under all of that: a refusal is distinguishable from the answer the same
+        // function gives when it does consent, or the comparisons above would hold of a vault
+        // that refused nothing and disclosed everything.
+        val disclosed = answerQuery(askingAboutTheHeldKey, consents = true)
+        assertEquals(
+            "precondition: consent is answerable, so refusing is a decision and not this " +
+                "fixture's only behaviour",
+            Activity.RESULT_OK,
+            disclosed.first,
+        )
+        assertNotEquals(
+            "…and the answer is not the refusal: what the two refusals share is not shared by " +
+                "everything this vault sends",
+            extrasOf(withheld.second),
+            extrasOf(disclosed.second),
+        )
+
+        // The other half of the same obligation, and the arm `answerQuery` reaches first: an
+        // intent that does not parse is answered with the refusal and no payload at all. There
+        // is nothing to echo — the token is read off a parse that did not happen — and nothing
+        // to show a user, so this is the shape "answer nothing" has on the wire.
+        val nothingParsesIt = Intent(Utils.shareDataAction(context.packageName))
+        assertNull(
+            "precondition: this intent really does reach the arm under test — it names no key, " +
+                "so no request parses out of it. Without this the two assertions below would " +
+                "still pass off the *refusal* arm, which also answers RESULT_CANCELED with no " +
+                "extras when a request carries no token, and would stop testing what they cite",
+            Utils.parseQueryRequest(nothingParsesIt),
+        )
+        val unparseable = answerQuery(nothingParsesIt, true)
+        assertEquals(
+            "an intent no parser accepts is refused rather than answered",
+            Activity.RESULT_CANCELED,
+            unparseable.first,
+        )
+        assertEquals(
+            "…and carries nothing: not an error, not a reason, and not a correlation token, " +
+                "because the token is read off a parse that did not happen",
+            emptyList<String>(),
+            extrasOf(unparseable.second),
+        )
+    }
+
+    /**
+     * An intent's extras as `key=value` strings, sorted — what the refusals above are compared by.
+     *
+     * **Keys alone are not enough, and that is the one thing to understand about this helper.** A
+     * vault leaking which reason a refusal has would most naturally do it by writing one extra
+     * whose *value* differs — `putExtra("reason", "no_such_profile")` against
+     * `putExtra("reason", "declined")` — and a comparison of key sets reads those two as the same
+     * answer. So the values are in the comparison. (It is also why this is not
+     * `extras.keySet()`: that view's `toString` is its identity, so a failure printed two hash
+     * codes and named neither the extra that differed nor the refusal carrying it.)
+     *
+     * What it still does not reach: a reason smuggled into the result intent's action, data or
+     * flags rather than its extras. No vault in this repository does that and no builder here
+     * writes one, so the comparison is drawn where the payload is — but it is a limit rather than
+     * a complete answer.
+     */
+    @Suppress("DEPRECATION")
+    private fun extrasOf(intent: Intent): List<String> =
+        intent.extras?.let { bundle ->
+            bundle.keySet().sorted().map { key -> "$key=${bundle.get(key)}" }
+        } ?: emptyList()
 
     // ── Fixtures ──────────────────────────────────────────────────────────
 

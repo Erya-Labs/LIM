@@ -57,6 +57,14 @@ import java.io.File
  * writing. Whether either page reads well is a human judgement (VISION), and an assertion
  * pretending otherwise would be worse than none.
  *
+ * **One exception to that, and it is narrow.** `docs/VAULT.md`'s *What a vault must do* collects
+ * the obligations a vault owes the protocol, each as a bullet citing the `@Test` that would notice
+ * if a fixture vault stopped honouring it. Those citations *are* pinned — resolved by reflection
+ * exactly as [NOT_A_SNIPPET]'s are — so a bullet citing nothing, or citing a test that was renamed
+ * out from under it, reddens. The obligation's own sentence is still prose nothing here checks; what
+ * is checked is that it points at something runnable. See
+ * `every obligation the vault page states cites a test that exists`.
+ *
  * Regex over text, so it runs in milliseconds: no Robolectric, no reflection beyond resolving the
  * excuses' citations. The text is six things, not two — the two documents, every Kotlin test
  * source, `README.md`, `LIM/build.gradle.kts` and `settings.gradle.kts`, every one of them reached
@@ -142,6 +150,36 @@ class GuideSnippetTest {
      * trust. `PublishedSurfaceFuzzTest`'s form, spelled `ClassName: test method name`.
      */
     private class Excuse(val reason: String, val coveredBy: String)
+
+    /**
+     * One bullet of `docs/VAULT.md`'s *What a vault must do*: a thing a vault has to do, and the
+     * `@Test`s it cites.
+     *
+     * [Excuse]'s shape pointed at prose instead of at a fenced block, and for the same reason. An
+     * obligation written as a paragraph is a claim nothing can check; an obligation written as a
+     * paragraph **plus a citation resolved by reflection** cannot name a test that was renamed out
+     * from under it, and cannot be added by somebody unwilling to point at an assertion. The
+     * difference from [Excuse] is only where the pair is written down: an excuse lives in
+     * [NOT_A_SNIPPET] because a fence language is not a sentence, while an obligation's reason *is*
+     * the published sentence, so the page carries both halves and this class reads them back out.
+     *
+     * **What a citation does not buy, stated here because the page states it too.** Every test
+     * cited today **but one** holds a *fixture* vault — one written in this repository — to the
+     * obligation; the exception reads this library's own compiled bytecode and involves no vault at
+     * all. The obligations are the protocol's and the enforcement is a vault's; nothing here
+     * reaches a vault in the field, which is in another repository entirely.
+     */
+    private class Obligation(document: String, val lineNumber: Int, val lines: List<String>) {
+        /** The bullet as one line, so a citation split across a wrap is still found. */
+        val text: String = lines.joinToString(" ") { it.trim().removePrefix("- ") }
+
+        /** Every `ClassName > test name` it names, re-spelled as [resolvesToATest] reads them. */
+        val citations: List<String> = CITATION.findAll(text)
+            .map { "${it.groupValues[1]}: ${it.groupValues[2]}" }
+            .toList()
+
+        val where: String = "the obligation at $document:$lineNumber (\"${text.take(60)}…\")"
+    }
 
     /** Every complaint the two files produce, so the real tests and the controls share one loop. */
     private class Audit(
@@ -313,6 +351,93 @@ class GuideSnippetTest {
     /** [regions]' lines with trailing comments stripped — what [coverageShortfalls] searches. */
     private fun executedCode(regions: List<Region>): String =
         regions.flatMap { it.lines }.map { it.substringBefore("//") }.joinToString("\n")
+
+    /**
+     * The top-level bullets under [section] of [text], each with its continuation lines.
+     *
+     * A bullet is an unindented list line plus every following line indented under it, which is how
+     * both documents already wrap their lists. Three things are deliberately *not* bullets: a
+     * nested list item (it continues its parent, so a citation on a sub-point still counts for the
+     * obligation), anything outside [section], and anything inside a fence. **The fence skip is for
+     * a page that does not need it yet**: this section is prose today, and a Kotlin block added to
+     * it later would otherwise have every `- ` line of a comment read as an obligation with no
+     * citation, which is a failure with a baffling message.
+     *
+     * **Two near-misses the review found, and both would have failed silently** — which is the
+     * only failure mode that matters here, because a bullet this scan never *sees* is a bullet it
+     * never reports, and the section would be decoration while every assertion stayed green.
+     *
+     *  - [BULLET] accepts `-`, `*` and `+`. Spelled `startsWith("- ")` it read Markdown's one
+     *    commonest list marker and missed the other two, which render identically, so an
+     *    obligation written `* **…**` with no citation produced no complaint at all.
+     *  - Only a heading at [section]'s own level or above ends the scan. Spelled as "any heading"
+     *    — which `HEADING` matches down to `######` — a `###` sub-grouping added as the list grew
+     *    would have made every bullet after it invisible. A deeper heading flushes the bullet in
+     *    progress and the scan continues.
+     */
+    private fun obligationsIn(document: String, text: String, section: String): List<Obligation> {
+        val found = mutableListOf<Obligation>()
+        var inSection = false
+        var inFence = false
+        var current: MutableList<String>? = null
+        var startedAt = 0
+
+        fun flush() {
+            current?.let { found += Obligation(document, startedAt, it.toList()) }
+            current = null
+        }
+
+        for ((index, line) in text.lines().withIndex()) {
+            if (FENCE_OPEN.matches(line) || FENCE_CLOSE.matches(line)) {
+                inFence = !inFence
+                continue
+            }
+            if (inFence) continue
+            val heading = HEADING.find(line)
+            if (heading != null) {
+                flush()
+                // A deeper heading is a sub-grouping *within* the section and leaves it open; one
+                // at this level or above closes it, whatever it is called.
+                if (SECTION_LEVEL.containsMatchIn(line)) {
+                    inSection = heading.groupValues[1] == section
+                }
+                continue
+            }
+            if (!inSection) continue
+            when {
+                BULLET.containsMatchIn(line) -> {
+                    flush()
+                    current = mutableListOf(line)
+                    startedAt = index + 1
+                }
+                current != null && line.startsWith("  ") -> current?.add(line)
+                else -> flush()
+            }
+        }
+        flush()
+        return found
+    }
+
+    /**
+     * What is wrong with [obligations]: a bullet citing nothing, and a bullet citing a `@Test` that
+     * does not exist.
+     *
+     * Both complaints land in **one** list on purpose. They are the two ways the same property
+     * fails — "this obligation is backed by an assertion somebody can run" — and a reader who has
+     * just broken one of them is helped by a single answer naming the bullet rather than by
+     * guessing which of two assertions to read. `control - an obligation citing nothing and one
+     * citing a test that does not exist are both reported` drives both through this one function.
+     */
+    private fun obligationComplaints(obligations: List<Obligation>): List<String> =
+        obligations.flatMap { obligation ->
+            if (obligation.citations.isEmpty()) {
+                listOf("${obligation.where} cites no test at all")
+            } else {
+                obligation.citations
+                    .filterNot { resolvesToATest(it) }
+                    .map { "${obligation.where} cites `$it`, which is not a @Test" }
+            }
+        }.sorted()
 
     // ── The seven properties ──────────────────────────────────────────────
 
@@ -623,6 +748,96 @@ class GuideSnippetTest {
                 "${vaultRegions.size} regions $VAULT_PATH quotes " +
                 "(${executedCode(vaultRegions).lines().size} code " +
                 "lines of ${vaultRegions.sumOf { it.lines.size }} snippet lines)",
+        )
+    }
+
+    /**
+     * The vault page's *What a vault must do* section, and the one assertion that makes it a
+     * verifier rather than a list of good intentions.
+     *
+     * **Why this section needed one at all.** Every obligation it states was already published —
+     * the pre-image refusal in nine KDoc sentences across four sources and again in
+     * `CHANGELOG.md`, the rest in a `@param` here and a paragraph of the client's guide there — and
+     * no two of them were collected anywhere. Collecting them is the page's work; the risk
+     * collecting them creates is a list that keeps claiming an obligation after the test
+     * demonstrating it was renamed, deleted or quietly weakened. So each bullet names a `@Test` and
+     * [resolvesToATest] resolves it by reflection, exactly as [NOT_A_SNIPPET]'s citations are
+     * resolved: **a bullet citing a test that does not exist reddens, and a bullet citing nothing
+     * reddens.** Adding an obligation therefore costs pointing at an assertion.
+     *
+     * The resolver has to be able to answer both ways or this reports success unconditionally;
+     * that is proved over three inputs in
+     * `every fenced block that is not a snippet is excused by name`, which is why it is not
+     * repeated here.
+     *
+     * **What a green run here does and does not say.** It says every obligation on the page is
+     * backed by a test that exists and runs. It does **not** say the test is a good one: a
+     * citation pointing at an assertion that would stay green under the obligation's violation is
+     * invisible from here, which is a judgement no regex makes. And every test cited today **but
+     * one** holds a *fixture* vault, so none of this reaches a vault in the field — the page draws
+     * exactly that limit at the end of the section, naming the one citation that is not a fixture
+     * vault at all, and that sentence is prose this class does not pin.
+     */
+    @Test
+    fun `every obligation the vault page states cites a test that exists`() {
+        val obligations =
+            obligationsIn(VAULT_PATH, locate(VAULT_PATH).readText(), OBLIGATIONS_SECTION)
+        assertEquals(
+            "an obligation on `$VAULT_PATH` must name the `@Test` that would notice if a vault " +
+                "stopped honouring it, spelled `ClassName > test name`. A bullet citing nothing " +
+                "is a claim backed by prose; a bullet citing a test that no longer exists is " +
+                "worse, because it reads as backed by something. Fix the page or the citation — " +
+                "never this list",
+            emptyList<String>(),
+            obligationComplaints(obligations),
+        )
+        // Floor: an empty section would satisfy the rule above for ever, and emptying it is
+        // exactly how the page could lose the half of itself that is not snippets.
+        assertTrue(
+            "`$VAULT_PATH`'s *$OBLIGATIONS_SECTION* must carry at least $MINIMUM_OBLIGATIONS " +
+                "obligations — it had ${obligations.size}. Deleting them would leave this " +
+                "assertion reporting no offenders and the page stating nothing",
+            obligations.size >= MINIMUM_OBLIGATIONS,
+        )
+        println(
+            "GuideSnippetTest: ${obligations.size} obligations on $VAULT_PATH, " +
+                "${obligations.sumOf { it.citations.size }} citation(s) across " +
+                obligations.flatMap { it.citations }
+                    .map { it.substringBefore(": ") }
+                    .distinct()
+                    .sorted(),
+        )
+    }
+
+    /**
+     * The two pages link **each other**, and both directions are asserted because both are one
+     * edit from being dropped.
+     *
+     * They answer different readers and each reader arrives at the wrong one: an integrator who
+     * needs to know which guarantees are a vault's to keep, and a vault author who needs to see
+     * what the requests look like leaving a client. `the README links both documents, and they
+     * exist` gets a third party to one of the two; nothing before this got them from one to the
+     * other.
+     *
+     * The link text is derived from [GUIDE_PATH] and [VAULT_PATH] rather than written out, so
+     * re-homing a page reddens this instead of silently matching nothing. Both live in the same
+     * directory, which is why the sibling spelling is the bare file name.
+     */
+    @Test
+    fun `the two pages link each other`() {
+        val toTheVaultPage = "](${VAULT_PATH.substringAfterLast('/')})"
+        val toTheGuide = "](${GUIDE_PATH.substringAfterLast('/')})"
+        assertTrue(
+            "`$GUIDE_PATH` must link `$VAULT_PATH` — an integrator who wants to know which of " +
+                "this library's guarantees are a vault's to keep has no other way to find the " +
+                "page that says so. Expected the Markdown link `$toTheVaultPage`",
+            toTheVaultPage in locate(GUIDE_PATH).readText(),
+        )
+        assertTrue(
+            "…and `$VAULT_PATH` must link back: a vault author is answering requests this " +
+                "library builds, and the client's half is the page describing them. Expected " +
+                "`$toTheGuide`",
+            toTheGuide in locate(VAULT_PATH).readText(),
         )
     }
 
@@ -1567,6 +1782,70 @@ class GuideSnippetTest {
         )
     }
 
+    /**
+     * (s) The obligation rule's two failures, both over a fixture section rather than by mutating
+     * the published page.
+     *
+     * The section's whole claim to being a verifier is that these two redden, so they are asserted
+     * rather than described: a bullet whose cited `@Test` does not exist, and a bullet citing
+     * nothing at all. The first bullet cites a real test of this very class and must **not** be
+     * reported — a rule that condemned every bullet would satisfy the first two assertions for the
+     * wrong reason, which is the shape every control in this file is written against.
+     *
+     * **And it drives the two evasions review found, because those are the failures that would
+     * have been silent.** The uncited bullet is written with `*` rather than `-`, and it sits below
+     * a `###` sub-grouping: under the first spelling of [obligationsIn] the marker made it
+     * invisible and the sub-heading closed the section, so it produced *no complaint* instead of
+     * the obvious one. Two shapes must still **not** be read as obligations and are in the fixture
+     * for that: a nested sub-point, which continues its parent rather than starting a bullet, and a
+     * bullet under the next `##`, which is out of the section.
+     */
+    @Test
+    fun `control - an obligation citing nothing and one citing a test that does not exist are both reported`() {
+        val obligations = obligationsIn(
+            FIXTURE_GUIDE_NAME,
+            FIXTURE_OBLIGATIONS.joinToString("\n"),
+            OBLIGATIONS_SECTION,
+        )
+        assertEquals(
+            "precondition: three bullets in the section — including the `*`-marked one below a " +
+                "`###` sub-grouping, which two earlier spellings of the scan could not see — and " +
+                "neither the sub-point nor the bullet under the next `##` is one of them. Found " +
+                obligations.map { it.text },
+            3,
+            obligations.size,
+        )
+        assertEquals(
+            "the sub-point must be read as part of its parent bullet, so a citation written " +
+                "under one still covers the obligation",
+            1,
+            obligations.first().citations.size,
+        )
+        val complaints = obligationComplaints(obligations)
+        assertEquals(
+            "exactly two complaints: the dangling citation and the bullet citing nothing. The " +
+                "third bullet cites a real test of this class and must not be reported, or this " +
+                "control passes for a rule that condemns everything. Found $complaints",
+            2,
+            complaints.size,
+        )
+        assertTrue(
+            "the dangling citation must be reported naming the test it could not resolve: " +
+                "$complaints",
+            complaints.any { it.contains("a test nobody ever wrote") && it.contains("not a @Test") },
+        )
+        assertTrue(
+            "…and the uncited bullet must be reported for the other reason: $complaints",
+            complaints.any { it.contains("cites no test at all") },
+        )
+        assertTrue(
+            "the bullet whose citation resolves must be absent from the complaints, which is " +
+                "what makes the two above findings rather than a verdict on every bullet: " +
+                "$complaints",
+            complaints.none { it.startsWith(obligations.first().where) },
+        )
+    }
+
     // ── Parsing ───────────────────────────────────────────────────────────
 
     /** Fence lines [blocksIn] would not parse, each located. Rule 7's whole content. */
@@ -1988,6 +2267,36 @@ class GuideSnippetTest {
         private val FENCE_OPEN = Regex("""^```(\w*)\s*$""")
         private val FENCE_CLOSE = Regex("""^```\s*$""")
         private val MARKER = Regex("""^<!--\s*snippet:\s*(\S+)#(\S+)\s*-->\s*$""")
+
+        /**
+         * A citation inside a document's prose: `` `VaultGuideExamplesTest > a login answer …` ``.
+         *
+         * The class name is required to **end in `Test`**, which is the narrowing that keeps this
+         * off the rest of the page. Both documents use a backticked `a > b` elsewhere for things
+         * that are not citations at all, and a regex reading every one of them as a test name
+         * would report prose as a dangling citation. The cost is that a suite named outside that
+         * convention would be invisible here; every test class in this repository follows it.
+         */
+        private val CITATION = Regex("""`([A-Za-z0-9_]*Test) > ([^`]+)`""")
+
+        /**
+         * An unindented Markdown list item, in all three markers Markdown accepts.
+         *
+         * `*` and `+` render exactly as `-` does, so a scan reading only `-` would skip an
+         * obligation written either other way **without reporting anything** — the one failure
+         * shape that turns this section back into prose. Anchored at column 0 so a nested
+         * sub-point stays a continuation of its parent.
+         */
+        private val BULLET = Regex("""^[-*+]\s""")
+
+        /**
+         * A heading at `##` level or above — what closes the obligations section.
+         *
+         * [HEADING] matches down to `######`, so using it to close the scan would let a `###`
+         * sub-grouping added later hide every bullet below it. The section is a `##`, so only a
+         * `#` or `##` ends it.
+         */
+        private val SECTION_LEVEL = Regex("""^#{1,2}\s""")
         private val REGION_START = Regex("""^\s*// region snippet:(\S+)\s*$""")
         private val REGION_END = Regex("""^\s*// endregion snippet:(\S+)\s*$""")
         /**
@@ -2081,11 +2390,11 @@ class GuideSnippetTest {
         /**
          * `docs/VAULT.md`'s sections, pinned the same way and for the same reason.
          *
-         * **Five, which is a vault's whole turn: read a request, answer it, or refuse.** That
-         * page answers a vault author rather than an integrator, and it is being built in
-         * instalments — the obligations a vault owes the protocol are the one still to come, and
-         * this list is where it will be admitted. A section promised in prose before it is on
-         * this list is a promise nothing holds.
+         * **Six, and the page is whole: read a request, answer it, refuse — and then what a vault
+         * must do.** That page answers a vault author rather than an integrator, and it was built
+         * in instalments; [OBLIGATIONS_SECTION] was the last of them, and it is the only section
+         * on either page whose *content* is held to anything beyond being present. See
+         * `every obligation the vault page states cites a test that exists`.
          */
         private val REQUIRED_VAULT_SECTIONS = listOf(
             "What a vault answers for",
@@ -2093,7 +2402,34 @@ class GuideSnippetTest {
             "Reading a share request",
             "Answering a request",
             "Refusing",
+            OBLIGATIONS_SECTION,
         )
+
+        /**
+         * The one section whose bullets are parsed rather than merely counted, named once so the
+         * required-sections list and the obligation rule cannot come to disagree about it.
+         *
+         * Renaming the heading on the page therefore reddens the section check *and* empties the
+         * obligation scan, which trips its floor — two complaints for one edit, which is correct:
+         * the heading is load-bearing in two different ways.
+         */
+        private const val OBLIGATIONS_SECTION = "What a vault must do"
+
+        /**
+         * The floor under the obligation scan: **every obligation published today**, not a slack
+         * count.
+         *
+         * The first spelling left slack — eight published against a floor of six — on the argument
+         * that an obligation the protocol stops owing should be removable without editing a test in
+         * the same commit. Review pointed out what that actually buys: two bullets can be deleted
+         * with nothing red, and one of them is the pre-image refusal the page's whole login section
+         * turns on. The slack protected the wrong party. So the floor is exact, and removing an
+         * obligation costs one deliberate line here — which is `MINIMUM_DOCUMENTS`' arrangement in
+         * `BuildInputsTest`, raised by hand for the same reason.
+         *
+         * Raise it when the page grows. Lowering it is how a deletion goes unnoticed.
+         */
+        private const val MINIMUM_OBLIGATIONS = 8
 
         /**
          * Every document under the seven properties, each against its own required sections.
@@ -2224,6 +2560,39 @@ class GuideSnippetTest {
         /** What the fixture excuses cite: this file's own control, which is a real `@Test`. */
         private const val CONTROL_CITATION =
             "GuideSnippetTest: control - an unexcused block and a dead excuse are both reported"
+
+        /**
+         * Control (s)'s fixture section: three obligations, one sub-point and one bullet that is
+         * out of scope.
+         *
+         * Assembled from one-line literals for [FIXTURE_SOURCE]'s reason turned one page along —
+         * a raw string would put `## ` and `- ` at the start of real lines of this source, and
+         * while no scanner here reads Markdown out of a `.kt` file today, the next one to be
+         * written would read these as the repository's own prose. The good bullet's citation is
+         * built from [CONTROL_CITATION], re-spelled into the page's `>` form, so it names a test
+         * that genuinely exists and keeps existing: if that control is ever renamed, this fixture
+         * follows it rather than going stale.
+         */
+        private val FIXTURE_OBLIGATIONS = listOf(
+            "# A fixture page",
+            "",
+            "## $OBLIGATIONS_SECTION",
+            "",
+            "- **An obligation whose citation resolves.** Prose about it, wrapped onto a second",
+            "  line so the parser has to join them, because the citation is on neither line.",
+            "  - A sub-point, which continues this bullet rather than starting one: " +
+                "`${CONTROL_CITATION.replace(": ", " > ")}` holds its own citation.",
+            "- **An obligation citing a test that was renamed out from under it.** This is the",
+            "  failure mode the rule exists for: `GuideSnippetTest > a test nobody ever wrote`.",
+            "### A sub-grouping, which must not end the section",
+            "",
+            "* **An obligation written with the other list marker, citing nothing.** Renders",
+            "  identically to the two above, and a scan reading only `-` reported it as nothing.",
+            "",
+            "## A later section",
+            "",
+            "- A bullet outside the section, which the scan must not read as an obligation.",
+        )
 
         /**
          * What the fixture documents are called, and **why none of them ends in `.md`**.
