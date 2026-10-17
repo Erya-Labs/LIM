@@ -10,7 +10,7 @@ to sign. Everything it receives arrives as an `Intent` from another app on the s
 means every byte of it is hostile input: any installed app can fire an intent at an exported
 activity, and nothing on the way in has been authenticated by anybody.
 
-So this page is mostly about reading. The three functions below are a vault's entire entry point —
+So this page starts with reading. The three functions below are a vault's entire entry point —
 `parseShareRequest`, `parseQueryRequest` and `parseSignChallengeRequest` — and the reason to call
 them instead of reading extras by hand is that they are the same code the client half is pinned
 against. A vault that hand-reads `extra_entry_json` has made a private copy of the wire format,
@@ -21,8 +21,10 @@ above each block names the region it came from, in `VaultGuideExamplesTest`, and
 fails if the two ever drift — or if the region is not inside a function JUnit executes. So nothing
 here is prose that compiled once.
 
-This page covers **reading** a request. Answering one, and the obligations a vault owes the
-protocol, are not on it yet.
+This page covers a vault's whole turn: reading a request, answering it, and refusing. The
+obligations a vault owes the protocol are not collected on it yet — with one exception, because the
+login block below cannot honestly be printed without it: a vault must refuse to sign a signed
+statement's pre-image.
 
 ---
 
@@ -197,11 +199,195 @@ Save gate on both sides of the wire rather than two implementations that have to
 
 ---
 
+## Answering a request
+
+An answer is two things: a **result code** and a **result intent**. `RESULT_OK` with an intent the
+client can read is an answer; `RESULT_CANCELED` is a refusal. Nothing in the payload says which one
+it is, so a vault that forgot the result code has sent an answer the client is right to throw away.
+
+Each flow has its own builder, and they are **not interchangeable**. A sign-up answer carries its
+fields under `extra_fields_json`; a query answer carries its disclosure under
+`extra_query_result_fields`. Answer a query with the share builder and the client's
+`parseQueryResult` finds no fields at all — a disclosure that reads as "nothing released" —
+because those two keys are separate points in the protocol on purpose. `ResultBuilderTest > a
+result built for one flow discloses no fields to the other` pins the separation in both
+directions; choosing between the two by hand is the mistake these functions exist to remove.
+
+Each of the three has an overload that takes the **parsed request**, and that is the one to call. It
+carries the correlation token across for you — the one value it reads off the request — so the
+token cannot be mistyped or dropped. Everything else stays explicit, and that is a rule rather
+than an oversight: the key and the fields in an answer are the *vault's*, and a builder that
+echoed the request's own would let the calling app decide what its answer says about it.
+
+<!-- snippet: VaultGuideExamplesTest.kt#vault-answer-share -->
+```kotlin
+// The answer to a sign-up is the key this vault minted for the new profile and the
+// fields it stored. Hand the parsed request to the overload that takes one: it carries
+// the correlation token across, which is the only value it reads off the request. The
+// key and the fields stay explicit because they are the vault's — a builder that echoed
+// the request's own would let the client decide what its answer says.
+val answer = Utils.createShareResultIntent(
+    request,
+    publicKey = storedKey,
+    fields = heldProfile,
+)
+// Then `setResult(Activity.RESULT_OK, answer)` and finish. The result code is what makes
+// this an answer rather than a refusal; nothing in the payload says which it is.
+```
+
+The key in that answer *is* the account, from here on. The client has nothing else to identify the
+profile by, so a vault that answered with the placeholder key from the request would hand the
+client an identifier it cannot authenticate against later.
+
+A query answer is the disclosure the user consented to, which may be a subset of what the vault
+holds — consent is per disclosure in this protocol, so one field of three is a complete answer.
+
+<!-- snippet: VaultGuideExamplesTest.kt#vault-answer-query -->
+```kotlin
+// A query is answered with what the user released at the consent dialog, which may be
+// less than the profile holds: consent is per disclosure, so one field of three is a
+// complete answer rather than a partial one. An empty map is a legitimate answer too —
+// "nothing disclosed" is not the same as not answering.
+val answer = Utils.createQueryResultIntent(request, publicKey = storedKey, fields = released)
+// The key is still passed explicitly, and this is the flow that rule exists for: the
+// request's own key is the one the *caller* chose to ask about, so echoing it would let
+// the caller name the profile its own disclosure claims to come from.
+```
+
+A login answer is a signature, and it is the one answer with cryptography in it. The bytes to sign
+are the nonce the request carried, read off the parsed request rather than off the extras; the key
+is the private half the vault minted for that profile. **This library never holds a private key,
+never sees one and signs nothing** — the builder writes what the vault says it signed, and the
+client's own verification is what decides whether that is true.
+
+<!-- snippet: VaultGuideExamplesTest.kt#vault-answer-login -->
+```kotlin
+// A login is answered with a signature over the nonce the request carried. The bytes to
+// sign come off the parsed request; the key is the one this vault minted for the named
+// profile — a Keystore handle in a real vault, and never anything this library holds.
+fun answerLogin(incoming: Intent, profileKey: PrivateKey): Intent? {
+    val request = Utils.parseSignChallengeRequest(incoming) ?: return null
+    // The check a signing device owes every signature it makes, and the reason this is
+    // not a two-line function: these bytes are whatever the caller chose, and they could
+    // be the pre-image of a statement this key authorises rather than a login challenge.
+    // Get one signed under a "prove your identity" dialog and the answer is a valid key
+    // rotation. Only this side can tell the two apart, and nothing in LIM refuses on a
+    // vault's behalf — the parser hands the bytes over and this is the call that stops.
+    if (Utils.isStatementPreImage(request.nonce)) return null
+    val algorithm = "SHA256withRSA"
+    val signature = Signature.getInstance(algorithm).run {
+        initSign(profileKey)
+        update(request.nonce)
+        sign()
+    }
+    // `algorithm` is informational and is honoured by nothing: the client's verification
+    // hardcodes `SHA256withRSA`, because taking the algorithm from the sender is how
+    // algorithm confusion gets in. Declare it for a reader, not for a verifier.
+    return Utils.createSignChallengeResultIntent(request, signature, heldProfile, algorithm)
+}
+```
+
+The field payload rides along with the proof, under the share flow's key. It is always written,
+even empty: a vault cannot opt out by omission, so disclosing nothing on a login means sending an
+empty payload rather than no payload.
+
+**The refusal in the middle of that function is not optional.** A nonce is caller-chosen bytes,
+and the pre-image of a signed statement — a key rotation, a recovery authorization, a revocation —
+is exactly such bytes. A vault that signs one has answered a "prove your identity" dialog with a
+valid rotation of the user's key. `Utils.isStatementPreImage` is published for this and for
+nothing else, and **nothing in this library refuses such a nonce on your behalf**:
+`parseSignChallengeRequest` hands the bytes over, the obligation is the protocol's and the
+enforcement is yours. `ClientIntegrationExampleTest > the vault refuses to sign a statement
+pre-image handed to it as a challenge` is the same property over a different vault, with the
+attack written out.
+
+### Acknowledging the optional-fields declaration
+
+A vault that enforces the declaration it read with `parseFieldRequirements` says so — on the
+answer, and only there. There is nothing on the request to echo: the acknowledgement is a claim
+about what this vault did, which is why the builder writes it only when the payload satisfies the
+declaration.
+
+<!-- snippet: VaultGuideExamplesTest.kt#vault-answer-optional -->
+```kotlin
+// A vault that enforces the optional-fields declaration says what it enforced, and says
+// it on the answer only — there is no extra on the request to echo back. `committed` is
+// the Save gate and the payload in one: it is `null` exactly while a required row is
+// still blank, and it drops the optional rows the user left empty rather than storing
+// them as blank values.
+val stored = declared.committed(draft)
+// The acknowledgement rides on this overload, which has no request-taking sibling — pass
+// the token off the parsed request yourself. It writes the acknowledgement only when the
+// payload satisfies the declaration, so the answer can never claim more than it carries.
+val answer = stored?.let {
+    Utils.createShareResultIntent(storedKey, it, request.requestCode, declared)
+}
+```
+
+This is the one builder with no request-taking sibling, so the correlation token is passed by
+hand — off the parsed request, not re-typed. What the client makes of the acknowledgement is
+`checkFieldRequirements`, which answers `HONOURED` for the answer above and `NOT_ACKNOWLEDGED` for
+an equally complete answer carrying no acknowledgement. Neither reading is an error: a vault that
+ignores the declaration and requires every field is a correct vault, and the client's verdict
+exists to tell the two apart rather than to grade them.
+
+---
+
+## Refusing
+
+Refusal is a first-class answer. The user declined, or this vault holds no such profile, or the
+request named a key it does not have — and in every one of those cases the answer is
+`RESULT_CANCELED` with the correlation token echoed back, and nothing else.
+
+<!-- snippet: VaultGuideExamplesTest.kt#vault-refusal -->
+```kotlin
+// Refusal is a first-class answer — the user declined, or this vault holds no such
+// profile — and it is the one answer no builder here mints. Two lines: the result code,
+// and the correlation token echoed back. Not an empty intent, because correlation has to
+// survive a refusal or the client cannot tell which request was refused.
+val refusalCode = Activity.RESULT_CANCELED
+val refusal = Intent().apply {
+    request.requestCode?.let { putExtra(Utils.EXTRA_SHARE_REQUEST_CODE, it) }
+}
+// `setResult(refusalCode, refusal)` and finish. Attach nothing else: no reason, no
+// status, no version echo. A refusal that said why would also be saying that something
+// on this side understood the request, and that is a disclosure of its own.
+```
+
+**The token is the one thing a refusal must carry.** Drop it and the client is holding a refusal it
+cannot attribute to a request, which is worse than it sounds: correlation is what stops a handler
+acting on an answer meant for a different request.
+
+**There is no refusal builder, and that is deliberate for now rather than settled.** Every result
+builder in this library attaches `extra_protocol_version` unconditionally — the echo is the point
+of them, since it is what lets a client tell a current vault from a legacy one that ignored what it
+did not understand. A refusal honoured nothing, so routing one through a builder would attach a
+version to it, which changes what a refusal says on the wire: it would tell the caller that
+something on this side understood the request. Whether that bit is worth paying for — and whether
+LIM should publish a `createDeclinedResultIntent` so the shape is built rather than hand-written —
+is an open protocol question, recorded for a human alongside the broader question of whether a
+refusal may carry a *reason* at all. This page describes today's shape and does not pre-empt that
+decision.
+
+Say nothing more than the code. A refusal that distinguished "the user declined" from "no such
+profile" would tell every caller that a profile exists for every key it is *not* told that about,
+which is the disclosure the client's own guide warns integrators not to read into a refusal.
+
+**The limit of everything in this section.** What is above is the *shape* of an answer, not a
+vault's policy. What the user is asked, what is stored, what is disclosed and when a refusal is the
+right answer are decisions this library has no part in and cannot check — the tests behind these
+blocks hold a fixture vault to them, and nothing here can hold a vault in the field to anything.
+
+---
+
 ## Where to look next
 
 - `VaultGuideExamplesTest` — the source of every block on this page.
 - `ClientIntegrationExampleTest` — sign-up, query, login and refusal as one runnable sequence
-  against one profile, with a fixture vault answering. The closest thing here to a whole vault.
+  against one profile, with a fixture vault answering. The closest thing here to a whole vault,
+  and the file that writes out the statement pre-image attack a signing vault must refuse.
 - `RequestParsingTest` — the three parsers, field by field, over hostile input.
+- `ResultBuilderTest` — the three result builders from the other side: which extra each one
+  writes, and what a result built for one flow discloses to the other.
 - `IntentBuilderTest` — the wire format as literals. This is the contract between the two apps.
 - [INTEGRATION.md](INTEGRATION.md) — the client's half, which is what your vault is answering.

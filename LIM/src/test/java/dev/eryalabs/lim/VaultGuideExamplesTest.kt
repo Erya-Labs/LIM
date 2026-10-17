@@ -1,16 +1,25 @@
 package dev.eryalabs.lim
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.util.Base64
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.BeforeClass
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.security.KeyPair
+import java.security.KeyPairGenerator
+import java.security.PrivateKey
+import java.security.Signature
 
 /**
  * The code `docs/VAULT.md` prints, in the file that runs it.
@@ -40,9 +49,22 @@ import org.robolectric.annotation.Config
  * [ClientIntegrationExampleTest] is the whole sequence with both halves answering. This file
  * repeats neither; its subject is the published prose.
  *
- * This task's page is the **reading** half of a vault's work — routing a request and reading a
- * share. Answering one, and the obligations a vault owes, are later instalments, and nothing here
- * pretends to show them.
+ * The page now covers both halves of a vault's turn: routing and reading a request, and building
+ * the answer — or the refusal — the client reads back. **What makes the answering half evidence
+ * rather than three builder calls is the read-back**: every test holding one of those regions
+ * parses the intent it built with the function the client half really calls, so a page block that
+ * built the wrong thing cannot stay green. The obligations a vault owes the protocol are a later
+ * instalment and are not collected here — **with one exception, stated so that this sentence does
+ * not read as a licence**: the login region refuses a statement pre-image before it signs, because
+ * a published block a vault author copies cannot omit that and stay honest. See the login test.
+ *
+ * **The limit, and it is the whole of what the answering half can claim.** Every test here holds a
+ * *fixture* vault — this file — to the shape of an answer. The shape is all this library can speak
+ * about: what the user is asked, what is stored, what is disclosed and when a refusal is the right
+ * answer are the vault's own decisions, no function here checks one of them, and a vault in the
+ * field is in another repository entirely. So a green run means the page's blocks build what the
+ * client half reads back. It does not mean any vault behaves as the page's prose describes, and
+ * the page says so where it shows the builders.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -148,7 +170,7 @@ class VaultGuideExamplesTest {
         )
         assertEquals(
             "…and it parses as a query naming the key the client asked about",
-            STORED_KEY,
+            storedKey,
             Utils.parseQueryRequest(asQuery)?.publicKey,
         )
 
@@ -294,6 +316,417 @@ class VaultGuideExamplesTest {
         )
     }
 
+    // ── Answering a request ───────────────────────────────────────────────
+
+    /**
+     * The sign-up answer: the key the vault minted and the fields it stored, correlated to the
+     * request it answers.
+     *
+     * The region's claim is that the **request-taking overload reads one value off the request —
+     * the correlation token — and nothing else**, so the assertions read the answer back with
+     * `parseShareResult` and check both halves of that: the token survives, and the key the
+     * client gets is the vault's rather than the placeholder its own request carried. The second
+     * is the one worth asserting, because a builder that echoed the request's key would let a
+     * client choose the identifier naming its own account and nothing would look wrong.
+     */
+    @Test
+    fun `a share answer carries the key the vault minted and the token the request came with`() {
+        val request = Utils.parseShareRequest(signUpIntent())!!
+
+        // region snippet:vault-answer-share
+        // The answer to a sign-up is the key this vault minted for the new profile and the
+        // fields it stored. Hand the parsed request to the overload that takes one: it carries
+        // the correlation token across, which is the only value it reads off the request. The
+        // key and the fields stay explicit because they are the vault's — a builder that echoed
+        // the request's own would let the client decide what its answer says.
+        val answer = Utils.createShareResultIntent(
+            request,
+            publicKey = storedKey,
+            fields = heldProfile,
+        )
+        // Then `setResult(Activity.RESULT_OK, answer)` and finish. The result code is what makes
+        // this an answer rather than a refusal; nothing in the payload says which it is.
+        // endregion snippet:vault-answer-share
+
+        val asTheClientReadsIt = Utils.parseShareResult(answer)!!
+        assertEquals(
+            "the client's account identifier is the key the vault minted",
+            storedKey,
+            asTheClientReadsIt.publicKey,
+        )
+        assertEquals(
+            "…and the fields are the ones the vault stored",
+            heldProfile,
+            asTheClientReadsIt.fields,
+        )
+        assertEquals(
+            "…and the correlation token came off the request rather than being re-typed",
+            REQUEST_CODE,
+            asTheClientReadsIt.requestCode,
+        )
+        assertTrue(
+            "which is what `matchesRequestCode` answers on the client's side of the same wire",
+            Utils.matchesRequestCode(answer, REQUEST_CODE),
+        )
+        assertEquals(
+            "precondition: the request carried a placeholder key, as a sign-up request does",
+            "no-key-yet",
+            request.entry.publicKey,
+        )
+        assertNotEquals(
+            "…and it is not what the answer names: the key explicit in the call is the vault's",
+            request.entry.publicKey,
+            asTheClientReadsIt.publicKey,
+        )
+    }
+
+    /**
+     * The query answer: what the user released at the consent dialog, which may be less than the
+     * vault holds.
+     *
+     * Two claims, both read back the way a client reads them. The disclosure arrives under the
+     * **query flow's own field key**, so a share-shaped read of it discloses nothing — the two
+     * extras are separate points in the protocol and are not interchangeable, which
+     * `ResultBuilderTest > a result built for one flow discloses no fields to the other` owns in
+     * both directions over both builders. And the key in the answer is the vault's, not the one
+     * the caller asked about: this is the flow that rule exists for.
+     */
+    @Test
+    fun `a query answer discloses only what was released, under the query flow's own field key`() {
+        val request = Utils.parseQueryRequest(queryIntent())!!
+        val released = linkedMapOf("email" to TypedField("ada@example.test", FieldType.EMAIL))
+
+        // region snippet:vault-answer-query
+        // A query is answered with what the user released at the consent dialog, which may be
+        // less than the profile holds: consent is per disclosure, so one field of three is a
+        // complete answer rather than a partial one. An empty map is a legitimate answer too —
+        // "nothing disclosed" is not the same as not answering.
+        val answer = Utils.createQueryResultIntent(request, publicKey = storedKey, fields = released)
+        // The key is still passed explicitly, and this is the flow that rule exists for: the
+        // request's own key is the one the *caller* chose to ask about, so echoing it would let
+        // the caller name the profile its own disclosure claims to come from.
+        // endregion snippet:vault-answer-query
+
+        val asTheClientReadsIt = Utils.parseQueryResult(answer)!!
+        assertEquals("the disclosure is what the user released", released, asTheClientReadsIt.fields)
+        assertEquals("…under the key the vault holds", storedKey, asTheClientReadsIt.publicKey)
+        assertTrue(
+            "…correlated to the request it answers",
+            Utils.matchesRequestCode(answer, REQUEST_CODE),
+        )
+        assertTrue(
+            "and a disclosure travels under `extra_query_result_fields`, so the share flow's " +
+                "reader finds no fields in it: the two builders are not interchangeable, which " +
+                "is the mistake the request-taking pair exists to remove",
+            Utils.parseShareResult(answer)!!.fields.isEmpty(),
+        )
+
+        // "The request's key is not echoed" is invisible while the caller asks about the key
+        // this vault holds, so it is measured over a request naming another key. A real vault
+        // would refuse that request rather than answer it — which key is answerable is a consent
+        // decision and not this builder's business; what is measured here is only that the key
+        // in the answer came from the parameter and not from the request.
+        val askingAboutAnotherKey = Utils.parseQueryRequest(
+            Utils.createQueryIntent(context, publicKey = otherKey, requestCode = REQUEST_CODE),
+        )!!
+        assertEquals(
+            "a builder that echoed the request's key would let a caller name the profile its " +
+                "own disclosure claims to come from",
+            storedKey,
+            Utils.parseQueryResult(
+                Utils.createQueryResultIntent(askingAboutAnotherKey, storedKey, released),
+            )!!.publicKey,
+        )
+    }
+
+    /**
+     * The login answer: a signature over the nonce the request carried, made with the private key
+     * of the named profile.
+     *
+     * The read-back here is the strongest one available, because the client's own check is
+     * cryptographic: [SignChallengeResult.isVerified] against the public key it already stores
+     * and the nonce it generated. So the region is held to the only thing that matters about a
+     * login answer — that it authenticates — and to the two ways it could fail to: a signature
+     * over the wrong bytes, and a signature from the wrong key.
+     *
+     * The region signs with a `PrivateKey` passed in, which is what a vault has: a Keystore
+     * handle for the profile's key. This library never holds one, never sees one, and does no
+     * signing — `createSignChallengeResultIntent` writes what the vault says it signed, and only
+     * the client's verification decides whether that is true.
+     *
+     * **And the region refuses before it signs**, which is why it is a nine-line function and not
+     * a two-line one. This is the first page in this repository to show a vault signing anything,
+     * so a block without [Utils.isStatementPreImage] in it would be a copyable signing oracle:
+     * the nonce is caller-chosen bytes, a statement's pre-image is exactly such bytes, and a
+     * signature over one is a valid key rotation obtained from a "prove your identity" dialog.
+     * The obligation is the protocol's and the enforcement is the vault's — nothing in LIM
+     * refuses such a nonce, and whether `parseSignChallengeRequest` should is a narrowing drafted
+     * under "Blocked on human" and not this task's to answer.
+     */
+    @Test
+    fun `a login answer is a signature the client verifies against the key it already holds`() {
+        val incoming = challenge()
+        val nonce = Utils.parseSignChallengeRequest(incoming)!!.nonce
+
+        // region snippet:vault-answer-login
+        // A login is answered with a signature over the nonce the request carried. The bytes to
+        // sign come off the parsed request; the key is the one this vault minted for the named
+        // profile — a Keystore handle in a real vault, and never anything this library holds.
+        fun answerLogin(incoming: Intent, profileKey: PrivateKey): Intent? {
+            val request = Utils.parseSignChallengeRequest(incoming) ?: return null
+            // The check a signing device owes every signature it makes, and the reason this is
+            // not a two-line function: these bytes are whatever the caller chose, and they could
+            // be the pre-image of a statement this key authorises rather than a login challenge.
+            // Get one signed under a "prove your identity" dialog and the answer is a valid key
+            // rotation. Only this side can tell the two apart, and nothing in LIM refuses on a
+            // vault's behalf — the parser hands the bytes over and this is the call that stops.
+            if (Utils.isStatementPreImage(request.nonce)) return null
+            val algorithm = "SHA256withRSA"
+            val signature = Signature.getInstance(algorithm).run {
+                initSign(profileKey)
+                update(request.nonce)
+                sign()
+            }
+            // `algorithm` is informational and is honoured by nothing: the client's verification
+            // hardcodes `SHA256withRSA`, because taking the algorithm from the sender is how
+            // algorithm confusion gets in. Declare it for a reader, not for a verifier.
+            return Utils.createSignChallengeResultIntent(request, signature, heldProfile, algorithm)
+        }
+        // endregion snippet:vault-answer-login
+
+        val answer = answerLogin(incoming, profileKeyPair.private)!!
+        val asTheClientReadsIt = Utils.parseSignChallengeResult(answer)!!
+        assertTrue(
+            "the client authenticates the answer against the key it already stores and the " +
+                "nonce it generated — the whole point of the flow, and the only check that " +
+                "decides whether a login happened",
+            asTheClientReadsIt.isVerified(storedKey, nonce),
+        )
+        assertEquals("the profile travels beside the proof", heldProfile, asTheClientReadsIt.fields)
+        assertTrue(
+            "…correlated to the request it answers",
+            Utils.matchesRequestCode(answer, REQUEST_CODE),
+        )
+        assertFalse(
+            "a signature over bytes the client did not send authenticates nothing, which is " +
+                "what makes the nonce the client's to choose",
+            asTheClientReadsIt.isVerified(storedKey, Utils.generateNonce()),
+        )
+        assertFalse(
+            "…and neither does one from a key the client does not hold",
+            asTheClientReadsIt.isVerified(otherKey, nonce),
+        )
+
+        // The one nonce the region refuses, and the reason the refusal is in the published block
+        // rather than only in prose: a page a vault author copies from must not hand them a
+        // signing oracle. `ClientIntegrationExampleTest > the vault refuses to sign a statement
+        // pre-image handed to it as a challenge` holds the same property over a different
+        // fixture; what is asserted here is that *this* block refuses.
+        val preImage = Utils.rotationStatementBytes(
+            RotationStatement(
+                oldPublicKey = storedKey,
+                newPublicKey = otherKey,
+                statementId = "rotation-dressed-as-a-login",
+                issuedAtMillis = 1_770_000_000_000L,
+                expiresAtMillis = 1_770_000_600_000L,
+            ),
+        )
+        assertTrue("precondition: these bytes are a statement", Utils.isStatementPreImage(preImage))
+        assertNull(
+            "a statement's pre-image offered as a challenge is refused, unsigned: signing it " +
+                "would answer a `prove your identity` dialog with a valid key rotation",
+            answerLogin(
+                Utils.createSignChallengeIntent(context, storedKey, preImage, REQUEST_CODE),
+                profileKeyPair.private,
+            ),
+        )
+        assertFalse(
+            "…and the refusal is the pre-image's doing rather than a function that refuses " +
+                "everything: a generated nonce is never one",
+            Utils.isStatementPreImage(nonce),
+        )
+    }
+
+    /**
+     * The one answer that acknowledges the optional-fields declaration, and the two things a vault
+     * must not get wrong about it: the acknowledgement rides on the **answer** only, and it is
+     * written only when the stored payload satisfies what the client declared.
+     *
+     * The assertions read the acknowledgement back with `parseAppliedOptionalFields` and then with
+     * `checkFieldRequirements`, which is the verdict the client's own handler branches on — so the
+     * page's claim is held to what the client concludes rather than to an extra being present.
+     * `ResultBuilderTest` owns the exhaustive version of the "only when satisfied" rule, over
+     * every shape of payload; what is asserted here is the one pair the page shows.
+     */
+    @Test
+    fun `the requirements-aware answer acknowledges a declaration the stored payload satisfies`() {
+        val incoming = Utils.createShareIntent(
+            context,
+            pushedEntry(),
+            REQUEST_CODE,
+            setOf("phone"),
+            Utils.DEFAULT_ENDEAVOR_PACKAGE,
+        )
+        val request = Utils.parseShareRequest(incoming)!!
+        val declared = Utils.parseFieldRequirements(incoming)!!
+        // What the user typed: both required rows filled in, the optional one left blank.
+        val draft = linkedMapOf(
+            "name" to TypedField("Ada", FieldType.STRING),
+            "email" to TypedField("ada@example.test", FieldType.EMAIL),
+            "phone" to TypedField("", FieldType.PHONE),
+        )
+
+        // region snippet:vault-answer-optional
+        // A vault that enforces the optional-fields declaration says what it enforced, and says
+        // it on the answer only — there is no extra on the request to echo back. `committed` is
+        // the Save gate and the payload in one: it is `null` exactly while a required row is
+        // still blank, and it drops the optional rows the user left empty rather than storing
+        // them as blank values.
+        val stored = declared.committed(draft)
+        // The acknowledgement rides on this overload, which has no request-taking sibling — pass
+        // the token off the parsed request yourself. It writes the acknowledgement only when the
+        // payload satisfies the declaration, so the answer can never claim more than it carries.
+        val answer = stored?.let {
+            Utils.createShareResultIntent(storedKey, it, request.requestCode, declared)
+        }
+        // endregion snippet:vault-answer-optional
+
+        assertEquals(
+            "the optional row the user left blank is dropped, not stored empty",
+            setOf("name", "email"),
+            stored?.keys,
+        )
+        assertEquals(
+            "the answer says which fields it applied the declaration to",
+            setOf("phone"),
+            Utils.parseAppliedOptionalFields(answer),
+        )
+        assertEquals(
+            "…and the verdict the client's handler branches on is the honoured one",
+            FieldRequirementsVerdict.HONOURED,
+            Utils.checkFieldRequirements(declared, answer!!),
+        )
+        // The rest of the envelope, read back the way the other three answers are. Neither
+        // assertion above reaches it — `parseAppliedOptionalFields` and `checkFieldRequirements`
+        // read the two field extras and nothing else — so without these two the published block
+        // could pass a blank key and a dropped token and stay green, which is the one failure
+        // this file exists to make impossible.
+        assertEquals(
+            "the answer still names the key the profile was stored under",
+            storedKey,
+            Utils.parseShareResult(answer)!!.publicKey,
+        )
+        assertTrue(
+            "…and still carries the token off the parsed request, which this overload does not " +
+                "do for you",
+            Utils.matchesRequestCode(answer, REQUEST_CODE),
+        )
+        assertNull(
+            "a draft with a required row still blank has nothing to answer with: Save is " +
+                "blocked, and the client sees a refusal rather than a short profile",
+            declared.committed(draft + ("name" to TypedField("", FieldType.STRING))),
+        )
+        assertNull(
+            "and an answer whose payload does not satisfy the declaration acknowledges " +
+                "nothing, rather than claiming a declaration it broke — the client reads it as " +
+                "an answer from a vault that enforced nothing",
+            Utils.parseAppliedOptionalFields(
+                Utils.createShareResultIntent(storedKey, draft, request.requestCode, declared),
+            ),
+        )
+    }
+
+    // ── Refusing ──────────────────────────────────────────────────────────
+
+    /**
+     * The fourth answer, and the one no builder in this library mints: `RESULT_CANCELED` carrying
+     * the echoed correlation token and nothing else.
+     *
+     * Two properties, and both are the section's whole claim. **The token has to be there** —
+     * strip it and `matchesRequestCode` goes false, so the client cannot tell which request was
+     * refused, which is asserted here rather than argued. And **a refusal is a result code, not a
+     * payload**: the intent above parses as a readable envelope with nothing in it, so a handler
+     * that branched on the payload would read a refusal as an answer that disclosed nothing.
+     *
+     * **Why no builder, measured rather than asserted in prose.** Every result builder here
+     * attaches `extra_protocol_version` unconditionally, so routing a refusal through one would
+     * tell the caller that something on this side understood the request — one bit more than a
+     * bare refusal gives. The extras of both shapes are compared below. Whether LIM should
+     * publish a refusal builder, and whether a refusal should carry the version, is a protocol
+     * decision drafted under "Blocked on human"; this test pins today's shape so that question
+     * has to be answered rather than drift.
+     */
+    @Test
+    fun `a refusal is a result code and the echoed token, and a builder would say more than that`() {
+        val request = Utils.parseQueryRequest(queryIntent())!!
+
+        // region snippet:vault-refusal
+        // Refusal is a first-class answer — the user declined, or this vault holds no such
+        // profile — and it is the one answer no builder here mints. Two lines: the result code,
+        // and the correlation token echoed back. Not an empty intent, because correlation has to
+        // survive a refusal or the client cannot tell which request was refused.
+        val refusalCode = Activity.RESULT_CANCELED
+        val refusal = Intent().apply {
+            request.requestCode?.let { putExtra(Utils.EXTRA_SHARE_REQUEST_CODE, it) }
+        }
+        // `setResult(refusalCode, refusal)` and finish. Attach nothing else: no reason, no
+        // status, no version echo. A refusal that said why would also be saying that something
+        // on this side understood the request, and that is a disclosure of its own.
+        // endregion snippet:vault-refusal
+
+        assertEquals(
+            "precondition: a refusal is a result code, and the payload is not what says so",
+            Activity.RESULT_CANCELED,
+            refusalCode,
+        )
+        assertTrue(
+            "the echoed token is what makes a refusal correlatable at all",
+            Utils.matchesRequestCode(refusal, REQUEST_CODE),
+        )
+        assertFalse(
+            "…and dropping it is the one way to get this wrong: the client is then holding a " +
+                "refusal it cannot attribute to a request",
+            Utils.matchesRequestCode(Intent(), REQUEST_CODE),
+        )
+        assertEquals(
+            "one extra and no more",
+            setOf(Utils.EXTRA_SHARE_REQUEST_CODE),
+            refusal.extras!!.keySet(),
+        )
+        assertEquals(
+            "the refusal still parses — it is a readable envelope with nothing in it, so the " +
+                "result code is the only thing that says it is a refusal",
+            QueryResult(emptyMap(), null, REQUEST_CODE, null),
+            Utils.parseQueryResult(refusal),
+        )
+
+        // The measurement behind "no builder": the nearest thing a builder can mint carries
+        // three extras the refusal does not, including the version echo.
+        val throughABuilder = Utils.createQueryResultIntent(request, storedKey, emptyMap())
+        assertEquals(
+            "a builder-minted answer with nothing disclosed is not this refusal: it names the " +
+                "key, carries an empty payload and echoes the protocol version",
+            setOf(
+                Utils.EXTRA_SHARE_REQUEST_CODE,
+                Utils.EXTRA_PUBLIC_KEY,
+                Utils.EXTRA_QUERY_RESULT_FIELDS,
+                Utils.EXTRA_PROTOCOL_VERSION,
+            ),
+            throughABuilder.extras!!.keySet(),
+        )
+        assertEquals(
+            "…and that version echo is the bit at stake: the refusal declares nothing, so a " +
+                "refused client cannot tell a current vault's decision from a legacy vault " +
+                "ignoring a request it did not understand",
+            null,
+            Utils.parseQueryResult(refusal)!!.vaultProtocolVersion,
+        )
+        assertEquals(
+            Utils.PROTOCOL_VERSION,
+            Utils.parseQueryResult(throughABuilder)!!.vaultProtocolVersion,
+        )
+    }
+
     // ── Fixtures ──────────────────────────────────────────────────────────
 
     /** A sign-up as a client sends one: keys and types filled in, values for the user to type. */
@@ -321,9 +754,9 @@ class VaultGuideExamplesTest {
     private fun signUpIntent(): Intent =
         Utils.createShareIntent(context, pushedEntry(), requestCode = REQUEST_CODE)
 
-    /** A query naming a key the vault is assumed to hold already. */
+    /** A query naming the key this vault holds. */
     private fun queryIntent(): Intent =
-        Utils.createQueryIntent(context, publicKey = STORED_KEY, requestCode = REQUEST_CODE)
+        Utils.createQueryIntent(context, publicKey = storedKey, requestCode = REQUEST_CODE)
 
     /** A share-shaped intent carrying [payload] verbatim, so a hostile one can be driven through. */
     private fun shareIntentCarrying(payload: String): Intent =
@@ -332,17 +765,52 @@ class VaultGuideExamplesTest {
 
     private fun challenge(): Intent = Utils.createSignChallengeIntent(
         context,
-        publicKey = STORED_KEY,
+        publicKey = storedKey,
         nonce = Utils.generateNonce(),
         requestCode = REQUEST_CODE,
     )
 
-    private companion object {
+    /** The profile this vault holds, as the user filled it in — what an answer discloses from. */
+    private val heldProfile = linkedMapOf(
+        "name" to TypedField("Ada", FieldType.STRING),
+        "email" to TypedField("ada@example.test", FieldType.EMAIL),
+        "phone" to TypedField("+44 7700 900123", FieldType.PHONE),
+    )
+
+    companion object {
         private const val REQUEST_CODE = "sign-up-1"
 
-        /** A key as a vault holds one: opaque to everybody, and the account identifier. */
-        private const val STORED_KEY = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A-fixture"
-
         private val FIELD_NAMES = listOf("name", "email", "phone")
+
+        /**
+         * The keypair this vault minted for its one profile.
+         *
+         * A **real** 2048-bit RSA pair rather than a placeholder string, because the login answer
+         * below is a genuine signature and the only read-back worth making of one is the client's
+         * own `isVerified`. Generation costs ~100ms, so it happens once for the class — the
+         * arrangement `GuideExamplesTest` and `ClientIntegrationExampleTest` both use.
+         */
+        private lateinit var profileKeyPair: KeyPair
+
+        /**
+         * The key as a vault hands it out: the Base64 public half, opaque to everybody, and the
+         * account identifier for ever after. The client stores this and nothing else.
+         */
+        private lateinit var storedKey: String
+
+        /** A second key, so "verifies against the wrong key" can be asserted rather than asserted of nothing. */
+        private lateinit var otherKey: String
+
+        @JvmStatic
+        @BeforeClass
+        fun mintTheProfilesKeys() {
+            val generator = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }
+            profileKeyPair = generator.generateKeyPair()
+            storedKey = Base64.encodeToString(profileKeyPair.public.encoded, Base64.NO_WRAP)
+            otherKey = Base64.encodeToString(
+                generator.generateKeyPair().public.encoded,
+                Base64.NO_WRAP,
+            )
+        }
     }
 }

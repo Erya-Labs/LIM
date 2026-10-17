@@ -287,6 +287,33 @@ class GuideSnippetTest {
             .takeIf { found < sections.size }
     }
 
+    /**
+     * A coverage floor's measurement, shared by both pages: the names in [required] that appear
+     * in no **executed line** of [regions].
+     *
+     * Two decisions live here rather than in either caller, so that neither page can be measured
+     * more leniently than the other. **Trailing comments are stripped, not only comment-only
+     * lines** — `val x = 1 // then call parseQueryResult` would otherwise satisfy a floor with a
+     * mention rather than a call, which is exactly how a page could document a function it never
+     * demonstrates. And the needle is a plain substring of the remaining code, so
+     * `Utils.parseQueryResult(intent)` counts and so does a qualified or chained spelling; the
+     * cost is that a *different* function whose name contains one of these would count too, which
+     * is why the lists are published names rather than fragments.
+     *
+     * The regions passed in are always one document's own — see [Audit.regionsQuotedBy] — because
+     * a coverage claim is about one page's content and a floor over the union would let one page
+     * satisfy another's.
+     *
+     * `control - a coverage floor measures code and not a trailing comment` is the control for
+     * the stripping, both ways round over one fixture region.
+     */
+    private fun coverageShortfalls(regions: List<Region>, required: List<String>): List<String> =
+        executedCode(regions).let { code -> required.filterNot { it in code } }
+
+    /** [regions]' lines with trailing comments stripped — what [coverageShortfalls] searches. */
+    private fun executedCode(regions: List<Region>): String =
+        regions.flatMap { it.lines }.map { it.substringBefore("//") }.joinToString("\n")
+
     // ── The seven properties ──────────────────────────────────────────────
 
     @Test
@@ -531,18 +558,12 @@ class GuideSnippetTest {
     @Test
     fun `every function in the core loop is called in a snippet`() {
         val guideRegions = onDisk().regionsQuotedBy(GUIDE_PATH)
-        // Trailing comments go too, not only comment-only lines: `val x = 1 // then call
-        // parseQueryResult` would otherwise satisfy the floor with a mention rather than a call.
-        val code = guideRegions
-            .flatMap { it.lines }
-            .map { it.substringBefore("//") }
-            .joinToString("\n")
         assertEquals(
             "`$GUIDE_PATH` must show the whole core loop in code a test ran, not describe it in " +
                 "a comment — and in a region *that page* quotes, not one another document does. " +
                 "These appear in no executed line of a region the guide quotes",
             emptyList<String>(),
-            CORE_LOOP.filterNot { it in code },
+            coverageShortfalls(guideRegions, CORE_LOOP),
         )
         // Floor: measured over a per-document subset, so an empty subset would pass for ever —
         // and the subset is empty exactly when every marker in the guide has gone stale.
@@ -553,9 +574,55 @@ class GuideSnippetTest {
         )
         println(
             "GuideSnippetTest: ${CORE_LOOP.size} core-loop functions, all called across " +
-                "${guideRegions.size} regions $GUIDE_PATH quotes (${code.lines().size} code " +
+                "${guideRegions.size} regions $GUIDE_PATH quotes " +
+                "(${executedCode(guideRegions).lines().size} code " +
                 "lines of ${guideRegions.sumOf { it.lines.size }} snippet lines), of " +
                 "${onDisk().regions.size} regions in the tree",
+        )
+    }
+
+    /**
+     * The vault page's own coverage floor, [CORE_LOOP]'s sibling and measured exactly the same
+     * way: over the **code** lines of the regions **that page** quotes, so a function named only
+     * in a snippet's trailing comment does not satisfy it and a function called only in a
+     * client-page region does not either.
+     *
+     * The two floors are separate assertions because they are claims about two audiences. A vault
+     * never calls `shareEntry`; a client never calls `parseShareRequest`. Merging the lists would
+     * oblige each page to demonstrate the other half of the wire, and merging the *regions* would
+     * let either page satisfy the other's floor — which is the failure the narrowing above
+     * closes, one page along.
+     *
+     * **This list is hand-written, and that is the honest limit of what it buys.** It is the
+     * vault-half surface as somebody read it on the day the page was written: nothing here
+     * notices a published vault-side function that nobody added to the list, so an eighth one
+     * would be demonstrated by no block, reported by no floor, and documented nowhere while every
+     * test stayed green. What it does catch is the regression — a page that *stops* showing one
+     * of these, or shows it in a comment.
+     */
+    @Test
+    fun `every function a vault calls is called in a vault-page snippet`() {
+        val vaultRegions = onDisk().regionsQuotedBy(VAULT_PATH)
+        assertEquals(
+            "`$VAULT_PATH` must show the whole vault half of the wire in code a test ran, not " +
+                "describe it in a comment — and in a region *that page* quotes. These appear in " +
+                "no executed line of a region the vault page quotes",
+            emptyList<String>(),
+            coverageShortfalls(vaultRegions, VAULT_LOOP),
+        )
+        // The same floor the core loop carries, for the same reason: a per-document subset is
+        // empty exactly when every marker on that page has gone stale, and an empty subset would
+        // satisfy a coverage claim for ever.
+        assertTrue(
+            "no region resolved from a `$VAULT_PATH` block, so the vault half was measured " +
+                "over nothing at all",
+            vaultRegions.isNotEmpty(),
+        )
+        println(
+            "GuideSnippetTest: ${VAULT_LOOP.size} vault-half functions, all called across " +
+                "${vaultRegions.size} regions $VAULT_PATH quotes " +
+                "(${executedCode(vaultRegions).lines().size} code " +
+                "lines of ${vaultRegions.sumOf { it.lines.size }} snippet lines)",
         )
     }
 
@@ -1467,6 +1534,39 @@ class GuideSnippetTest {
         )
     }
 
+    /**
+     * (r) A coverage floor measures **code**, and the stripping is proved both ways round over one
+     * region rather than argued in the helper's KDoc.
+     *
+     * The shape it refuses is the cheapest way to make a coverage claim true without
+     * demonstrating anything: name the function in a trailing comment. Both floors above —
+     * [CORE_LOOP] and [VAULT_LOOP] — rest on this, and a floor measured over the region's text as
+     * a whole would pass this fixture, which is the half asserted last.
+     */
+    @Test
+    fun `control - a coverage floor measures code and not a trailing comment`() {
+        val regions = regionsIn("CoverageTest.kt", FIXTURE_COVERAGE_SOURCE)
+        assertEquals("precondition: one region to measure", 1, regions.size)
+        assertEquals(
+            "a function called in an executed line satisfies the floor",
+            emptyList<String>(),
+            coverageShortfalls(regions, listOf("calledForReal")),
+        )
+        assertEquals(
+            "…and one named only in the trailing comment of that same line does not. A mention " +
+                "is not a call, so stripping whole comment lines is not enough — it is the tail " +
+                "of a code line that would otherwise satisfy a floor with the sentence saying a " +
+                "page ought to show something",
+            listOf("mentionedOnly"),
+            coverageShortfalls(regions, listOf("mentionedOnly")),
+        )
+        assertTrue(
+            "the spelling this control refuses must pass over the same fixture, or the two do " +
+                "not differ here and this control proves nothing",
+            regions.flatMap { it.lines }.joinToString("\n").contains("mentionedOnly"),
+        )
+    }
+
     // ── Parsing ───────────────────────────────────────────────────────────
 
     /** Fence lines [blocksIn] would not parse, each located. Rule 7's whole content. */
@@ -1981,17 +2081,18 @@ class GuideSnippetTest {
         /**
          * `docs/VAULT.md`'s sections, pinned the same way and for the same reason.
          *
-         * **Three, and it is the reading half of the wire only.** That page answers a vault
-         * author rather than an integrator, and it is being built in instalments: what a vault
-         * answers for, how a request is routed, and how a share request is read. Answering a
-         * request and the obligations a vault owes are the next instalments, and this list is
-         * where each of them is admitted — a section promised in prose before it is on this list
-         * is a promise nothing holds.
+         * **Five, which is a vault's whole turn: read a request, answer it, or refuse.** That
+         * page answers a vault author rather than an integrator, and it is being built in
+         * instalments — the obligations a vault owes the protocol are the one still to come, and
+         * this list is where it will be admitted. A section promised in prose before it is on
+         * this list is a promise nothing holds.
          */
         private val REQUIRED_VAULT_SECTIONS = listOf(
             "What a vault answers for",
             "Routing an incoming request",
             "Reading a share request",
+            "Answering a request",
+            "Refusing",
         )
 
         /**
@@ -2032,6 +2133,39 @@ class GuideSnippetTest {
             "parseSignChallengeResult",
             "isVerified",
             "isNonceFresh",
+        )
+
+        /**
+         * The vault half of the same idea: the published surface a vault author actually calls —
+         * read the request, read what the client declared about it, answer it.
+         *
+         * Seven names, in the order a vault meets them, and the list is **hand-written**: it is
+         * this file's reading of the vault-side surface rather than anything derived from the
+         * published API, so it cannot notice a vault-half function nobody added to it. See
+         * `every function a vault calls is called in a vault-page snippet` for what that costs
+         * and what the floor still buys.
+         *
+         * Three exclusions, each a choice rather than an oversight. `parseFieldRequirements` is
+         * here and `checkFieldRequirements` is not: the first reads a client's declaration off a
+         * request, which is a vault's job, while the second reads a vault's acknowledgement off an
+         * answer, which is the client's. The refusal has no entry because there is no builder to
+         * call — a refusal is a result code and a hand-written echo, which is a standing protocol
+         * question rather than a gap in this list. And `isStatementPreImage` is deliberately
+         * **not** here although a vault-page region calls it and this library calls refusing an
+         * obligation: this list is the *wire* a request travels, and that call is a vault's duty
+         * rather than a step in moving one. The region's own `assertNull` catches the regression
+         * of lifting the guard out, so nothing is unpinned by the choice — but it is a choice, and
+         * whether this list should be derived from the published surface instead of hand-written
+         * is the question its hand-written-ness leaves open.
+         */
+        private val VAULT_LOOP = listOf(
+            "parseShareRequest",
+            "parseQueryRequest",
+            "parseSignChallengeRequest",
+            "parseFieldRequirements",
+            "createShareResultIntent",
+            "createQueryResultIntent",
+            "createSignChallengeResultIntent",
         )
 
         /**
@@ -2523,6 +2657,23 @@ class GuideSnippetTest {
             "```json",
             "[]",
             "```",
+        ).joinToString("\n")
+
+        /**
+         * Control (r)'s source: one region naming two functions, one called and one mentioned in
+         * the trailing comment of that same line — the exact pair a coverage floor has to tell
+         * apart, on one line so that dropping comment-only lines is not enough to tell them.
+         */
+        private val FIXTURE_COVERAGE_SOURCE = listOf(
+            "class CoverageTest {",
+            "",
+            "    @Test",
+            "    fun `a fixture test holding one region`() {",
+            "        // region snippet:coverage",
+            "        val answer = Utils.calledForReal(1) // then call Utils.mentionedOnly(answer)",
+            "        // endregion snippet:coverage",
+            "    }",
+            "}",
         ).joinToString("\n")
 
         /** Control (q): a second document with prose and no fence at all. */
