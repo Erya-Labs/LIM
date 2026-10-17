@@ -7,11 +7,11 @@ import org.junit.Test
 import java.io.File
 
 /**
- * `docs/INTEGRATION.md` is the library's whole adoption surface, and prose rots. This test is what
- * stops it: **every fenced Kotlin block in the guide is a region of a test source, quoted
- * verbatim.**
+ * `docs/INTEGRATION.md` and `docs/VAULT.md` are the library's whole adoption surface — one page for
+ * each half of the wire — and prose rots. This test is what stops it: **every fenced Kotlin block
+ * in either document is a region of a test source, quoted verbatim.**
  *
- * The guide marks each block with an HTML comment naming its source —
+ * A document marks each block with an HTML comment naming its source —
  * `<!-- snippet: GuideExamplesTest.kt#login-result -->` — and the test source wraps the quoted
  * lines in `// region snippet:login-result` … `// endregion snippet:login-result`. Seven properties
  * hold the pair together:
@@ -20,18 +20,29 @@ import java.io.File
  *  2. every marker resolves to a region that exists;
  *  3. every block equals its region verbatim, after stripping the region's common leading
  *     indentation and nothing else;
- *  4. every region in every test source is quoted by **exactly one** block — so a marker left
- *     behind after an edit fails as surely as a missing one — and no two regions share a name,
- *     because an ambiguous name is not compared against anything;
+ *  4. every region in every test source is quoted by **exactly one** block **in the whole document
+ *     set** — so a marker left behind after an edit fails as surely as a missing one — and no two
+ *     regions share a name, because an ambiguous name is not compared against anything;
  *  5. every region sits **directly in the body of an un-`@Ignore`d `@Test` method of the
- *     top-level test class**, which is what makes a printed snippet *evidence*: each line in the
- *     guide is a line JUnit executed to get this suite green. Anything looser admits code that
+ *     top-level test class**, which is what makes a printed snippet *evidence*: each line in a
+ *     document is a line JUnit executed to get this suite green. Anything looser admits code that
  *     compiles and never runs — a helper, a nested class, a `@Test` method *of* a nested class
  *     (which the JUnit4 runner does not collect), an uninvoked lambda, an `@Ignore`d test;
  *  6. every fenced block in any other language is excused by name in [NOT_A_SNIPPET], with a
  *     reason and a test that covers it instead;
- *  7. every fence in the guide is one this test can see — an indented or `~~~` fence is refused
- *     rather than silently skipped.
+ *  7. every fence in either document is one this test can see — an indented or `~~~` fence is
+ *     refused rather than silently skipped.
+ *
+ * **Which of the seven are per-document and which are tree-wide is the one thing to get right
+ * here.** Rules 1, 2, 3, 6 and 7 are properties of a document and are asked of each on its own —
+ * including rule 1's non-vacuity floor, which compares a document's Kotlin blocks against **its
+ * own** [SNIPPET_DOCUMENTS] section list, because a floor computed over the union would be
+ * satisfied by the guide's nineteen blocks while a second document published none. Rule 4 is the
+ * opposite: "every region is quoted by exactly one block" is a claim about the *tree*, so it is
+ * computed across the union of every document. Spelled per-document it would report every region
+ * the other page quotes as an orphan, which is what reddened the day `docs/VAULT.md` arrived.
+ * [Block.excuseKey] carries the document for the same reason: two pages may legitimately use the
+ * same heading, and one page's excuse may not cover the other's block.
  *
  * **The marker rule binds ` ```kotlin ` and nothing else**, which is why the Setup section's
  * dependency declaration is fenced ` ```gradle `, the vault-visibility section's manifest element is
@@ -43,24 +54,26 @@ import java.io.File
  *
  * **What this test deliberately does not pin: the prose.** Rewriting any sentence outside a fenced
  * block changes nothing here, and that is the honest statement of its scope — it pins code, not
- * writing. Whether the guide reads well is a human judgement (VISION), and an assertion pretending
- * otherwise would be worse than none.
+ * writing. Whether either page reads well is a human judgement (VISION), and an assertion
+ * pretending otherwise would be worse than none.
  *
  * Regex over text, so it runs in milliseconds: no Robolectric, no reflection beyond resolving the
- * excuses' citations. The text is five things, not two — the guide, every Kotlin test source,
- * `README.md`, `LIM/build.gradle.kts` and `settings.gradle.kts`, every one of them reached through
- * [locate]. "Two files" here was false from this class's first commit, which landed the coordinate
- * pin, the build-from-source pin and the README link test beside the snippet rules and beside that
- * sentence — not falsified later by something added since. The *pairwise* sense of "two files" —
- * one guide block against one region — is the one that was always true, so the two places that use
- * it, the next section's heading and [Audit]'s own KDoc, are left exactly as they were.
+ * excuses' citations. The text is six things, not two — the two documents, every Kotlin test
+ * source, `README.md`, `LIM/build.gradle.kts` and `settings.gradle.kts`, every one of them reached
+ * through [locate]. "Two files" here was false from this class's first commit, which landed the
+ * coordinate pin, the build-from-source pin and the README link test beside the snippet rules and
+ * beside that sentence — not falsified later by something added since. The *pairwise* sense of
+ * "two files" — one block against one region — is the one that was always true, so the two places
+ * that use it, the next section's heading and [Audit]'s own KDoc, are left exactly as they were.
  */
 class GuideSnippetTest {
 
     // ── What the two files contain ────────────────────────────────────────
 
-    /** A fenced block in the guide, with the marker above it if it has one. */
+    /** A fenced block in one of the documents, with the marker above it if it has one. */
     private class Block(
+        /** Which document it came from — rules 1, 6 and 7 are asked of each one on its own. */
+        val document: String,
         val heading: String,
         val language: String,
         val markerFile: String?,
@@ -71,10 +84,20 @@ class GuideSnippetTest {
         /** `GuideExamplesTest.kt#login-result`, or null for a block with no marker. */
         val marker: String? = markerFile?.let { "$it#$markerRegion" }
 
-        val where: String = "the `$language` block at line $lineNumber under \"$heading\""
+        val where: String =
+            "the `$language` block at $document:$lineNumber under \"$heading\""
 
-        /** The key [NOT_A_SNIPPET] is spelled with: fence language and heading, nothing else. */
-        val excuseKey: String = "$language under $heading"
+        /**
+         * The key [NOT_A_SNIPPET] is spelled with: fence language, heading and document.
+         *
+         * **The document is part of the key, and leaving it out was the bug waiting to happen.**
+         * Two pages may legitimately carry the same heading — and if one of them excuses a
+         * ` ```json ` block under *Appendix*, that excuse would silently cover a completely
+         * different block under the other page's *Appendix*, which is the one thing an excuse map
+         * exists to prevent. Qualifying it also keeps the dangling-excuse rule sharp: an excuse
+         * naming a heading only the *other* document has is now reported rather than resolved.
+         */
+        val excuseKey: String = "$language under $heading in $document"
     }
 
     /** A `// region snippet:name` span of a test source. */
@@ -124,6 +147,8 @@ class GuideSnippetTest {
     private class Audit(
         val blocks: List<Block>,
         val regions: List<Region>,
+        /** The regions a marker can resolve to: every region whose name is unique. See [audit]. */
+        private val byId: Map<String, Region>,
         val unmarkedKotlinBlocks: List<String>,
         val danglingMarkers: List<String>,
         val mismatched: List<String>,
@@ -136,16 +161,39 @@ class GuideSnippetTest {
         val collidingExcuseKeys: List<String>,
     ) {
         val kotlinBlocks: List<Block> = blocks.filter { it.language == SNIPPET_LANGUAGE }
+
+        /** [document]'s own Kotlin blocks. Rule 1's floor is asked of each document. */
+        fun kotlinBlocksIn(document: String): List<Block> =
+            kotlinBlocks.filter { it.document == document }
+
+        /**
+         * The regions [document]'s own blocks quote.
+         *
+         * The counterpart of [regions], which is every region in the tree and is what rule 4 has
+         * to be measured over. A **coverage** floor is the opposite kind of claim — it is about
+         * one document's content — so measuring one over [regions] would let a region quoted only
+         * by the vault page satisfy the guide's floor with nobody able to see it. See
+         * `every function in the core loop is called in a snippet`.
+         */
+        fun regionsQuotedBy(document: String): List<Region> =
+            kotlinBlocksIn(document).mapNotNull { block -> block.marker?.let(byId::get) }
     }
 
     // ── The one measurement every assertion below reads ───────────────────
 
     /**
-     * The guide against every Kotlin test source.
+     * The documents against every Kotlin test source.
      *
      * The *sources* are every `.kt` file rather than `GuideExamplesTest.kt` alone, because rule 4
      * is a claim about all of them: a region marked anywhere in the suite and quoted nowhere is
      * exactly the stale marker this test exists to find.
+     *
+     * **The documents are taken together, and rule 4 is the reason.** A per-document audit would
+     * report every region the *other* page quotes as an orphan, which is precisely what happened
+     * the day a second document arrived carrying regions of its own: the only spelling under which
+     * "every region is quoted by exactly one block" stays true of the tree is the union. Each
+     * [Block] carries the document it came from, so the complaints that *are* per-document — rules
+     * 1, 6 and 7 — still name it.
      *
      * A region whose name is duplicated is held out of the verbatim, orphan and dangling-marker
      * answers entirely rather than being resolved arbitrarily. Resolving it would report a block
@@ -154,11 +202,11 @@ class GuideSnippetTest {
      * speaks about those names until it is fixed.
      */
     private fun audit(
-        guide: String,
+        documents: Map<String, String>,
         sources: Map<String, String>,
         excuses: Map<String, Excuse>,
     ): Audit {
-        val blocks = blocksIn(guide)
+        val blocks = documents.entries.sortedBy { it.key }.flatMap { blocksIn(it.key, it.value) }
         val regions = sources.entries.sortedBy { it.key }.flatMap { regionsIn(it.key, it.value) }
         val grouped = regions.groupBy { it.id }
         val duplicated = grouped.filterValues { it.size > 1 }
@@ -175,6 +223,7 @@ class GuideSnippetTest {
         return Audit(
             blocks = blocks,
             regions = regions,
+            byId = byId,
             unmarkedKotlinBlocks = kotlinBlocks.filter { it.marker == null }.map { it.where },
             danglingMarkers = quoted.filterNot { it in byId || it in duplicated }
                 .distinct()
@@ -204,52 +253,80 @@ class GuideSnippetTest {
     }
 
     /**
-     * The guide against every test source, measured once for the whole class.
+     * Both documents against every test source, measured once for the whole class.
      *
      * JUnit constructs a fresh instance per test method, so a per-instance `by lazy` re-read and
      * re-parsed all 38 sources 22 times over and took this file from 0.3s to 1.1s — for a file
      * whose whole claim on the suite is that it is regex over text and costs nothing. The files
-     * cannot change within a run, and a mutation to either one re-runs the class from scratch.
+     * cannot change within a run, and a mutation to any one of them re-runs the class from
+     * scratch.
      */
     private fun onDisk(): Audit = cachedOnDisk
-        ?: audit(guideFile().readText(), testSources(), NOT_A_SNIPPET).also { cachedOnDisk = it }
+        ?: audit(documentsOnDisk(), testSources(), NOT_A_SNIPPET).also { cachedOnDisk = it }
+
+    /**
+     * Rule 1's non-vacuity floor, per document — a document must carry at least as many Kotlin
+     * blocks as it names required sections.
+     *
+     * Extracted so that the one way this can be got wrong is falsifiable. Spelled over the union
+     * (`audit.kotlinBlocks.size >= oneList.size`, which is what it was while there was only one
+     * document) it passes with an entirely codeless second page, because the guide's nineteen
+     * blocks already clear any one list — see
+     * `control - the Kotlin-block floor is asked of each document on its own`.
+     *
+     * The floor is *not* a claim that the blocks are distributed across the sections: a document
+     * with every block under one heading satisfies it. What it closes is a scanner that found no
+     * blocks at all, which would make the rule above report no offenders for ever.
+     */
+    private fun blockFloorShortfalls(
+        audit: Audit,
+        required: Map<String, List<String>>,
+    ): List<String> = required.entries.sortedBy { it.key }.mapNotNull { (document, sections) ->
+        val found = audit.kotlinBlocksIn(document).size
+        "$document carries $found Kotlin block(s) for ${sections.size} required section(s)"
+            .takeIf { found < sections.size }
+    }
 
     // ── The seven properties ──────────────────────────────────────────────
 
     @Test
-    fun `every Kotlin block in the guide names a region`() {
+    fun `every Kotlin block in a document names a region`() {
         assertEquals(
-            "a fenced `$SNIPPET_LANGUAGE` block in the guide must be preceded by " +
+            "a fenced `$SNIPPET_LANGUAGE` block in either document must be preceded by " +
                 "`<!-- snippet: File.kt#region -->`. An unmarked block is prose that compiled " +
                 "once and is pinned by nothing, which is the whole failure this test exists to " +
                 "prevent",
             emptyList<String>(),
             onDisk().unmarkedKotlinBlocks,
         )
-        // Floor: a scanner that found no blocks at all would report no offenders for ever.
-        assertTrue(
-            "the guide must contain Kotlin blocks for this to mean anything; found " +
-                "${onDisk().kotlinBlocks.size} of ${onDisk().blocks.size} fenced blocks",
-            onDisk().kotlinBlocks.size >= REQUIRED_SECTIONS.size,
+        assertEquals(
+            "each document must carry Kotlin blocks of its own for the rule above to mean " +
+                "anything, and the floor is its own section list rather than the set's. A floor " +
+                "computed over every document together is cleared by the guide alone — " +
+                "${onDisk().kotlinBlocksIn(GUIDE_PATH).size} blocks against the longest list " +
+                "here — so a second document could publish no code at all and stay green. " +
+                "Shortfalls",
+            emptyList<String>(),
+            blockFloorShortfalls(onDisk(), SNIPPET_DOCUMENTS),
         )
     }
 
     @Test
     fun `every marker resolves to a region that exists`() {
         assertEquals(
-            "a marker in the guide names a region no test source contains — a renamed or " +
-                "deleted region leaves the guide quoting nothing while still looking quoted",
+            "a marker in a document names a region no test source contains — a renamed or " +
+                "deleted region leaves the document quoting nothing while still looking quoted",
             emptyList<String>(),
             onDisk().danglingMarkers,
         )
     }
 
     @Test
-    fun `every block in the guide is its region verbatim`() {
+    fun `every block in a document is its region verbatim`() {
         assertEquals(
-            "a block in the guide has drifted from the region it quotes. The guide is not " +
-                "edited to match: the region is the source of truth, so change the test and " +
-                "copy it across",
+            "a block in one of the documents has drifted from the region it quotes. The document " +
+                "is not edited to match: the region is the source of truth, so change the test " +
+                "and copy it across",
             emptyList<String>(),
             onDisk().mismatched,
         )
@@ -260,25 +337,35 @@ class GuideSnippetTest {
         )
     }
 
+    /**
+     * Rule 4, and the one rule here that is **tree-wide rather than per-document**.
+     *
+     * "Quoted by exactly one block" is a claim about the whole document set: a region the vault
+     * page quotes is not an orphan merely because the guide does not quote it, and a region each
+     * page quotes once is doubly quoted even though neither page quotes it twice. Asked of one
+     * document at a time it would report the other page's every region, which is exactly the red
+     * the day `docs/VAULT.md` arrived.
+     */
     @Test
     fun `every region is quoted by exactly one block`() {
         assertEquals(
             "two regions share a name. Nothing resolves an ambiguous marker, so neither of " +
-                "them is compared against the guide at all until one is renamed — which is a " +
-                "quieter failure than a mismatch and the reason this is its own assertion",
+                "them is compared against either document at all until one is renamed — which " +
+                "is a quieter failure than a mismatch and the reason this is its own assertion",
             emptyList<String>(),
             onDisk().duplicateRegionNames,
         )
         assertEquals(
-            "a region is marked in a test source and quoted by no block in the guide. Either " +
-                "the guide lost the block, or the markers were left behind by an edit — a stale " +
-                "marker is a claim that something is published when it is not",
+            "a region is marked in a test source and quoted by no block in any document. " +
+                "Either a document lost the block, or the markers were left behind by an edit — " +
+                "a stale marker is a claim that something is published when it is not",
             emptyList<String>(),
             onDisk().orphanRegions,
         )
         assertEquals(
-            "a region is quoted by two blocks, so one of them can drift out of the guide's " +
-                "narrative while every verbatim check stays green",
+            "a region is quoted by two blocks — in one document or across both — so one of " +
+                "them can drift out of its page's narrative while every verbatim check stays " +
+                "green",
             emptyList<String>(),
             onDisk().doublyQuotedRegions,
         )
@@ -287,23 +374,35 @@ class GuideSnippetTest {
             "GuideSnippetTest: ${onDisk().regions.size} regions in " +
                 "${onDisk().regions.map { it.file }.distinct().size} source(s), " +
                 "${onDisk().kotlinBlocks.size} Kotlin blocks, " +
-                "${onDisk().blocks.size - onDisk().kotlinBlocks.size} excused block(s)",
+                "${onDisk().blocks.size - onDisk().kotlinBlocks.size} excused block(s) — " +
+                SNIPPET_DOCUMENTS.keys.sorted().joinToString(", ") {
+                    "$it: ${onDisk().kotlinBlocksIn(it).size} Kotlin of " +
+                        "${onDisk().blocks.count { block -> block.document == it }}"
+                },
         )
     }
 
     /**
      * The strongest claim here, and the reason a snippet is evidence rather than paste: the lines
-     * the guide prints are lines JUnit ran.
+     * either document prints are lines JUnit ran.
      *
      * A region in a helper, in an `@Ignore`d test, in an uninvoked lambda, in a nested class body,
      * or in a `@Test` method of a nested class is all still real compiling code — and still never
      * executes, so it could be wrong in any way that compiles. Control (d) below drives all five
      * shapes through this same answer and asserts each is reported.
+     *
+     * **This is also the rule that forbids lifting a snippet off one of this repository's fixture
+     * vaults**, however close one of them already is to what a page needs to show. Every one of
+     * them — `ClientIntegrationExampleTest`'s `Vault` and `SignUpVault`, `GuideExamplesTest`'s
+     * `FixtureVault` and `RequiredFieldsVault`, `RequirementsCompatibilityMatrixTest`'s `V0`, `V1`
+     * and `V2` — is a **nested** class, so the runner collects none of their methods and this rule
+     * reports a region in any of them. A vault page's blocks are written as straight-line code in
+     * `@Test` bodies of a top-level class for that reason and no other.
      */
     @Test
     fun `every quoted region sits inside a function JUnit runs`() {
         assertEquals(
-            "a region's enclosing function is not annotated `@Test`, so the guide is printing " +
+            "a region's enclosing function is not annotated `@Test`, so a document is printing " +
                 "code that compiles but never runs",
             emptyList<String>(),
             onDisk().regionsOutsideATest,
@@ -315,21 +414,24 @@ class GuideSnippetTest {
         assertEquals(
             "a fenced block in a language other than `$SNIPPET_LANGUAGE` is outside the marker " +
                 "rule and therefore backed by no test. Each one must be excused in " +
-                "NOT_A_SNIPPET, keyed by fence language and heading, by somebody who wrote down " +
-                "why",
+                "NOT_A_SNIPPET, keyed by fence language, heading and document, by somebody who " +
+                "wrote down why",
             emptyList<String>(),
             onDisk().unexcusedBlocks,
         )
         assertEquals(
-            "NOT_A_SNIPPET names a block the guide does not contain. A rewritten heading or a " +
-                "deleted block leaves a dead excuse behind, and a dead excuse would wave " +
-                "through the next block that happens to land under that key",
+            "NOT_A_SNIPPET names a block no document contains. A rewritten heading, a deleted " +
+                "block or a heading that exists only on the *other* page leaves a dead excuse " +
+                "behind, and a dead excuse would wave through the next block that happens to " +
+                "land under that key",
             emptyList<String>(),
             onDisk().danglingExcuses,
         )
         assertEquals(
-            "two fenced blocks share one excuse key, so one of them is being excused by the " +
-                "other's reason; give the second block a heading of its own",
+            "two fenced blocks in the same document share one excuse key, so one of them is " +
+                "being excused by the other's reason; give the second block a heading of its " +
+                "own. Two blocks under the same heading in *different* documents do not collide " +
+                "— the key carries the document, so each needs its own excuse",
             emptyList<String>(),
             onDisk().collidingExcuseKeys,
         )
@@ -362,34 +464,48 @@ class GuideSnippetTest {
      * invisible to it: a fence indented under a list item — the shape this guide's "Where to look
      * next" section is one edit away from — a `~~~` fence, and an info string like
      * ` ```kotlin title=x `. A Kotlin block hidden in any of them would be published with nothing
-     * pinning it. Rather than widen the parser and inherit Markdown's indentation rules, the guide
-     * refuses all three and says so here, so the test's name is true of the whole file rather than
-     * of the subset it happens to parse.
+     * pinning it. Rather than widen the parser and inherit Markdown's indentation rules, both
+     * documents refuse all three and say so here, so the test's name is true of every line of
+     * both files rather than of the subset it happens to parse.
      */
     @Test
-    fun `the guide uses no fence this test cannot see`() {
-        val unreadable = unreadableFences(guideFile().readLines())
-        assertEquals(
-            "an indented fence, a `~~~` fence or a fence with an info string beyond the language " +
-                "word is invisible to this test, so a Kotlin block inside one would be published " +
-                "with nothing pinning it. Fence at column 0 with backticks and a bare language " +
-                "word, or widen the parser deliberately",
-            emptyList<String>(),
-            unreadable,
-        )
+    fun `no document uses a fence this test cannot see`() {
+        for (document in SNIPPET_DOCUMENTS.keys.sorted()) {
+            assertEquals(
+                "an indented fence, a `~~~` fence or a fence with an info string beyond the " +
+                    "language word is invisible to this test, so a Kotlin block inside one " +
+                    "would be published with nothing pinning it. Fence at column 0 with " +
+                    "backticks and a bare language word, or widen the parser deliberately. In " +
+                    "`$document`",
+                emptyList<String>(),
+                unreadableFences(locate(document).readLines()),
+            )
+        }
     }
 
-    // ── What the guide must say ───────────────────────────────────────────
+    // ── What the documents must say ───────────────────────────────────────
 
+    /**
+     * Each document's own sections, so neither can ship half-written.
+     *
+     * The two lists are separate because the two pages answer to different readers: the guide's
+     * is what an *integration* needs, and the vault page's is what a *vault author* needs. A
+     * single shared list would make every section a requirement on both pages, which is false of
+     * each of them.
+     */
     @Test
-    fun `the guide carries every section an integration needs`() {
-        val sections = SECTION.findAll(guideFile().readText()).map { it.groupValues[1] }.toList()
-        assertEquals(
-            "the guide must not ship half-written; these sections are missing: " +
-                "${REQUIRED_SECTIONS.filterNot { it in sections }}. Found: $sections",
-            emptyList<String>(),
-            REQUIRED_SECTIONS.filterNot { it in sections },
-        )
+    fun `every document carries the sections it must not ship without`() {
+        for ((document, required) in SNIPPET_DOCUMENTS.entries.sortedBy { it.key }) {
+            val sections = SECTION.findAll(locate(document).readText())
+                .map { it.groupValues[1] }
+                .toList()
+            assertEquals(
+                "`$document` must not ship half-written; these sections are missing: " +
+                    "${required.filterNot { it in sections }}. Found: $sections",
+                emptyList<String>(),
+                required.filterNot { it in sections },
+            )
+        }
     }
 
     /**
@@ -401,25 +517,45 @@ class GuideSnippetTest {
      * These eleven are the core loop VISION's yardstick names — ask whether there is a vault to
      * ask, send, parse, correlate, challenge, verify, expire — on both of the two flows that have a
      * result worth checking, plus the one call that answers "is a vault installed at all".
+     *
+     * **Narrowed, deliberately, to the regions `docs/INTEGRATION.md`'s own blocks quote**, where
+     * it used to be measured over every region in every test source. That was the same set while
+     * the guide was the only document with regions, so the assertion read as a claim about the
+     * guide — and it stopped being one the moment a second document brought regions of its own: a
+     * core-loop call that appeared **only** in a vault-page region would have satisfied this floor,
+     * leaving the guide free to drop `parseQueryResult` with nothing red. The narrowing is a
+     * strengthening, not a scope reduction: nothing it used to catch is now missed, and a shape it
+     * could not catch before now reddens. The vault page's own coverage floor is a separate claim
+     * about a different audience, and is not this assertion's business.
      */
     @Test
     fun `every function in the core loop is called in a snippet`() {
+        val guideRegions = onDisk().regionsQuotedBy(GUIDE_PATH)
         // Trailing comments go too, not only comment-only lines: `val x = 1 // then call
         // parseQueryResult` would otherwise satisfy the floor with a mention rather than a call.
-        val code = onDisk().regions
+        val code = guideRegions
             .flatMap { it.lines }
             .map { it.substringBefore("//") }
             .joinToString("\n")
         assertEquals(
-            "the guide must show the whole core loop in code a test ran, not describe it in a " +
-                "comment. These appear in no executed region line",
+            "`$GUIDE_PATH` must show the whole core loop in code a test ran, not describe it in " +
+                "a comment — and in a region *that page* quotes, not one another document does. " +
+                "These appear in no executed line of a region the guide quotes",
             emptyList<String>(),
             CORE_LOOP.filterNot { it in code },
         )
+        // Floor: measured over a per-document subset, so an empty subset would pass for ever —
+        // and the subset is empty exactly when every marker in the guide has gone stale.
+        assertTrue(
+            "no region resolved from a `$GUIDE_PATH` block, so the core loop was measured over " +
+                "nothing at all",
+            guideRegions.isNotEmpty(),
+        )
         println(
             "GuideSnippetTest: ${CORE_LOOP.size} core-loop functions, all called across " +
-                "${onDisk().regions.size} regions (${code.lines().size} code lines of " +
-                "${onDisk().regions.sumOf { it.lines.size }} snippet lines)",
+                "${guideRegions.size} regions $GUIDE_PATH quotes (${code.lines().size} code " +
+                "lines of ${guideRegions.sumOf { it.lines.size }} snippet lines), of " +
+                "${onDisk().regions.size} regions in the tree",
         )
     }
 
@@ -543,16 +679,31 @@ class GuideSnippetTest {
         )
     }
 
+    /**
+     * The README links **both** pages, each required by name.
+     *
+     * The front page is the only document a third party finds on their own, so a page it does not
+     * link is a page nobody reaches — and the two readers arrive here equally blind: an integrator
+     * looking for the client guide and a vault author looking for the other half of the wire.
+     * Requiring each path by name rather than counting links is what stops one of them being
+     * quietly dropped while the other keeps this green.
+     *
+     * The existence half was already asserted for *any* `docs/` link, which is why a path that is
+     * linked but missing fails here rather than only on a reader's click.
+     */
     @Test
-    fun `the README links a guide that exists`() {
+    fun `the README links both documents, and they exist`() {
         val readme = locate(README_PATH)
         val links = Regex("""]\((docs/[^)]+)\)""").findAll(readme.readText())
             .map { it.groupValues[1] }
             .toList()
-        assertTrue(
+        assertEquals(
             "the README is the only document a third party finds on their own, so it must link " +
-                "the guide; found links into docs/: $links",
-            GUIDE_PATH in links,
+                "every page this repository publishes — the integration guide for a client " +
+                "author and the vault page for the other half of the wire. Found links into " +
+                "docs/: $links. Missing",
+            emptyList<String>(),
+            SNIPPET_DOCUMENTS.keys.sorted().filterNot { it in links },
         )
         assertEquals(
             "a README link into docs/ must resolve to a file that exists",
@@ -732,6 +883,14 @@ class GuideSnippetTest {
      * set and reddens. A stale floor can hide here only by sitting beside a correct, readable
      * one — which is the shape to look for if this test is ever green on a document that reads
      * wrong.
+     *
+     * **"Both documents" is `README.md` and `docs/INTEGRATION.md`, and `docs/VAULT.md` is
+     * deliberately outside it.** The floor is a *consumer's* question — what an app's own build
+     * file has to declare to resolve this library — and the vault page addresses somebody building
+     * the other end of the wire, who does not depend on this artifact at all. Because the
+     * comparison is set equality, adding that page here would oblige it to print a floor it has no
+     * reason to state. The cost of leaving it out is stated rather than implied: a floor written
+     * on the vault page would be pinned by nothing, so that page carries none.
      */
     @Test
     fun `both documents print the minimum SDK the build file declares`() {
@@ -779,7 +938,7 @@ class GuideSnippetTest {
      * therefore human: this assertion is where a human records that decision.
      *
      * [unreadableFences] is reused rather than restated so the shapes [FENCE_OPEN] is blind to are
-     * refused here by the same scan `the guide uses no fence this test cannot see` runs.
+     * refused here by the same scan `no document uses a fence this test cannot see` runs.
      *
      * **The limit, stated rather than implied away:** both scans look at fences, so two shapes
      * are outside them — a four-space-indented block with no fence at all, and an HTML
@@ -928,7 +1087,7 @@ class GuideSnippetTest {
     @Test
     fun `control - a test class JUnit never instantiates is reported`() {
         val offenders = audit(
-            FIXTURE_UNCOLLECTED_GUIDE,
+            mapOf(FIXTURE_GUIDE_NAME to FIXTURE_UNCOLLECTED_GUIDE),
             mapOf("Uncollected.kt" to FIXTURE_UNCOLLECTED_SOURCE),
             emptyMap(),
         ).regionsOutsideATest
@@ -957,7 +1116,7 @@ class GuideSnippetTest {
     @Test
     fun `control - a region quoted by two blocks is reported`() {
         val doubled = audit(
-            FIXTURE_DOUBLE_GUIDE,
+            mapOf(FIXTURE_GUIDE_NAME to FIXTURE_DOUBLE_GUIDE),
             mapOf("FixtureTest.kt" to FIXTURE_SOURCE),
             emptyMap(),
         )
@@ -1009,14 +1168,15 @@ class GuideSnippetTest {
         val withNoExcuses = fixtureAudit(excuses = emptyMap())
         assertEquals("found ${withNoExcuses.unexcusedBlocks}", 1, withNoExcuses.unexcusedBlocks.size)
         assertTrue(
-            "the unexcused block must be named by language and heading: " +
+            "the unexcused block must be named by language, heading and document: " +
                 "${withNoExcuses.unexcusedBlocks}",
-            withNoExcuses.unexcusedBlocks.single().contains("json under Fixture appendix"),
+            withNoExcuses.unexcusedBlocks.single()
+                .contains("json under Fixture appendix in $FIXTURE_GUIDE_NAME"),
         )
 
+        val dead = "yaml under A heading the fixture guide does not have in $FIXTURE_GUIDE_NAME"
         val withADeadExcuse = fixtureAudit(
-            excuses = FIXTURE_EXCUSES +
-                ("yaml under A heading the fixture guide does not have" to Excuse("dead", CONTROL_CITATION)),
+            excuses = FIXTURE_EXCUSES + (dead to Excuse("dead", CONTROL_CITATION)),
         )
         assertEquals(
             "excusing the json block must silence the complaint, or the two halves of this " +
@@ -1024,10 +1184,7 @@ class GuideSnippetTest {
             emptyList<String>(),
             withADeadExcuse.unexcusedBlocks,
         )
-        assertEquals(
-            listOf("yaml under A heading the fixture guide does not have"),
-            withADeadExcuse.danglingExcuses,
-        )
+        assertEquals(listOf(dead), withADeadExcuse.danglingExcuses)
     }
 
     /** (f) The unmarked-block rule, shown able to fire on the same fixture pair. */
@@ -1049,7 +1206,7 @@ class GuideSnippetTest {
     @Test
     fun `control - two regions sharing a name are reported and compared against nothing`() {
         val duplicate = audit(
-            FIXTURE_DUPLICATE_GUIDE,
+            mapOf(FIXTURE_GUIDE_NAME to FIXTURE_DUPLICATE_GUIDE),
             mapOf("DupTest.kt" to FIXTURE_DUPLICATE_SOURCE),
             emptyMap(),
         )
@@ -1066,17 +1223,248 @@ class GuideSnippetTest {
         assertEquals(emptyList<String>(), duplicate.danglingMarkers)
     }
 
-    /** (h) Two blocks sharing one excuse key are reported, so neither borrows the other's reason. */
+    /**
+     * (h) Two blocks sharing one excuse key are reported, so neither borrows the other's reason.
+     *
+     * Both blocks are in the **same** fixture document, which is now the only way two blocks can
+     * collide: the key carries the document, so the same heading on two different pages yields two
+     * keys. Control (o) is the other half of that — it asserts the two pages do *not* collide and
+     * that each needs its own excuse.
+     */
     @Test
     fun `control - two blocks under one heading cannot share an excuse`() {
+        val key = "json under Appendix in $FIXTURE_GUIDE_NAME"
         val colliding = audit(
-            FIXTURE_COLLIDING_GUIDE,
+            mapOf(FIXTURE_GUIDE_NAME to FIXTURE_COLLIDING_GUIDE),
             emptyMap(),
-            mapOf("json under Appendix" to Excuse("a fixture", CONTROL_CITATION)),
+            mapOf(key to Excuse("a fixture", CONTROL_CITATION)),
         )
-        assertEquals(listOf("json under Appendix"), colliding.collidingExcuseKeys)
+        assertEquals(listOf(key), colliding.collidingExcuseKeys)
         // The excuse does silence the unexcused complaint, so the collision is the only finding.
         assertEquals(emptyList<String>(), colliding.unexcusedBlocks)
+    }
+
+    // ── Negative controls: the document set ───────────────────────────────
+    //
+    // The six below are the controls for the widening itself, and they share one fixture pair:
+    // [FIXTURE_PAIR_SOURCE]'s five regions, split across [FIXTURE_PAIR_FIRST] (which plays
+    // `docs/INTEGRATION.md`) and [FIXTURE_PAIR_SECOND] (which plays `docs/VAULT.md`). Each runs
+    // the same `audit` the assertions above run.
+    //
+    // What makes them worth their lines: before the widening, rule 4 was computed against one
+    // document, so every region the second page quotes was an orphan — not a hazard to guard
+    // against but the certain outcome of adding a second page. Control (l) measures *both*
+    // answers over the same fixture rather than asserting only the new one.
+
+    /**
+     * (l) The widening took effect, proved from the side that was broken before it.
+     *
+     * `#in-second` is quoted by a block in the second document and by nothing in the first. A
+     * single-document audit calls it an orphan — correctly, on its own terms, and uselessly — and
+     * the union audit says nothing about it. Both answers are measured here and printed, because
+     * asserting only the new one would not show that the old one differs.
+     */
+    @Test
+    fun `control - a region only the second document quotes is an orphan to a one-document audit`() {
+        val firstAlone = audit(
+            mapOf(FIXTURE_PAIR_FIRST_NAME to FIXTURE_PAIR_FIRST),
+            mapOf("PairTest.kt" to FIXTURE_PAIR_SOURCE),
+            emptyMap(),
+        )
+        val pair = fixturePairAudit()
+
+        assertTrue(
+            "auditing the first document alone must report `#in-second` as an orphan — that is " +
+                "the answer the widening replaces, and if it does not hold, this control is " +
+                "measuring nothing. Found ${firstAlone.orphanRegions}",
+            firstAlone.orphanRegions.any { it.startsWith("PairTest.kt#in-second") },
+        )
+        assertEquals(
+            "…and auditing the documents together must say nothing about it: a region quoted by " +
+                "a block in the *other* page is quoted, which is the whole claim rule 4 makes " +
+                "and the one the per-document spelling gets wrong. Orphans over the pair",
+            emptyList<String>(),
+            pair.orphanRegions.filter { it.startsWith("PairTest.kt#in-second") },
+        )
+        println(
+            "GuideSnippetTest: control (l) — one document: ${firstAlone.orphanRegions.size} " +
+                "orphan(s) ${firstAlone.orphanRegions.map { it.substringBefore(" ") }}; " +
+                "the pair: ${pair.orphanRegions.size} " +
+                "${pair.orphanRegions.map { it.substringBefore(" ") }}",
+        )
+    }
+
+    /**
+     * (m) …and the union answer is not vacuous: a region quoted by **neither** document is still
+     * reported.
+     *
+     * Without this, (l) would be satisfied by an orphan rule that had stopped reporting anything
+     * at all — which is exactly how a widening goes wrong.
+     */
+    @Test
+    fun `control - a region neither document quotes is reported`() {
+        val orphans = fixturePairAudit().orphanRegions
+        assertEquals("found $orphans", 1, orphans.size)
+        assertTrue(
+            "the one region no block in either document quotes must be named: $orphans",
+            orphans.single().startsWith("PairTest.kt#in-neither"),
+        )
+    }
+
+    /**
+     * (n) A region quoted once by each document is doubly quoted.
+     *
+     * Neither page quotes it twice, so this is the failure only the union can see — and the one a
+     * reader is most likely to create by moving a snippet from one page to the other and leaving
+     * the first marker behind.
+     */
+    @Test
+    fun `control - a region quoted once in each document is reported as doubly quoted`() {
+        assertEquals(
+            listOf("PairTest.kt#in-both is quoted by 2 blocks"),
+            fixturePairAudit().doublyQuotedRegions,
+        )
+    }
+
+    /**
+     * (o) Two documents may carry the same heading, and one page's excuse covers one page's block.
+     *
+     * Both fixture documents have a ` ```json ` block under *Appendix*. Under the old key —
+     * language and heading — those were one key, so excusing either excused both and the
+     * collision rule reported a collision that is not one. Qualified by document they are two
+     * keys: excusing the first leaves the second reported, and an excuse naming a heading only
+     * the *second* page has is dangling when the second page is not in the set.
+     */
+    @Test
+    fun `control - two documents may share a heading, and one excuse does not cover both`() {
+        val firstsExcuse = "json under Appendix in $FIXTURE_PAIR_FIRST_NAME"
+        val secondsExcuse = "json under Appendix in $FIXTURE_PAIR_SECOND_NAME"
+
+        assertEquals(
+            "the same heading on two pages must not collide: the key carries the document, so " +
+                "these are two blocks with two keys and two reasons to write down",
+            emptyList<String>(),
+            fixturePairAudit().collidingExcuseKeys,
+        )
+        val halfExcused = fixturePairAudit(
+            excuses = mapOf(firstsExcuse to Excuse("a fixture", CONTROL_CITATION)),
+        ).unexcusedBlocks
+        assertEquals(
+            "excusing the first page's block may not excuse the second page's — that is the " +
+                "borrowed reason the document qualifier exists to stop. Found $halfExcused",
+            1,
+            halfExcused.size,
+        )
+        assertTrue(
+            "…and the one still reported must be the second page's, named by its own key: " +
+                halfExcused,
+            halfExcused.single().contains(FIXTURE_PAIR_SECOND_NAME) &&
+                halfExcused.single().contains(secondsExcuse),
+        )
+        assertEquals(
+            "…and both excuses together must silence it, or the assertion above is reporting " +
+                "something other than the missing excuse",
+            emptyList<String>(),
+            fixturePairAudit(
+                excuses = mapOf(
+                    firstsExcuse to Excuse("a fixture", CONTROL_CITATION),
+                    secondsExcuse to Excuse("a fixture", CONTROL_CITATION),
+                ),
+            ).unexcusedBlocks,
+        )
+        // The dead-excuse half: the heading exists, on the other page, and that is not enough.
+        assertEquals(
+            "an excuse naming a heading only the *other* document carries must be reported as " +
+                "dangling. Resolved on heading alone it would look live and would wave through " +
+                "whatever lands under that heading next",
+            listOf(secondsExcuse),
+            audit(
+                mapOf(FIXTURE_PAIR_FIRST_NAME to FIXTURE_PAIR_FIRST),
+                mapOf("PairTest.kt" to FIXTURE_PAIR_SOURCE),
+                mapOf(
+                    firstsExcuse to Excuse("a fixture", CONTROL_CITATION),
+                    secondsExcuse to Excuse("a fixture", CONTROL_CITATION),
+                ),
+            ).danglingExcuses,
+        )
+    }
+
+    /**
+     * (p) The verbatim check reports a drifted block in the second document **naming that
+     * document**.
+     *
+     * `#drifted` differs from its region by one character. A complaint that named the guide — or
+     * named no document at all, which is what [Block.where] said before the widening — would send
+     * the next reader to the wrong file with a correct failure.
+     */
+    @Test
+    fun `control - a drifted block in the second document is reported naming that document`() {
+        val mismatched = fixturePairAudit().mismatched
+        assertEquals("exactly one fixture block drifts; found $mismatched", 1, mismatched.size)
+        assertTrue(
+            "the complaint must name the document the drifted block is in, not the other one: " +
+                "$mismatched",
+            mismatched.single().contains(FIXTURE_PAIR_SECOND_NAME) &&
+                !mismatched.single().contains(FIXTURE_PAIR_FIRST_NAME),
+        )
+        assertTrue(
+            "…and the region, and both sides of the difference: $mismatched",
+            mismatched.single().contains("PairTest.kt#drifted") &&
+                mismatched.single().contains("val answer = 5") &&
+                mismatched.single().contains("val answer = 6"),
+        )
+    }
+
+    /**
+     * (q) Rule 1's floor is asked of each document on its own, and the union spelling would pass
+     * this fixture green.
+     *
+     * This is the same failure (l) closes for rule 4, one rule along, and it is the one a reader
+     * implementing this widening is most likely to produce by accident: keep the floor as
+     * `kotlinBlocks.size >= oneList.size` and a document with no code at all ships green behind
+     * the other page's blocks. Both answers are measured over the same pair.
+     */
+    @Test
+    fun `control - the Kotlin-block floor is asked of each document on its own`() {
+        val pair = audit(
+            mapOf(
+                FIXTURE_PAIR_FIRST_NAME to FIXTURE_PAIR_FIRST,
+                FIXTURE_PAIR_SECOND_NAME to FIXTURE_PAIR_PROSE_ONLY,
+            ),
+            mapOf("PairTest.kt" to FIXTURE_PAIR_SOURCE),
+            emptyMap(),
+        )
+        val required = mapOf(
+            FIXTURE_PAIR_FIRST_NAME to listOf("Fixture one"),
+            FIXTURE_PAIR_SECOND_NAME to listOf("One", "Two", "Three"),
+        )
+        assertEquals(
+            "a document carrying fewer Kotlin blocks than its own section list must be reported, " +
+                "naming it and both counts",
+            listOf("$FIXTURE_PAIR_SECOND_NAME carries 0 Kotlin block(s) for 3 required section(s)"),
+            blockFloorShortfalls(pair, required),
+        )
+        assertEquals(
+            "…and the first document, which has blocks of its own, must not be reported — a " +
+                "floor that condemned everything would satisfy the assertion above for the " +
+                "wrong reason",
+            emptyList<String>(),
+            blockFloorShortfalls(pair, required.filterKeys { it == FIXTURE_PAIR_FIRST_NAME }),
+        )
+        // The spelling this control exists to refuse, measured rather than described: every block
+        // in the set against one document's list passes over a pair whose second page is prose.
+        assertTrue(
+            "the union floor must pass over this fixture, or the two spellings do not differ " +
+                "here and this control proves nothing: ${pair.kotlinBlocks.size} block(s) in " +
+                "the set against ${required.getValue(FIXTURE_PAIR_FIRST_NAME).size} section(s)",
+            pair.kotlinBlocks.size >= required.getValue(FIXTURE_PAIR_FIRST_NAME).size,
+        )
+        println(
+            "GuideSnippetTest: control (q) — per document " +
+                "${blockFloorShortfalls(pair, required)}; over the union " +
+                "${pair.kotlinBlocks.size} block(s), which clears a floor of " +
+                "${required.getValue(FIXTURE_PAIR_FIRST_NAME).size}",
+        )
     }
 
     // ── Parsing ───────────────────────────────────────────────────────────
@@ -1093,7 +1481,7 @@ class GuideSnippetTest {
             }
         }.map { (index, line) -> "line ${index + 1}: $line" }
 
-    private fun blocksIn(markdown: String): List<Block> {
+    private fun blocksIn(document: String, markdown: String): List<Block> {
         val lines = markdown.lines()
         val blocks = mutableListOf<Block>()
         var heading = "(no heading)"
@@ -1111,9 +1499,12 @@ class GuideSnippetTest {
                 body += lines[cursor]
                 cursor++
             }
-            check(cursor < lines.size) { "a fenced block opened at line ${index + 1} is never closed" }
+            check(cursor < lines.size) {
+                "a fenced block opened at $document:${index + 1} is never closed"
+            }
             val marker = if (index > 0) MARKER.find(lines[index - 1]) else null
             blocks += Block(
+                document = document,
                 heading = heading,
                 language = open.groupValues[1],
                 markerFile = marker?.groupValues?.get(1),
@@ -1399,6 +1790,10 @@ class GuideSnippetTest {
 
     private fun guideFile(): File = locate(GUIDE_PATH)
 
+    /** Every document under the snippet rules, keyed by the path a failure should name. */
+    private fun documentsOnDisk(): Map<String, String> =
+        SNIPPET_DOCUMENTS.keys.sorted().associateWith { locate(it).readText() }
+
     /**
      * Every Kotlin test source, keyed by file name — what a marker names.
      *
@@ -1449,10 +1844,26 @@ class GuideSnippetTest {
     // ── Fixtures ──────────────────────────────────────────────────────────
 
     private fun fixtureAudit(excuses: Map<String, Excuse> = FIXTURE_EXCUSES): Audit =
-        audit(FIXTURE_GUIDE, mapOf("FixtureTest.kt" to FIXTURE_SOURCE), excuses)
+        audit(
+            mapOf(FIXTURE_GUIDE_NAME to FIXTURE_GUIDE),
+            mapOf("FixtureTest.kt" to FIXTURE_SOURCE),
+            excuses,
+        )
+
+    /** Control (l)–(q)'s pair: two fixture documents quoting one fixture source between them. */
+    private fun fixturePairAudit(excuses: Map<String, Excuse> = emptyMap()): Audit =
+        audit(
+            mapOf(
+                FIXTURE_PAIR_FIRST_NAME to FIXTURE_PAIR_FIRST,
+                FIXTURE_PAIR_SECOND_NAME to FIXTURE_PAIR_SECOND,
+            ),
+            mapOf("PairTest.kt" to FIXTURE_PAIR_SOURCE),
+            excuses,
+        )
 
     private companion object {
         private const val GUIDE_PATH = "docs/INTEGRATION.md"
+        private const val VAULT_PATH = "docs/VAULT.md"
         private const val README_PATH = "README.md"
         private const val TEST_SOURCE_ROOT = "src/test/java"
         private const val MODULE_BUILD_FILE = "LIM/build.gradle.kts"
@@ -1568,6 +1979,40 @@ class GuideSnippetTest {
         )
 
         /**
+         * `docs/VAULT.md`'s sections, pinned the same way and for the same reason.
+         *
+         * **Three, and it is the reading half of the wire only.** That page answers a vault
+         * author rather than an integrator, and it is being built in instalments: what a vault
+         * answers for, how a request is routed, and how a share request is read. Answering a
+         * request and the obligations a vault owes are the next instalments, and this list is
+         * where each of them is admitted — a section promised in prose before it is on this list
+         * is a promise nothing holds.
+         */
+        private val REQUIRED_VAULT_SECTIONS = listOf(
+            "What a vault answers for",
+            "Routing an incoming request",
+            "Reading a share request",
+        )
+
+        /**
+         * Every document under the seven properties, each against its own required sections.
+         *
+         * The keys are the document set [audit] reads, so adding a page here is what puts it
+         * under the snippet rules — and under `BuildInputsTest`'s, which requires the same path
+         * in its `VERIFIED_DOCUMENTS` and declared as an input of the test task in
+         * `LIM/build.gradle.kts`. Without that declaration Gradle cannot see that this suite
+         * opens the file, so a commit changing only the page comes back UP-TO-DATE and this
+         * verifier does not run at all.
+         *
+         * The values are what keeps the per-document rules honest: rule 1's floor and the section
+         * check are both asked of a document against **its own** list, never against the set's.
+         */
+        private val SNIPPET_DOCUMENTS: Map<String, List<String>> = mapOf(
+            GUIDE_PATH to REQUIRED_SECTIONS,
+            VAULT_PATH to REQUIRED_VAULT_SECTIONS,
+        )
+
+        /**
          * The published surface an afternoon integration actually touches: ask whether there is a
          * vault, send, parse, correlate, challenge, verify, expire. Every one must be *called* in
          * at least one region, and the names are grouped in the order the guide's sections come in
@@ -1591,19 +2036,23 @@ class GuideSnippetTest {
 
         /**
          * The fenced blocks the marker rule does not bind, each with a reason and the test that
-         * covers it instead. Keyed by fence language and heading — which is why no two of them
-         * may sit under the same heading, and why a block that moves sections has to be looked at
-         * by somebody.
+         * covers it instead. Keyed by fence language, heading **and document** — which is why no
+         * two of them may sit under the same heading *of the same page*, and why a block that
+         * moves sections, or moves pages, has to be looked at by somebody.
+         *
+         * Every entry here is `docs/INTEGRATION.md`'s: `docs/VAULT.md` publishes Kotlin and
+         * nothing else, so it needs no excuse. A fence in any other language appearing there is
+         * reported by rule 6 until somebody writes down what covers it.
          */
         private val NOT_A_SNIPPET: Map<String, Excuse> = mapOf(
-            "gradle under Setup" to Excuse(
+            "gradle under Setup in $GUIDE_PATH" to Excuse(
                 reason = "the dependency declaration a consumer writes in their own build file. " +
                     "No test here can run a consumer's build, and nothing in this repository " +
                     "reaches the network to resolve it — so what is pinned instead is the one part " +
                     "that can go stale silently: the version it prints",
                 coveredBy = "GuideSnippetTest: the guide prints the coordinate the build file declares",
             ),
-            "gradle under Building from source" to Excuse(
+            "gradle under Building from source in $GUIDE_PATH" to Excuse(
                 reason = "a consumer project's own build file, which this repository cannot " +
                     "execute — the guide says as much in that section rather than implying " +
                     "otherwise. What is pinned is every name in it: the Gradle project path, " +
@@ -1611,7 +2060,7 @@ class GuideSnippetTest {
                     "does not carry",
                 coveredBy = "GuideSnippetTest: the build-from-source path names what the build declares",
             ),
-            "proguard under If you minify your app" to Excuse(
+            "proguard under If you minify your app in $GUIDE_PATH" to Excuse(
                 reason = "the keep rules a consumer copies into their own ProGuard file when they " +
                     "vendor the AAR. Nothing in this repository runs R8 over this library — the " +
                     "module builds with `isMinifyEnabled = false`, which is correct for a library " +
@@ -1624,7 +2073,7 @@ class GuideSnippetTest {
                     "AAR does not carry",
                 coveredBy = "ConsumerRulesTest: the integration guide prints the rules this file ships",
             ),
-            "xml under Before you start: is there a vault?" to Excuse(
+            "xml under Before you start: is there a vault? in $GUIDE_PATH" to Excuse(
                 reason = "the `<queries>` element a consumer adds to their *own* manifest, so that " +
                     "an installed vault is visible to them on Android 11+. Nothing in this " +
                     "repository can execute a consumer's manifest, and this library ships no such " +
@@ -1641,6 +2090,23 @@ class GuideSnippetTest {
         /** What the fixture excuses cite: this file's own control, which is a real `@Test`. */
         private const val CONTROL_CITATION =
             "GuideSnippetTest: control - an unexcused block and a dead excuse are both reported"
+
+        /**
+         * What the fixture documents are called, and **why none of them ends in `.md`**.
+         *
+         * `BuildInputsTest`'s rule 3 reads every whole double-quoted string in every test source
+         * that ends in a document extension and requires it to be a declared input of the test
+         * task. A fixture label spelled `docs/fixture-guide.md` would be read as a repository
+         * document this suite opens — which it is not; it never touches the disk — and that rule
+         * would redden with no honest way to satisfy it, since its excuse map must stay empty.
+         * Extensionless labels are outside its regex and read the same in a failure message.
+         *
+         * `FIXTURE_PAIR_SECOND_NAME` stands in for `docs/VAULT.md` throughout controls (l)–(q):
+         * the second document of a set, quoting regions of its own.
+         */
+        private const val FIXTURE_GUIDE_NAME = "docs/fixture-guide"
+        private const val FIXTURE_PAIR_FIRST_NAME = "docs/fixture-first"
+        private const val FIXTURE_PAIR_SECOND_NAME = "docs/fixture-second"
 
         /**
          * The controls' fixture test source, and the reason it is assembled from one-line literals
@@ -1823,7 +2289,7 @@ class GuideSnippetTest {
 
         /** Excuses for the fixture guide, so only the defect under test is reported. */
         private val FIXTURE_EXCUSES: Map<String, Excuse> = mapOf(
-            "json under Fixture appendix" to Excuse(
+            "json under Fixture appendix in $FIXTURE_GUIDE_NAME" to Excuse(
                 reason = "a fixture block, excused so the controls above report one defect each",
                 coveredBy = CONTROL_CITATION,
             ),
@@ -1951,6 +2417,119 @@ class GuideSnippetTest {
             "```kotlin",
             "val answer = 1",
             "```",
+        ).joinToString("\n")
+
+        /**
+         * Controls (l)–(q): five regions, to be split across two fixture documents.
+         *
+         * Each one is a shape rule 4 has to answer differently now that there is a document set:
+         * `#in-first` quoted by the first page, `#in-second` by the second **only** — the orphan
+         * that was the certain consequence of adding a second page — `#in-both` once by each,
+         * which is the double-quoting only the union can see, `#in-neither` by nobody, and
+         * `#drifted` by the second page with one character changed.
+         *
+         * Assembled from one-line literals for [FIXTURE_SOURCE]'s reason: written as a raw string
+         * the markers would begin their lines and this file's own fixtures would be collected as
+         * real regions, quoted by no block, reddening rule 4 on its own controls.
+         */
+        private val FIXTURE_PAIR_SOURCE = listOf(
+            "class PairTest {",
+            "",
+            "    @Test",
+            "    fun `the first document quotes this`() {",
+            "        // region snippet:in-first",
+            "        val answer = 1",
+            "        // endregion snippet:in-first",
+            "    }",
+            "",
+            "    @Test",
+            "    fun `only the second document quotes this`() {",
+            "        // region snippet:in-second",
+            "        val answer = 2",
+            "        // endregion snippet:in-second",
+            "    }",
+            "",
+            "    @Test",
+            "    fun `both documents quote this`() {",
+            "        // region snippet:in-both",
+            "        val answer = 3",
+            "        // endregion snippet:in-both",
+            "    }",
+            "",
+            "    @Test",
+            "    fun `neither document quotes this`() {",
+            "        // region snippet:in-neither",
+            "        val answer = 4",
+            "        // endregion snippet:in-neither",
+            "    }",
+            "",
+            "    @Test",
+            "    fun `the second document quotes this one character off`() {",
+            "        // region snippet:drifted",
+            "        val answer = 5",
+            "        // endregion snippet:drifted",
+            "    }",
+            "}",
+        ).joinToString("\n")
+
+        /** The pair's first document — the one that plays `docs/INTEGRATION.md`. */
+        private val FIXTURE_PAIR_FIRST = listOf(
+            "## Fixture one",
+            "",
+            "<!-- snippet: PairTest.kt#in-first -->",
+            "```kotlin",
+            "val answer = 1",
+            "```",
+            "",
+            "<!-- snippet: PairTest.kt#in-both -->",
+            "```kotlin",
+            "val answer = 3",
+            "```",
+            "",
+            "## Appendix",
+            "",
+            "```json",
+            "{}",
+            "```",
+        ).joinToString("\n")
+
+        /**
+         * The pair's second document — the one that plays `docs/VAULT.md`.
+         *
+         * Its *Appendix* heading is the first document's, word for word, which is control (o)'s
+         * whole subject: two pages may legitimately use the same heading, and the excuse key has
+         * to tell the two blocks apart.
+         */
+        private val FIXTURE_PAIR_SECOND = listOf(
+            "## Fixture two",
+            "",
+            "<!-- snippet: PairTest.kt#in-second -->",
+            "```kotlin",
+            "val answer = 2",
+            "```",
+            "",
+            "<!-- snippet: PairTest.kt#in-both -->",
+            "```kotlin",
+            "val answer = 3",
+            "```",
+            "",
+            "<!-- snippet: PairTest.kt#drifted -->",
+            "```kotlin",
+            "val answer = 6",
+            "```",
+            "",
+            "## Appendix",
+            "",
+            "```json",
+            "[]",
+            "```",
+        ).joinToString("\n")
+
+        /** Control (q): a second document with prose and no fence at all. */
+        private val FIXTURE_PAIR_PROSE_ONLY = listOf(
+            "## Fixture two",
+            "",
+            "A page that publishes no code, which is what the per-document floor has to catch.",
         ).joinToString("\n")
 
         /** Control (h): two blocks of one language under one heading, hence one excuse key. */

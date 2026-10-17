@@ -864,6 +864,7 @@ class BuildInputsTest {
             "CHANGELOG.md",
             "README.md",
             "docs/INTEGRATION.md",
+            "docs/VAULT.md",
             "LIM/api/lim.api",
             "gradle/libs.versions.toml",
             "settings.gradle.kts",
@@ -958,9 +959,10 @@ class BuildInputsTest {
          * — which is the point: the list is the one place where "the suite reads this file" is
          * written down, and a floor that trailed behind it would let the list shrink back to the
          * count it was last set at while rule 1 stayed green. It was 7 until
-         * `LIM/consumer-rules.pro` became the eighth.
+         * `LIM/consumer-rules.pro` became the eighth, and 8 until `docs/VAULT.md` became the
+         * ninth.
          */
-        private const val MINIMUM_DOCUMENTS = 8
+        private const val MINIMUM_DOCUMENTS = 9
         private const val MINIMUM_PATH_LITERALS = 16
 
         /** The on-disk measurement, shared across this class's test instances. See [onDisk]. */

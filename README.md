@@ -21,3 +21,7 @@ installed at all, sign-up and its required and optional fields, query, login, ha
 the rules an integration must not break, what to keep when you minify your app, and how to test
 your integration without a vault. Every Kotlin snippet in it is quoted verbatim out of a test that
 runs, so the guide cannot drift from the library.
+
+Writing the other half — the app that holds the data and answers those requests?
+[docs/VAULT.md](docs/VAULT.md) is the vault author's page: what a vault answers for, how to route
+an incoming request, and how to read a share request. Its snippets are pinned the same way.
