@@ -655,7 +655,7 @@ class IntentDescriptionTest {
      * extra handed a `describedText` arm instead of a count passes it while the KDoc's "Exactly
      * four values are printed close to verbatim" sentence goes quietly false, and `docs/` quotes
      * that sentence as the authority for what a client may safely log. That is not hypothetical:
-     * [Utils.describeIntent]'s list of extras grew by two keys in the 1.1.0 release.
+     * [Utils.describeIntent]'s list of extras grew by two keys in the 1.1.1 release.
      *
      * So this walks **every published extra**, reflectively — `public static final String` on
      * [Utils] whose name starts with `EXTRA_`, which is `ProtocolSymmetryTest`'s enumeration and

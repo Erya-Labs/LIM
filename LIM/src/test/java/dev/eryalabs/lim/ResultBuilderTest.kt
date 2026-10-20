@@ -1156,7 +1156,7 @@ class ResultBuilderTest {
             declared.committed(disclosed)!!.keys,
         )
 
-        // The mirror: one stray field the vault forgot to drop, and the same 1.1.0 vault reads as
+        // The mirror: one stray field the vault forgot to drop, and the same 1.1.1 vault reads as
         // one that predates the release — the cause `docs/INTEGRATION.md:300-302` describes
         // without naming it.
         val strayBlank = overDisclosed + ("address" to TypedField("", FieldType.STRING))
@@ -1173,7 +1173,7 @@ class ResultBuilderTest {
             unacknowledged.hasExtra("extra_applied_optional_fields"),
         )
         assertEquals(
-            "and a 1.1.0 vault reads as one that predates the release",
+            "and a 1.1.1 vault reads as one that predates the release",
             FieldRequirementsVerdict.NOT_ACKNOWLEDGED,
             Utils.checkFieldRequirements(declared, unacknowledged),
         )
