@@ -145,7 +145,7 @@ tasks.withType<Test>().configureEach {
 mavenPublishing {
     configure(AndroidSingleVariantLibrary("release", sourcesJar = true, publishJavadocJar = true))
 
-    coordinates("dev.eryalabs.lim", "lim", "1.1.0")
+    coordinates("dev.eryalabs.lim", "lim", "1.1.1")
 
     pom {
         name.set("LIM")
