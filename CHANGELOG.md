@@ -27,12 +27,13 @@ prose, checked only in the backwards direction, and pinned member-by-member by `
 and by `LIM/api/lim.api`, which is the record of the binary surface and the right place to read a
 diff.
 
-## 1.1.0 — unreleased
+## 1.1.1 — unreleased
 
-**To be released on Maven Central as `dev.eryalabs.lim:lim:1.1.0`**, a SemVer minor: everything
-below is additive — `LIM/api/lim.api` gains lines and loses none. The heading says `unreleased`
-until this commit is tagged `1.1.0` and published; the date follows in a commit of its own, as it
-did for 1.0.0.
+**To be released on Maven Central as `dev.eryalabs.lim:lim:1.1.1`**, the first release after
+1.0.0: everything below is additive — `LIM/api/lim.api` gains lines and loses none. There is no
+1.1.0: that number was tagged during a first release attempt and never published, so the same
+changes ship as 1.1.1. The heading says `unreleased` until this commit is tagged `1.1.1` and
+published; the date follows in a commit of its own, as it did for 1.0.0.
 
 ### Share (sign-up): required and optional fields
 

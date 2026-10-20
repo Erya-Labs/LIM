@@ -864,9 +864,10 @@ class ChangelogTest {
      *
      * That entry is [FULL_SURFACE_VERSION]'s. It had no earlier release to diff against, so it
      * describes everything, and a flow missing from it is a part of the library nobody wrote down.
-     * Every later entry is an ordinary list of what changed, as the preamble says: 1.1.0 touches
+     * Every later entry is an ordinary list of what changed, as the preamble says: 1.1.1 touches
      * sign-up alone, and demanding a Query or Diagnostics heading of it would only breed empty ones.
-     * Until 1.1.0 this check read the declared version's section, which was the same entry.
+     * Until the release after 1.0.0, this check read the declared version's section, which was
+     * the same entry.
      *
      * Presence only, in no particular order: this file pins *coverage*, not arrangement. Reordering
      * the sections reddens nothing, and an assertion that fought every future edit to the document
